@@ -3,6 +3,7 @@
 namespace SmartCache\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Cache;
 use SmartCache\Contracts\SmartCache;
 
@@ -25,7 +26,7 @@ class StatusCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(SmartCache $cache): int
+    public function handle(SmartCache $cache, ConfigRepository $config): int
     {
         $keys = $cache->getManagedKeys();
         $count = count($keys);
@@ -58,7 +59,7 @@ class StatusCommand extends Command
         }
         
         // Display configuration
-        $config = config('smart-cache');
+        $config = $config->get('smart-cache');
         $this->line('');
         $this->line('Configuration:');
         $this->line(' - Compression: ' . ($config['strategies']['compression']['enabled'] ? 'Enabled' : 'Disabled'));

@@ -3,6 +3,10 @@
 // Basic usage with Facade
 use SmartCache\Facades\SmartCache;
 
+/*
+* Ensure you have User model or update this to your own model
+*/
+
 // Caching a large array that will be automatically compressed and/or chunked
 $largeArray = range(1, 10000);
 SmartCache::put('large-array', $largeArray, 600); // 10 minutes

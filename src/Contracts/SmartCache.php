@@ -80,4 +80,11 @@ interface SmartCache
      * @return bool
      */
     public function clear(): bool;
+
+    /**
+     * Get all keys managed by SmartCache.
+     *
+     * @return array
+     */
+    public function getManagedKeys(): array;
 } 
