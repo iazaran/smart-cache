@@ -1,4 +1,3 @@
-```markdown
 # Laravel SmartCache
 
 **Laravel SmartCache** is a caching optimization package designed to enhance the way your Laravel application handles data caching. It intelligently manages large data sets by compressing, chunking, or applying other optimization strategies to keep your application performant and efficient.
