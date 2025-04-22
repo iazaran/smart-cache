@@ -1,0 +1,46 @@
+{
+    "name": "iazaran/smart-cache",
+    "description": "Smart Cache is a caching optimization package designed to enhance the way your Laravel application handles data caching. It intelligently manages large data sets by compressing, chunking, or applying other optimization strategies to keep your application performant and efficient.",
+    "keywords": [
+        "smart-cache",
+        "smart cache laravel",
+        "laravel package"
+    ],
+    "homepage": "https://github.com/iazaran/smart-cache",
+    "type": "library",
+    "license": "MIT",
+    "support": {
+        "issues": "https://github.com/iazaran/smart-cache/issues",
+        "source": "https://github.com/iazaran/smart-cache"
+    },
+    "authors": [
+        {
+            "name": "Ismael Azaran",
+            "email": "eazaran@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^8.0|^9.0|^10.0",
+        "illuminate/cache": "^8.0|^9.0|^10.0",
+        "illuminate/console": "^8.0|^9.0|^10.0",
+        "illuminate/contracts": "^8.0|^9.0|^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "SmartCache\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "SmartCache\\Providers\\SmartCacheServiceProvider"
+            ],
+            "aliases": {
+                "SmartCache": "SmartCache\\Facades\\SmartCache"
+            }
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
