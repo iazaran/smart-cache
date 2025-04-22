@@ -52,7 +52,8 @@ class SmartCache implements SmartCacheContract
         }
         
         // Determine cache driver
-        $this->driver = $cache->getStore()->getDriverName() ?? null;
+        $store = $cache->getStore();
+        $this->driver = $this->determineCacheDriver($store);
         
         // Load tracked keys
         $this->loadManagedKeys();
@@ -337,5 +338,21 @@ class SmartCache implements SmartCacheContract
     public function getManagedKeys(): array
     {
         return $this->managedKeys;
+    }
+
+    /**
+     * Determines the cache driver from the store instance.
+     *
+     * @param mixed $store
+     * @return string|null
+     */
+    protected function determineCacheDriver($store): ?string
+    {
+        $class = get_class($store);
+        $parts = explode('\\', $class);
+        $storeName = end($parts);
+        
+        // Convert StoreName to store_name (e.g., RedisStore to redis)
+        return strtolower(preg_replace('/Store$/', '', preg_replace('/(?<!^)[A-Z]/', '_$0', $storeName)));
     }
 } 
