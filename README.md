@@ -11,6 +11,7 @@
 - ♻️ Seamless retrieval and reconstruction
 - ⚙️ Extensible strategy pattern for custom optimizations
 - 🛡️ Optional fallback for incompatible drivers
+- 🔄 Laravel-style helper function support
 
 ## 📦 Installation
 
@@ -39,6 +40,22 @@ use SmartCache\Facades\SmartCache;
 
 SmartCache::put('key', $largeData, now()->addMinutes(10));
 $data = SmartCache::get('key');
+```
+
+Or use the global helper function, similar to Laravel's `cache()` helper:
+
+```php
+// Get a value
+$value = smart_cache('key');
+
+// Get with default value
+$value = smart_cache('key', 'default');
+
+// Store a value
+smart_cache(['key' => $largeData], now()->addMinutes(10));
+
+// Access the SmartCache instance
+$cache = smart_cache();
 ```
 
 Or inject it into your services:
@@ -72,6 +89,9 @@ SmartCache::put('numbers', $data, 600);
 // - Checks size
 // - Compresses or chunks as needed
 // - Stores metadata for retrieval
+
+// Or with helper function
+smart_cache(['numbers' => $data], 600);
 ```
 
 ## 🧰 Artisan Commands
