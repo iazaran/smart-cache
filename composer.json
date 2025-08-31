@@ -39,6 +39,12 @@
         "illuminate/console": ">=8.0",
         "illuminate/contracts": ">=8.0"
     },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "orchestra/testbench": "^8.0",
+        "mockery/mockery": "^1.5",
+        "symfony/var-dumper": "^6.0"
+    },
     "autoload": {
         "psr-4": {
             "SmartCache\\": "src/"
@@ -46,6 +52,15 @@
         "files": [
             "src/helpers.php"
         ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SmartCache\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "test-coverage": "vendor/bin/phpunit --coverage-html coverage"
     },
     "extra": {
         "laravel": {
