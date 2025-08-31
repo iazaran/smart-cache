@@ -1,4 +1,4 @@
-name: Code Analysis
+name: Coverage
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
-  code-analysis:
+  coverage:
     runs-on: ubuntu-latest
-    name: Code Analysis (PHP 8.3)
+    name: Coverage Report (PHP 8.3)
 
     steps:
       - name: Checkout code
@@ -27,10 +27,4 @@ jobs:
           composer update --prefer-stable --prefer-dist --no-interaction
 
       - name: Execute tests with coverage
-        run: vendor/bin/phpunit --coverage-text --coverage-clover=coverage.xml
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: true
+        run: vendor/bin/phpunit --coverage-text
