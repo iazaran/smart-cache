@@ -24,7 +24,7 @@ class SmartCacheServiceProvider extends ServiceProvider
 
         // Register the service
         $this->app->singleton(SmartCacheContract::class, function ($app) {
-            $cache = $app['cache'];
+            $cacheManager = $app['cache'];
             $config = $app['config'];
             
             // Create strategies based on config
@@ -44,7 +44,7 @@ class SmartCacheServiceProvider extends ServiceProvider
                 );
             }
             
-            return new SmartCache($cache->store(), $config, $strategies);
+            return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies);
         });
 
         // Register alias for facade
@@ -58,7 +58,7 @@ class SmartCacheServiceProvider extends ServiceProvider
     {
         // Publish config
         $this->publishes([
-            __DIR__ . '/../../config/smart-cache.php' => config_path('smart-cache.php'),
+            __DIR__ . '/../../config/smart-cache.php' => $this->app->configPath('smart-cache.php'),
         ], 'smart-cache-config');
 
         // Register commands

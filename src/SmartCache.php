@@ -3,6 +3,7 @@
 namespace SmartCache;
 
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
@@ -14,6 +15,11 @@ class SmartCache implements SmartCacheContract
      * @var Repository
      */
     protected Repository $cache;
+
+    /**
+     * @var CacheManager
+     */
+    protected CacheManager $cacheManager;
 
     /**
      * @var ConfigRepository
@@ -39,12 +45,14 @@ class SmartCache implements SmartCacheContract
      * SmartCache constructor.
      *
      * @param Repository $cache
+     * @param CacheManager $cacheManager
      * @param ConfigRepository $config
      * @param array $strategies
      */
-    public function __construct(Repository $cache, ConfigRepository $config, array $strategies = [])
+    public function __construct(Repository $cache, CacheManager $cacheManager, ConfigRepository $config, array $strategies = [])
     {
         $this->cache = $cache;
+        $this->cacheManager = $cacheManager;
         $this->config = $config;
         
         foreach ($strategies as $strategy) {
@@ -178,7 +186,11 @@ class SmartCache implements SmartCacheContract
      */
     public function store(string $name = null): Repository
     {
-        return $this->cache->store($name);
+        if ($name === null) {
+            return $this->cache;
+        }
+        
+        return $this->cacheManager->store($name);
     }
 
     /**

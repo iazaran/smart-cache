@@ -18,7 +18,7 @@ if (!function_exists('smart_cache')) {
         $arguments = func_get_args();
 
         if (empty($arguments)) {
-            return app('smart-cache');
+            return function_exists('app') ? app('smart-cache') : \Illuminate\Container\Container::getInstance()->make('smart-cache');
         }
 
         if (is_string($arguments[0])) {

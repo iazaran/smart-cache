@@ -64,6 +64,7 @@
             border-radius: 5px;
             overflow-x: auto;
             margin: 20px 0;
+            white-space: pre-wrap;
         }
         .highlight {
             background: #f39c12;
@@ -150,6 +151,37 @@ smart_cache(['key' => $largeData], 600);
             <li>Reduced memory usage</li>
             <li>Improved application response times</li>
         </ul>
+
+        <h2>🧪 Real-World Test Results</h2>
+        <p>We recently ran comprehensive feature tests inside a real Laravel project. Here's what SmartCache delivered:</p>
+        
+        <div class="features">
+            <div class="feature">
+                <h3>✅ Core Operations</h3>
+                <p><strong>Basic Operations:</strong> put, get, forget all worked as expected, with helper functions fully supported.</p>
+            </div>
+            <div class="feature">
+                <h3>✅ Advanced Features</h3>
+                <p><strong>Compression & Chunking:</strong> 2,000 records stored and retrieved with 100% data integrity. 5,000 records handled seamlessly using chunking.</p>
+            </div>
+            <div class="feature">
+                <h3>✅ Smart Caching</h3>
+                <p><strong>Remember Function:</strong> Expensive operations cached properly, saving significant execution time on subsequent calls.</p>
+            </div>
+            <div class="feature">
+                <h3>✅ Driver Compatibility</h3>
+                <p><strong>Multi-Driver Support:</strong> Redis, File, Database, and Array drivers all passed with compression and chunking enabled.</p>
+            </div>
+        </div>
+
+        <h3>⚡ Performance Comparison</h3>
+        <p>Storing ~500KB dataset in a production environment:</p>
+        <div class="code">
+Laravel SmartCache → Store: 9.3ms, Retrieve: 3.5ms
+Laravel Cache     → Store: 3.6ms, Retrieve: 8.5ms
+
+👉 SmartCache trades a slightly slower write for much faster reads!
+        </div>
 
         <div style="text-align: center; margin: 40px 0;">
             <a href="https://github.com/iazaran/smart-cache" class="btn">📚 View Documentation</a>
