@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static bool forever(string $key, mixed $value)
  * @method static mixed remember(string $key, \DateTimeInterface|\DateInterval|int|null $ttl, \Closure $callback)
  * @method static mixed rememberForever(string $key, \Closure $callback)
+ * @method static mixed flexible(string $key, array $durations, \Closure $callback)
  * @method static \Illuminate\Contracts\Cache\Repository store(string $name = null)
  * @method static bool clear()
  * @method static array getManagedKeys()
