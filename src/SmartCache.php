@@ -130,6 +130,10 @@ class SmartCache implements SmartCacheContract
             }
         }
         
+        // Clean up flexible method metadata if it exists
+        $metaKey = $key . '_sc_meta';
+        $this->cache->forget($metaKey);
+        
         // Remove from tracked keys
         $this->untrackKey($key);
         
@@ -370,42 +374,92 @@ class SmartCache implements SmartCacheContract
 
     /**
      * Stale-while-revalidate cache with optimization support.
+     * 
+     * Laravel's flexible method uses: [freshTtl, staleTtl]
+     * - freshTtl: seconds data is considered fresh
+     * - staleTtl: additional seconds to serve stale data while revalidating
      *
      * @param string $key
-     * @param array $durations
+     * @param array $durations [freshTtl, staleTtl]
      * @param \Closure $callback
      * @return mixed
      */
     public function flexible(string $key, array $durations, \Closure $callback): mixed
     {
-        // Check if we have a cached value first
-        $cachedValue = $this->cache->get($key);
+        $freshTtl = $durations[0] ?? 3600;  // Default 1 hour fresh
+        $staleTtl = $durations[1] ?? 7200;  // Default 2 hours stale
+        $totalTtl = $freshTtl + $staleTtl;
         
-        if ($cachedValue !== null) {
-            // If we have a cached value, restore it and return
-            return $this->maybeRestoreValue($cachedValue, $key);
+        // Get cached value with timestamp
+        $metaKey = $key . '_sc_meta';
+        $cachedValue = $this->cache->get($key);
+        $cachedMeta = $this->cache->get($metaKey);
+        
+        if ($cachedValue !== null && $cachedMeta !== null) {
+            $age = time() - $cachedMeta['stored_at'];
+            
+            // If data is fresh, return it
+            if ($age <= $freshTtl) {
+                return $this->maybeRestoreValue($cachedValue, $key);
+            }
+            
+            // If data is stale but within stale period, return stale and refresh in background
+            if ($age <= $totalTtl) {
+                // Return stale data immediately
+                $staleValue = $this->maybeRestoreValue($cachedValue, $key);
+                
+                // Trigger background refresh (simplified - in real implementation would be async)
+                $this->refreshInBackground($key, $durations, $callback);
+                
+                return $staleValue;
+            }
         }
         
-        // No cached value, so execute callback and optimize
+        // No cache or expired beyond stale period - generate fresh data
+        return $this->generateAndCache($key, $durations, $callback);
+    }
+
+    /**
+     * Generate fresh data and cache it with metadata.
+     */
+    protected function generateAndCache(string $key, array $durations, \Closure $callback): mixed
+    {
         $value = $callback();
-        $optimizedValue = $this->maybeOptimizeValue($value, $key, $durations['ttl'] ?? null);
+        $freshTtl = $durations[0] ?? 3600;
+        $staleTtl = $durations[1] ?? 7200;
+        $totalTtl = $freshTtl + $staleTtl;
+        
+        // Optimize the value
+        $optimizedValue = $this->maybeOptimizeValue($value, $key, $totalTtl);
         
         // Track the key if it was optimized
         if ($value !== $optimizedValue) {
             $this->trackKey($key);
         }
         
-        // Store using Laravel's flexible method if available, otherwise use regular put
-        if (method_exists($this->cache, 'flexible')) {
-            $this->cache->flexible($key, $durations, function () use ($optimizedValue) {
-                return $optimizedValue;
-            });
-        } else {
-            // Fallback to regular cache put with TTL
-            $this->cache->put($key, $optimizedValue, $durations['ttl'] ?? null);
-        }
+        // Store data and metadata
+        $metaKey = $key . '_sc_meta';
+        $this->cache->put($key, $optimizedValue, $totalTtl);
+        $this->cache->put($metaKey, ['stored_at' => time(), 'fresh_ttl' => $freshTtl], $totalTtl);
         
         return $value;
+    }
+
+    /**
+     * Refresh cache in background (simplified version).
+     */
+    protected function refreshInBackground(string $key, array $durations, \Closure $callback): void
+    {
+        // In a real implementation, this would be dispatched to a queue
+        // For testing purposes, we'll do it synchronously but mark it as background refresh
+        try {
+            $this->generateAndCache($key, $durations, $callback);
+        } catch (\Throwable $e) {
+            // Background refresh failed - log but don't interrupt main flow
+            if ($this->config->get('smart-cache.fallback.log_errors', true)) {
+                Log::warning("SmartCache background refresh failed for {$key}: " . $e->getMessage());
+            }
+        }
     }
 
     /**
