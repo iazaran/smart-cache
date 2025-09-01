@@ -367,4 +367,56 @@ class SmartCache implements SmartCacheContract
         // Convert StoreName to store_name (e.g., RedisStore to redis)
         return strtolower(preg_replace('/Store$/', '', preg_replace('/(?<!^)[A-Z]/', '_$0', $storeName)));
     }
+
+    /**
+     * Stale-while-revalidate cache with optimization support.
+     *
+     * @param string $key
+     * @param array $durations
+     * @param \Closure $callback
+     * @return mixed
+     */
+    public function flexible(string $key, array $durations, \Closure $callback): mixed
+    {
+        // Check if we have a cached value first
+        $cachedValue = $this->cache->get($key);
+        
+        if ($cachedValue !== null) {
+            // If we have a cached value, restore it and return
+            return $this->maybeRestoreValue($cachedValue, $key);
+        }
+        
+        // No cached value, so execute callback and optimize
+        $value = $callback();
+        $optimizedValue = $this->maybeOptimizeValue($value, $key, $durations['ttl'] ?? null);
+        
+        // Track the key if it was optimized
+        if ($value !== $optimizedValue) {
+            $this->trackKey($key);
+        }
+        
+        // Store using Laravel's flexible method if available, otherwise use regular put
+        if (method_exists($this->cache, 'flexible')) {
+            $this->cache->flexible($key, $durations, function () use ($optimizedValue) {
+                return $optimizedValue;
+            });
+        } else {
+            // Fallback to regular cache put with TTL
+            $this->cache->put($key, $optimizedValue, $durations['ttl'] ?? null);
+        }
+        
+        return $value;
+    }
+
+    /**
+     * Handle dynamic method calls to the underlying cache repository.
+     *
+     * @param string $method
+     * @param array $arguments
+     * @return mixed
+     */
+    public function __call(string $method, array $arguments)
+    {
+        return $this->cache->{$method}(...$arguments);
+    }
 } 
