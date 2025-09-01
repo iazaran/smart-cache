@@ -339,6 +339,205 @@ class SmartCacheTest extends TestCase
         $this->assertEquals($value, $retrieved);
     }
 
+    public function test_flexible_method_works_with_optimization()
+    {
+        $key = 'flexible-test-key';
+        $largeValue = $this->createCompressibleData();
+        $callCount = 0;
+
+        $callback = function () use ($largeValue, &$callCount) {
+            $callCount++;
+            return $largeValue;
+        };
+
+        // Laravel format: [freshTtl, staleTtl] 
+        $durations = [3600, 7200]; // Fresh for 1 hour, stale for additional 2 hours
+
+        // Test the flexible method with real SmartCache instance
+        $result = $this->smartCache->flexible($key, $durations, $callback);
+        
+        $this->assertEquals($largeValue, $result);
+        $this->assertEquals(1, $callCount);
+
+        // Verify the key was tracked (optimization applied)
+        $managedKeys = $this->smartCache->getManagedKeys();
+        $this->assertContains($key, $managedKeys);
+
+        // Verify we can retrieve the cached value
+        $cachedResult = $this->smartCache->get($key);
+        $this->assertEquals($largeValue, $cachedResult);
+    }
+
+    public function test_flexible_method_fresh_data_retrieval()
+    {
+        $key = 'flexible-fresh-key';
+        $expectedValue = 'fresh-value';
+        $callCount = 0;
+
+        $callback = function () use ($expectedValue, &$callCount) {
+            $callCount++;
+            return $expectedValue . '-' . $callCount;
+        };
+
+        // Fresh for 10 seconds, stale for additional 20 seconds
+        $durations = [10, 20];
+
+        // First call should execute callback and cache result
+        $result1 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('fresh-value-1', $result1);
+        $this->assertEquals(1, $callCount);
+
+        // Immediate second call should return fresh cached value without executing callback
+        $result2 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('fresh-value-1', $result2);
+        $this->assertEquals(1, $callCount); // Count shouldn't increase - data is fresh
+    }
+
+    public function test_flexible_method_stale_while_revalidate_behavior()
+    {
+        $key = 'flexible-stale-key';
+        $callCount = 0;
+
+        $callback = function () use (&$callCount) {
+            $callCount++;
+            return 'value-' . $callCount;
+        };
+
+        // Fresh for 1 second, stale for additional 5 seconds
+        $durations = [1, 5];
+
+        // Initial call
+        $result1 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('value-1', $result1);
+        $this->assertEquals(1, $callCount);
+
+        // Wait for data to become stale (but not expired)
+        sleep(2); // Data is now stale but within stale period
+
+        // This call should return stale data and trigger background refresh
+        $result2 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('value-1', $result2); // Should still get original value (stale but served)
+        $this->assertEquals(2, $callCount); // Callback should have been called for background refresh
+
+        // Immediate next call should get the refreshed data
+        $result3 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('value-2', $result3); // Should get the refreshed value
+        $this->assertEquals(2, $callCount); // No additional callback execution needed
+    }
+
+    public function test_flexible_method_expired_data_regeneration()
+    {
+        $key = 'flexible-expired-key';
+        $callCount = 0;
+
+        $callback = function () use (&$callCount) {
+            $callCount++;
+            return 'value-' . $callCount;
+        };
+
+        // Very short durations for testing: fresh for 1 second, stale for 1 additional second
+        $durations = [1, 1];
+
+        // Initial call
+        $result1 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('value-1', $result1);
+        $this->assertEquals(1, $callCount);
+
+        // Wait for data to expire completely (beyond stale period)
+        sleep(3); // Data is now completely expired
+
+        // This call should regenerate fresh data (blocking)
+        $result2 = $this->smartCache->flexible($key, $durations, $callback);
+        $this->assertEquals('value-2', $result2); // Should get completely new value
+        $this->assertEquals(2, $callCount); // Callback should have been called for fresh generation
+    }
+
+    public function test_magic_method_delegates_to_underlying_cache()
+    {
+        // Test that an unknown method gets delegated to the underlying cache
+        $key = 'magic-method-key';
+        $value = 'magic value';
+        
+        // Use a method that exists on Laravel's cache but not explicitly on SmartCache
+        // We'll use the many() method as an example
+        $result = $this->smartCache->many([$key]);
+        
+        // Should return array with null values since key doesn't exist
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey($key, $result);
+        $this->assertNull($result[$key]);
+
+        // Store a value first
+        $this->smartCache->put($key, $value);
+        
+        // Now many() should return the value
+        $result = $this->smartCache->many([$key]);
+        $this->assertArrayHasKey($key, $result);
+        $this->assertEquals($value, $result[$key]);
+    }
+
+    public function test_magic_method_with_new_hypothetical_laravel_method()
+    {
+        // Test that a completely unknown method gets delegated
+        // This simulates what would happen with new Laravel 12+ methods
+        
+        // We'll mock the cache store to have a new method
+        $mockCache = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockCache->shouldReceive('hypotheticalNewMethod')
+                  ->with('param1', 'param2')
+                  ->once()
+                  ->andReturn('new method result');
+        
+        // Also mock other necessary methods that SmartCache constructor might call
+        $mockCache->shouldReceive('getStore')->andReturn($mockCache);
+        $mockCache->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
+        
+        $smartCache = new SmartCache(
+            $mockCache,
+            $this->getCacheManager(),
+            $this->app['config'],
+            []
+        );
+
+        $result = $smartCache->hypotheticalNewMethod('param1', 'param2');
+        $this->assertEquals('new method result', $result);
+    }
+
+    public function test_flexible_method_with_optimization_integration()
+    {
+        // Test that flexible method properly applies SmartCache optimizations
+        $key = 'flexible-optimization-key';
+        $largeValue = $this->createCompressibleData();
+        
+        $callback = function () use ($largeValue) {
+            return $largeValue;
+        };
+
+        $durations = [3600, 7200]; // Fresh 1h, stale 2h
+
+        // Test with real SmartCache instance
+        $result = $this->smartCache->flexible($key, $durations, $callback);
+        
+        // Verify the method works correctly
+        $this->assertEquals($largeValue, $result);
+        
+        // Verify key tracking works (optimization was applied)
+        $managedKeys = $this->smartCache->getManagedKeys();
+        $this->assertContains($key, $managedKeys);
+
+        // Test the flexible method interacts properly with other SmartCache methods
+        $this->assertTrue($this->smartCache->has($key));
+        $this->assertEquals($largeValue, $this->smartCache->get($key));
+        
+        // Test cleanup works (should also clean up metadata)
+        $this->assertTrue($this->smartCache->forget($key));
+        $this->assertFalse($this->smartCache->has($key));
+        
+        // Verify metadata was also cleaned up
+        $metaKey = $key . '_sc_meta';
+        $this->assertNull($this->smartCache->get($metaKey));
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();
