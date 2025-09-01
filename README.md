@@ -88,14 +88,65 @@ public function __construct(\SmartCache\Contracts\SmartCache $cache)
 
 ## 🔧 Optimization Strategies
 
-SmartCache includes several **cache optimization strategies** out of the box:
+SmartCache includes several **cache optimization strategies** that intelligently optimize your data:
 
-- **Compression**: Uses gzip or other compression drivers to reduce cache size
-- **Chunking**: Splits large data structures into manageable chunks
-- **Encoding**: Serializes data safely for different cache drivers
-- **Driver-Aware**: Avoids incompatible features based on your cache driver
+### 🎯 Strategy Selection & Priority
 
-These strategies can be customized or extended by implementing `SmartCache\Contracts\OptimizationStrategy`.
+SmartCache automatically selects the **best optimization strategy** for your data:
+
+1. **Chunking Strategy** (Priority 1)
+   - Applied to large arrays/collections with many items
+   - Splits data into manageable chunks for better performance
+   - Best for: Large datasets, API response arrays, database result sets
+
+2. **Compression Strategy** (Priority 2)  
+   - Applied to large strings, arrays, and objects
+   - Uses gzip compression to reduce cache size
+   - Best for: Text data, serialized objects, repetitive content
+
+3. **No Optimization** (Default)
+   - Small data stays unchanged for optimal performance
+   - No overhead for data that doesn't benefit from optimization
+
+### 🧠 Intelligent Strategy Application
+
+Each strategy evaluates the **original data independently** to determine if it should apply:
+
+- **Data Type Matching**: Chunking only applies to arrays/collections, compression works on all types
+- **Size Thresholds**: Each strategy has configurable size thresholds
+- **Driver Compatibility**: Strategies respect cache driver limitations
+- **Performance Optimization**: Only one strategy is applied per value (no chaining overhead)
+
+### 🛠️ Built-in Strategies
+
+- **Compression**: Uses gzip compression with configurable levels (1-9)
+- **Chunking**: Splits large arrays into configurable chunk sizes
+- **Encoding**: Safe serialization for different cache drivers  
+- **Driver-Aware**: Automatically adapts to your cache driver capabilities
+
+### ⚙️ Extensible Architecture
+
+Create custom strategies by implementing `SmartCache\Contracts\OptimizationStrategy`:
+
+```php
+class CustomStrategy implements OptimizationStrategy
+{
+    public function shouldApply(mixed $value, array $context = []): bool
+    {
+        // Your optimization criteria
+    }
+    
+    public function optimize(mixed $value, array $context = []): mixed
+    {
+        // Your optimization logic
+    }
+    
+    public function restore(mixed $value, array $context = []): mixed
+    {
+        // Your restoration logic
+    }
+}
+```
 
 ## 📂 Example: Large Dataset Caching
 
@@ -108,12 +159,13 @@ $complexObject = [
     'statistics' => $statsData
 ];
 
-// SmartCache automatically optimizes storage
+// SmartCache automatically selects the best optimization
 SmartCache::put('api_response', $complexObject, 600);
 
 // Behind the scenes:
-// - Checks data size automatically
-// - Compresses or chunks as needed
+// - Evaluates all strategies against original data
+// - Selects best strategy (chunking for large arrays, compression for others)
+// - Applies single optimal transformation
 // - Stores optimization metadata for retrieval
 // - Ensures fast reconstruction
 
@@ -122,6 +174,26 @@ $retrievedData = SmartCache::get('api_response');
 
 // Or with helper function
 smart_cache(['api_response' => $complexObject], 600);
+```
+
+## 🎯 Strategy Selection Examples
+
+```php
+// Large array with many items → Chunking applied
+$manyUsers = User::all(); // 5000+ user records
+SmartCache::put('all_users', $manyUsers); // → Chunked storage
+
+// Large string content → Compression applied  
+$largeText = file_get_contents('large_file.txt'); // 100KB text
+SmartCache::put('file_content', $largeText); // → Compressed storage
+
+// Medium array with large items → Compression applied
+$reports = [ /* 50 items with large content each */ ];
+SmartCache::put('reports', $reports); // → Compressed storage
+
+// Small data → No optimization (fastest)
+$config = ['setting' => 'value'];
+SmartCache::put('config', $config); // → Stored as-is
 ```
 
 ## 🧰 Artisan Commands

@@ -236,15 +236,12 @@ class SmartCache implements SmartCacheContract
             'config' => $this->config->get('smart-cache'),
         ];
 
-        $optimizedValue = $value;
-        $strategyApplied = false;
-
-        // Try each strategy
+        // Find the best strategy for the original value
+        // Each strategy evaluates against the original value, not chained results
         foreach ($this->strategies as $strategy) {
-            if ($strategy->shouldApply($optimizedValue, $context)) {
+            if ($strategy->shouldApply($value, $context)) {
                 try {
-                    $optimizedValue = $strategy->optimize($optimizedValue, $context);
-                    $strategyApplied = true;
+                    return $strategy->optimize($value, $context);
                 } catch (\Throwable $e) {
                     if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                         Log::warning("SmartCache optimization failed for {$key}: " . $e->getMessage());
@@ -259,7 +256,7 @@ class SmartCache implements SmartCacheContract
             }
         }
 
-        return $optimizedValue;
+        return $value;
     }
 
     /**

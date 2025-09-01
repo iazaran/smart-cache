@@ -99,8 +99,8 @@
                 <p>Advanced serialization techniques for optimal data storage and retrieval.</p>
             </div>
             <div class="feature">
-                <h3>⚙️ Extensible Strategies</h3>
-                <p>Extensible strategy pattern for custom optimization implementations.</p>
+                <h3>⚙️ Smart Strategy Selection</h3>
+                <p>Intelligently selects the best optimization strategy for each data type and size.</p>
             </div>
             <div class="feature">
                 <h3>🛡️ Driver Compatibility</h3>
@@ -126,6 +126,16 @@ $data = SmartCache::get('key');
 // Use helper function
 smart_cache(['key' => $largeData], 600);
         </div>
+
+        <h2>🎯 Smart Strategy Selection</h2>
+        <p>SmartCache automatically selects the <strong>best optimization strategy</strong> for your data:</p>
+        <ul>
+            <li><strong>Large Arrays</strong> → Chunking (splits into manageable pieces)</li>
+            <li><strong>Large Strings</strong> → Compression (gzip compression)</li>
+            <li><strong>Medium Data</strong> → Compression (optimal for mixed content)</li>
+            <li><strong>Small Data</strong> → No optimization (fastest performance)</li>
+        </ul>
+        <p><em>Each strategy evaluates the original data independently - no chaining overhead!</em></p>
 
         <h2>🔧 Supported Cache Drivers</h2>
         <ul>
@@ -161,8 +171,8 @@ smart_cache(['key' => $largeData], 600);
                 <p><strong>Basic Operations:</strong> put, get, forget all worked as expected, with helper functions fully supported.</p>
             </div>
             <div class="feature">
-                <h3>✅ Advanced Features</h3>
-                <p><strong>Compression & Chunking:</strong> 2,000 records stored and retrieved with 100% data integrity. 5,000 records handled seamlessly using chunking.</p>
+                <h3>✅ Smart Optimization</h3>
+                <p><strong>Intelligent Strategy Selection:</strong> Automatically selects chunking for large arrays, compression for text. 5,000 records handled seamlessly with optimal strategy selection.</p>
             </div>
             <div class="feature">
                 <h3>✅ Smart Caching</h3>

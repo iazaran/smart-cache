@@ -28,19 +28,20 @@ class SmartCacheServiceProvider extends ServiceProvider
             $config = $app['config'];
             
             // Create strategies based on config
+            // Order matters: more specific strategies (chunking) should be tried first
             $strategies = [];
-            
-            if ($config->get('smart-cache.strategies.compression.enabled', true)) {
-                $strategies[] = new CompressionStrategy(
-                    $config->get('smart-cache.thresholds.compression', 51200),
-                    $config->get('smart-cache.strategies.compression.level', 6)
-                );
-            }
             
             if ($config->get('smart-cache.strategies.chunking.enabled', true)) {
                 $strategies[] = new ChunkingStrategy(
                     $config->get('smart-cache.thresholds.chunking', 102400),
                     $config->get('smart-cache.strategies.chunking.chunk_size', 1000)
+                );
+            }
+            
+            if ($config->get('smart-cache.strategies.compression.enabled', true)) {
+                $strategies[] = new CompressionStrategy(
+                    $config->get('smart-cache.thresholds.compression', 51200),
+                    $config->get('smart-cache.strategies.compression.level', 6)
                 );
             }
             
