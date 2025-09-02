@@ -198,18 +198,48 @@ SmartCache::put('config', $config); // → Stored as-is
 
 ## 🧰 Artisan Commands
 
-SmartCache provides helpful Artisan commands for **cache management**:
+SmartCache provides powerful Artisan commands for **cache management and monitoring**:
+
+### 📊 Status Command
+
+View SmartCache usage and configuration details:
 
 ```bash
-# Clear all SmartCache managed items
+# Basic status - shows SmartCache managed keys and configuration
+php artisan smart-cache:status
+
+# Enhanced status with Laravel cache analysis
+php artisan smart-cache:status --force
+```
+
+**What `--force` shows:**
+- ✅ **Orphaned key detection** - Find SmartCache-related keys that aren't properly tracked
+- 🔍 **Missing key validation** - Identify managed keys that no longer exist in cache
+- 🧹 **Cache health insights** - Get suggestions for cleanup and optimization
+
+### 🗑️ Clear Command
+
+Flexible cache clearing with precise control:
+
+```bash
+# Clear only SmartCache managed items (safe)
 php artisan smart-cache:clear
 
-# Clear a specific cache key
-php artisan smart-cache:clear user_profile_123
+# Clear a specific managed key
+php artisan smart-cache:clear my-optimized-key
 
-# Check cache status and statistics
-php artisan smart-cache:status
+# Clear any key in Laravel cache, even if not managed by SmartCache
+php artisan smart-cache:clear some-laravel-key --force
+
+# Clear all managed keys + cleanup orphaned SmartCache keys
+php artisan smart-cache:clear --force
 ```
+
+**When to use `--force`:**
+- 🔧 **Cleanup orphaned keys** - Remove leftover SmartCache chunks or metadata
+- 🎯 **Clear non-managed keys** - Remove regular Laravel cache keys when needed
+- 🧹 **Deep cleanup** - Comprehensive cache maintenance and optimization
+
 
 ## 🎯 Use Cases
 

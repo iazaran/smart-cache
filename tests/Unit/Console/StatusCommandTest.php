@@ -34,7 +34,7 @@ class StatusCommandTest extends TestCase
     public function test_command_has_correct_signature_and_description()
     {
         $this->assertEquals('smart-cache:status', $this->command->getName());
-        $this->assertEquals('Display information about SmartCache usage and configuration', $this->command->getDescription());
+        $this->assertEquals('Display information about SmartCache usage and configuration. Use --force to include Laravel cache analysis.', $this->command->getDescription());
     }
 
     public function test_status_command_with_no_managed_keys()
@@ -221,7 +221,7 @@ class StatusCommandTest extends TestCase
     public function test_status_command_integration_with_real_dependencies()
     {
         // Use real dependencies from service container
-        $smartCache = $this->app->make(\SmartCache\Contracts\SmartCache::class);
+        $smartCache = $this->app->make(SmartCache::class);
         
         // Add some test data
         $smartCache->put('integration-test-key', $this->createCompressibleData());
@@ -285,6 +285,170 @@ class StatusCommandTest extends TestCase
         $this->assertStringContainsString('Configuration:', $output);
         $this->assertStringContainsString('Compression: Enabled', $output);
         $this->assertStringContainsString('Chunking: Enabled', $output);
+    }
+
+    public function test_status_command_with_force_option_no_orphaned_keys()
+    {
+        $managedKeys = ['key1', 'key2'];
+        
+        // Setup mocks
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->twice() // Called once for display, once for orphan detection
+            ->andReturn($managedKeys);
+
+        $this->mockConfig->shouldReceive('get')
+            ->with('smart-cache')
+            ->once()
+            ->andReturn($this->getDefaultSmartCacheConfig());
+        
+        // Mock the store() method to return a cache repository
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockStore);
+        
+        // Mock has() calls to check if managed keys exist
+        $this->mockSmartCache->shouldReceive('has')
+            ->with('key1')
+            ->once()
+            ->andReturn(true);
+        $this->mockSmartCache->shouldReceive('has')
+            ->with('key2')
+            ->once()
+            ->andReturn(true);
+
+        // Inject mocks
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+        $this->app->instance(ConfigRepository::class, $this->mockConfig);
+
+        // Execute the command with force
+        $exitCode = $this->commandTester->execute(['--force' => true]);
+
+        // Assert success exit code
+        $this->assertEquals(0, $exitCode);
+
+        // Assert correct output
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
+        $this->assertStringContainsString('✓ No orphaned SmartCache keys found.', $output);
+        $this->assertStringContainsString('✓ All managed keys exist in cache.', $output);
+    }
+
+    public function test_status_command_with_force_option_finds_missing_managed_keys()
+    {
+        $managedKeys = ['existing-key', 'missing-key1', 'missing-key2'];
+        
+        // Setup mocks
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->twice()
+            ->andReturn($managedKeys);
+
+        $this->mockConfig->shouldReceive('get')
+            ->with('smart-cache')
+            ->once()
+            ->andReturn($this->getDefaultSmartCacheConfig());
+        
+        // Mock the store() method to return a cache repository
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockStore);
+        
+        // Mock has() calls - one key exists, two are missing
+        $this->mockSmartCache->shouldReceive('has')
+            ->with('existing-key')
+            ->once()
+            ->andReturn(true);
+        $this->mockSmartCache->shouldReceive('has')
+            ->with('missing-key1')
+            ->once()
+            ->andReturn(false);
+        $this->mockSmartCache->shouldReceive('has')
+            ->with('missing-key2')
+            ->once()
+            ->andReturn(false);
+
+        // Inject mocks
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+        $this->app->instance(ConfigRepository::class, $this->mockConfig);
+
+        // Execute the command with force
+        $exitCode = $this->commandTester->execute(['--force' => true]);
+
+        // Assert success exit code
+        $this->assertEquals(0, $exitCode);
+
+        // Assert correct output
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
+        $this->assertStringContainsString('Found 2 managed keys that no longer exist in cache:', $output);
+        $this->assertStringContainsString('missing-key1', $output);
+        $this->assertStringContainsString('missing-key2', $output);
+        $this->assertStringContainsString('These managed keys no longer exist in the cache store.', $output);
+    }
+
+    public function test_status_command_without_force_option_skips_analysis()
+    {
+        $managedKeys = ['key1', 'key2'];
+        
+        // Setup mocks
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->once() // Only called once for display, not for analysis
+            ->andReturn($managedKeys);
+
+        $this->mockConfig->shouldReceive('get')
+            ->with('smart-cache')
+            ->once()
+            ->andReturn($this->getDefaultSmartCacheConfig());
+
+        // store() should NOT be called without force
+        $this->mockSmartCache->shouldNotReceive('store');
+        $this->mockSmartCache->shouldNotReceive('has');
+
+        // Inject mocks
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+        $this->app->instance(ConfigRepository::class, $this->mockConfig);
+
+        // Execute the command without force
+        $exitCode = $this->commandTester->execute([]);
+
+        // Assert success exit code
+        $this->assertEquals(0, $exitCode);
+
+        // Assert analysis section is NOT present
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringNotContainsString('Laravel Cache Analysis', $output);
+        $this->assertStringNotContainsString('orphaned', $output);
+    }
+
+    public function test_status_command_integration_with_force_option()
+    {
+        // Use real dependencies from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        
+        // Add some test data
+        $smartCache->put('integration-test-key', $this->createCompressibleData());
+        
+        // Create command with Laravel application set
+        $command = new StatusCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        $exitCode = $commandTester->execute(['--force' => true]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output contains force analysis
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('SmartCache Status', $output);
+        $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
+        
+        // Clean up
+        $smartCache->forget('integration-test-key');
     }
 
     /**
