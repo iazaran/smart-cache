@@ -31,7 +31,7 @@ class ClearCommandTest extends TestCase
     public function test_command_has_correct_signature_and_description()
     {
         $this->assertEquals('smart-cache:clear', $this->command->getName());
-        $this->assertEquals('Clear SmartCache managed items. Optionally specify a key to clear only that item.', $this->command->getDescription());
+        $this->assertEquals('Clear SmartCache managed items. Optionally specify a key to clear only that item. Use --force to clear keys even if not managed by SmartCache.', $this->command->getDescription());
     }
 
     public function test_clear_command_with_no_managed_keys()
@@ -54,6 +54,35 @@ class ClearCommandTest extends TestCase
         // Assert correct output
         $output = $this->commandTester->getDisplay();
         $this->assertStringContainsString('No SmartCache managed items found.', $output);
+    }
+
+    public function test_clear_command_with_no_managed_keys_and_force()
+    {
+        // Setup mock to return empty array for managed keys
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->once()
+            ->andReturn([]);
+
+        // Mock the store to return a cache repository that will be used for orphaned key detection
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockStore);
+
+        // Inject the mock into the command
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+
+        // Execute the command with force
+        $exitCode = $this->commandTester->execute(['--force' => true]);
+
+        // Assert success exit code
+        $this->assertEquals(0, $exitCode);
+
+        // Assert correct output
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString('No SmartCache managed items found. Checking for orphaned SmartCache keys...', $output);
+        $this->assertStringContainsString('Could not scan for orphaned keys with this cache driver. Only managed keys were cleared.', $output);
     }
 
     public function test_clear_command_with_managed_keys_success()
@@ -82,7 +111,7 @@ class ClearCommandTest extends TestCase
         // Assert correct output
         $output = $this->commandTester->getDisplay();
         $this->assertStringContainsString('Clearing 3 SmartCache managed items...', $output);
-        $this->assertStringContainsString('All SmartCache items have been cleared successfully.', $output);
+        $this->assertStringContainsString('All SmartCache managed items have been cleared successfully.', $output);
     }
 
     public function test_clear_command_with_managed_keys_failure()
@@ -140,7 +169,7 @@ class ClearCommandTest extends TestCase
         // Assert correct output
         $output = $this->commandTester->getDisplay();
         $this->assertStringContainsString('Clearing 1 SmartCache managed items...', $output);
-        $this->assertStringContainsString('All SmartCache items have been cleared successfully.', $output);
+        $this->assertStringContainsString('All SmartCache managed items have been cleared successfully.', $output);
     }
 
     public function test_clear_specific_key_success()
@@ -152,6 +181,11 @@ class ClearCommandTest extends TestCase
         $this->mockSmartCache->shouldReceive('getManagedKeys')
             ->once()
             ->andReturn($managedKeys);
+        
+        $this->mockSmartCache->shouldReceive('has')
+            ->once()
+            ->with($targetKey)
+            ->andReturn(true);
         
         $this->mockSmartCache->shouldReceive('forget')
             ->once()
@@ -170,7 +204,7 @@ class ClearCommandTest extends TestCase
 
         // Assert correct output
         $output = $this->commandTester->getDisplay();
-        $this->assertStringContainsString("Clearing SmartCache item with key 'target-key'...", $output);
+        $this->assertStringContainsString("Clearing SmartCache managed item with key 'target-key'...", $output);
         $this->assertStringContainsString("Cache key 'target-key' has been cleared successfully.", $output);
     }
 
@@ -183,6 +217,11 @@ class ClearCommandTest extends TestCase
         $this->mockSmartCache->shouldReceive('getManagedKeys')
             ->once()
             ->andReturn($managedKeys);
+            
+        $this->mockSmartCache->shouldReceive('has')
+            ->once()
+            ->with($nonExistentKey)
+            ->andReturn(false);
         
         // forget() should not be called since key is not managed
 
@@ -201,6 +240,78 @@ class ClearCommandTest extends TestCase
         $this->assertStringContainsString("Cache key 'non-existent-key' is not managed by SmartCache or does not exist.", $output);
     }
 
+    public function test_clear_specific_key_not_managed_but_exists_in_cache_without_force()
+    {
+        $managedKeys = ['key1', 'key2', 'key3'];
+        $existingKey = 'existing-but-not-managed-key';
+        
+        // Setup mock expectations
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->once()
+            ->andReturn($managedKeys);
+            
+        $this->mockSmartCache->shouldReceive('has')
+            ->once()
+            ->with($existingKey)
+            ->andReturn(true);
+
+        // Inject the mock into the command
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+
+        // Execute the command with existing but non-managed key
+        $exitCode = $this->commandTester->execute(['key' => $existingKey]);
+
+        // Assert error exit code
+        $this->assertEquals(1, $exitCode);
+
+        // Assert correct output
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString("Cache key 'existing-but-not-managed-key' exists but is not managed by SmartCache. Use --force to clear it anyway.", $output);
+    }
+
+    public function test_clear_specific_key_not_managed_but_exists_with_force()
+    {
+        $managedKeys = ['key1', 'key2', 'key3'];
+        $existingKey = 'existing-but-not-managed-key';
+        
+        // Setup mock expectations
+        $this->mockSmartCache->shouldReceive('getManagedKeys')
+            ->once()
+            ->andReturn($managedKeys);
+            
+        $this->mockSmartCache->shouldReceive('has')
+            ->once()
+            ->with($existingKey)
+            ->andReturn(true);
+            
+        // Mock the store() method to return a cache repository
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore->shouldReceive('forget')
+            ->once()
+            ->with($existingKey)
+            ->andReturn(true);
+            
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockStore);
+
+        // Inject the mock into the command
+        $this->command->setLaravel($this->app);
+        $this->app->instance(SmartCache::class, $this->mockSmartCache);
+
+        // Execute the command with force option
+        $exitCode = $this->commandTester->execute(['key' => $existingKey, '--force' => true]);
+
+        // Assert success exit code
+        $this->assertEquals(0, $exitCode);
+
+        // Assert correct output
+        $output = $this->commandTester->getDisplay();
+        $this->assertStringContainsString("Clearing cache item with key 'existing-but-not-managed-key' (not managed by SmartCache)...", $output);
+        $this->assertStringContainsString("Cache key 'existing-but-not-managed-key' has been cleared successfully.", $output);
+    }
+
     public function test_clear_specific_key_forget_fails()
     {
         $managedKeys = ['key1', 'key2', 'target-key'];
@@ -210,6 +321,11 @@ class ClearCommandTest extends TestCase
         $this->mockSmartCache->shouldReceive('getManagedKeys')
             ->once()
             ->andReturn($managedKeys);
+        
+        $this->mockSmartCache->shouldReceive('has')
+            ->once()
+            ->with($targetKey)
+            ->andReturn(true);
         
         $this->mockSmartCache->shouldReceive('forget')
             ->once()
@@ -228,7 +344,7 @@ class ClearCommandTest extends TestCase
 
         // Assert correct output
         $output = $this->commandTester->getDisplay();
-        $this->assertStringContainsString("Clearing SmartCache item with key 'target-key'...", $output);
+        $this->assertStringContainsString("Clearing SmartCache managed item with key 'target-key'...", $output);
         $this->assertStringContainsString("Failed to clear cache key 'target-key'.", $output);
     }
 
@@ -288,7 +404,7 @@ class ClearCommandTest extends TestCase
         
         // Verify output
         $output = $commandTester->getDisplay();
-        $this->assertStringContainsString("Clearing SmartCache item with key 'test-key-1'...", $output);
+        $this->assertStringContainsString("Clearing SmartCache managed item with key 'test-key-1'...", $output);
         $this->assertStringContainsString("Cache key 'test-key-1' has been cleared successfully.", $output);
         
         // Verify only test-key-1 is cleared, others remain
