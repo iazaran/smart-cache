@@ -351,7 +351,7 @@ class ClearCommandTest extends TestCase
     public function test_clear_command_integration_with_real_smart_cache()
     {
         // Use real SmartCache instance from service container
-        $smartCache = $this->app->make(\SmartCache\Contracts\SmartCache::class);
+        $smartCache = $this->app->make(SmartCache::class);
         
         // Add some test data
         $smartCache->put('test-key-1', $this->createCompressibleData());
@@ -378,7 +378,7 @@ class ClearCommandTest extends TestCase
     public function test_clear_specific_key_integration_with_real_smart_cache()
     {
         // Use real SmartCache instance from service container
-        $smartCache = $this->app->make(\SmartCache\Contracts\SmartCache::class);
+        $smartCache = $this->app->make(SmartCache::class);
         
         // Add some test data
         $smartCache->put('test-key-1', $this->createCompressibleData());
