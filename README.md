@@ -201,13 +201,19 @@ SmartCache::put('config', $config); // → Stored as-is
 SmartCache provides helpful Artisan commands for **cache management**:
 
 ```bash
-# Clear all SmartCache managed items
+# Clear only SmartCache managed items
 php artisan smart-cache:clear
 
-# Clear a specific cache key
-php artisan smart-cache:clear user_profile_123
+# Clear specific managed key  
+php artisan smart-cache:clear my-key
 
-# Check cache status and statistics
+# Force clear any key, even if not managed by SmartCache
+php artisan smart-cache:clear my-non-managed-key --force
+
+# Clear all managed keys + cleanup orphaned SmartCache keys
+php artisan smart-cache:clear --force
+
+# Check SmartCache status and statistics
 php artisan smart-cache:status
 ```
 
