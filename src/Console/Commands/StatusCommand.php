@@ -172,12 +172,36 @@ class StatusCommand extends Command
         
         // Array store (used in testing)
         if (str_contains($storeClass, 'ArrayStore')) {
-            return array_keys($store->all(false)); // false to avoid unserializing values
+            return $this->getArrayStoreKeys($store);
         }
         
         // For other drivers, we can't easily get all keys
         // This is a limitation of Laravel's cache abstraction
         throw new \Exception('Cannot enumerate keys for this cache driver');
+    }
+
+    /**
+     * Get all keys from ArrayStore (Laravel version compatible).
+     */
+    protected function getArrayStoreKeys($store): array
+    {
+        // Try the newer method first (Laravel 10+)
+        if (method_exists($store, 'all')) {
+            return array_keys($store->all(false)); // false to avoid unserializing values
+        }
+        
+        // Fall back to reflection for older versions or when all() doesn't exist
+        try {
+            $reflection = new \ReflectionClass($store);
+            $storageProperty = $reflection->getProperty('storage');
+            $storageProperty->setAccessible(true);
+            $storage = $storageProperty->getValue($store);
+            
+            return array_keys($storage ?? []);
+        } catch (\ReflectionException $e) {
+            // If reflection fails, return empty array
+            return [];
+        }
     }
 
     /**
