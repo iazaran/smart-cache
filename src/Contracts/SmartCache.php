@@ -72,7 +72,7 @@ interface SmartCache
      *
      * @return \Illuminate\Contracts\Cache\Repository
      */
-    public function store(string $name = null): \Illuminate\Contracts\Cache\Repository;
+    public function store(string|null $name = null): \Illuminate\Contracts\Cache\Repository;
 
     /**
      * Clear all cache keys managed by SmartCache.

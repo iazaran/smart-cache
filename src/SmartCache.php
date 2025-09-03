@@ -188,7 +188,7 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function store(string $name = null): Repository
+    public function store(string|null $name = null): Repository
     {
         if ($name === null) {
             return $this->cache;
