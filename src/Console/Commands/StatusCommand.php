@@ -65,27 +65,27 @@ class StatusCommand extends Command
             $this->line('Laravel Cache Analysis (--force):');
             $this->line('-----------------------------------');
             
-            $orphanedKeys = $this->findOrphanedSmartCacheKeys($cache);
+            $nonManagedKeys = $this->findAllNonManagedKeys($cache);
             
-            if (!empty($orphanedKeys)) {
+            if (!empty($nonManagedKeys)) {
                 $this->line('');
-                $this->warn("Found " . count($orphanedKeys) . " orphaned SmartCache-related keys:");
+                $this->warn("Found " . count($nonManagedKeys) . " non-managed Laravel cache keys:");
                 
-                $sampleOrphaned = array_slice($orphanedKeys, 0, min(10, count($orphanedKeys)));
-                foreach ($sampleOrphaned as $key) {
+                $sampleNonManaged = array_slice($nonManagedKeys, 0, min(10, count($nonManagedKeys)));
+                foreach ($sampleNonManaged as $key) {
                     $this->line(" ! {$key}");
                 }
                 
-                if (count($orphanedKeys) > 10) {
-                    $this->line(" ! ... and " . (count($orphanedKeys) - 10) . " more");
+                if (count($nonManagedKeys) > 10) {
+                    $this->line(" ! ... and " . (count($nonManagedKeys) - 10) . " more");
                 }
                 
                 $this->line('');
-                $this->comment('These keys appear to be SmartCache-related but are not tracked.');
+                $this->comment('These keys are stored in Laravel cache but not managed by SmartCache.');
                 $this->comment('Consider running: php artisan smart-cache:clear --force');
             } else {
                 $this->line('');
-                $this->info('✓ No orphaned SmartCache keys found.');
+                $this->info('✓ No non-managed cache keys found.');
             }
             
             // Check if managed keys actually exist in cache
@@ -132,25 +132,26 @@ class StatusCommand extends Command
     }
     
     /**
-     * Find orphaned SmartCache keys in the cache.
+     * Find all non-managed keys in the cache.
      */
-    protected function findOrphanedSmartCacheKeys(SmartCache $cache): array
+    protected function findAllNonManagedKeys(SmartCache $cache): array
     {
-        $store = $cache->store();
+        $repository = $cache->store();
+        $store = $repository->getStore();
         $managedKeys = $cache->getManagedKeys();
-        $orphanedKeys = [];
+        $nonManagedKeys = [];
         
         try {
             $allKeys = $this->getAllCacheKeys($store);
             
             foreach ($allKeys as $key) {
-                // Check if key is SmartCache-related but not managed
-                if ($this->isSmartCacheRelatedKey($key) && !in_array($key, $managedKeys)) {
-                    $orphanedKeys[] = $key;
+                // Check if key is not managed by SmartCache and not a SmartCache internal key
+                if (!in_array($key, $managedKeys) && !$this->isSmartCacheInternalKey($key)) {
+                    $nonManagedKeys[] = $key;
                 }
             }
             
-            return $orphanedKeys;
+            return $nonManagedKeys;
         } catch (\Exception $e) {
             // If we can't scan keys, return empty array
             return [];
@@ -169,20 +170,26 @@ class StatusCommand extends Command
             return $store->connection()->keys('*');
         }
         
+        // Array store (used in testing)
+        if (str_contains($storeClass, 'ArrayStore')) {
+            return array_keys($store->all(false)); // false to avoid unserializing values
+        }
+        
         // For other drivers, we can't easily get all keys
         // This is a limitation of Laravel's cache abstraction
         throw new \Exception('Cannot enumerate keys for this cache driver');
     }
-    
+
     /**
-     * Check if a key is SmartCache-related.
+     * Check if a key is a SmartCache internal key.
      */
-    protected function isSmartCacheRelatedKey(string $key): bool
+    protected function isSmartCacheInternalKey(string $key): bool
     {
-        // Look for SmartCache-specific patterns
+        // Look for SmartCache-specific patterns (internal keys that shouldn't be shown as "non-managed")
         return str_contains($key, '_sc_') || 
                str_contains($key, '_sc_meta') || 
                str_contains($key, '_sc_chunk_') ||
                $key === '_sc_managed_keys';
     }
+
 } 
