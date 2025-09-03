@@ -115,7 +115,7 @@ abstract class TestCase extends OrchestraTestCase
     /**
      * Get a specific cache store for testing.
      */
-    protected function getCacheStore(string $store = null)
+    protected function getCacheStore(string|null $store = null)
     {
         return $this->getCacheManager()->store($store);
     }
