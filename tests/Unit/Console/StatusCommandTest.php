@@ -302,10 +302,16 @@ class StatusCommandTest extends TestCase
             ->andReturn($this->getDefaultSmartCacheConfig());
         
         // Mock the store() method to return a cache repository
-        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
-        $this->mockSmartCache->shouldReceive('store')
+        $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        
+        $mockRepository->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
+            
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockRepository);
         
         // Mock has() calls to check if managed keys exist
         $this->mockSmartCache->shouldReceive('has')
@@ -331,7 +337,7 @@ class StatusCommandTest extends TestCase
         // Assert correct output
         $output = $this->commandTester->getDisplay();
         $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
-        $this->assertStringContainsString('✓ No orphaned SmartCache keys found.', $output);
+        $this->assertStringContainsString('✓ No non-managed cache keys found.', $output);
         $this->assertStringContainsString('✓ All managed keys exist in cache.', $output);
     }
 
@@ -350,10 +356,16 @@ class StatusCommandTest extends TestCase
             ->andReturn($this->getDefaultSmartCacheConfig());
         
         // Mock the store() method to return a cache repository
-        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
-        $this->mockSmartCache->shouldReceive('store')
+        $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        
+        $mockRepository->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
+            
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockRepository);
         
         // Mock has() calls - one key exists, two are missing
         $this->mockSmartCache->shouldReceive('has')
@@ -449,6 +461,131 @@ class StatusCommandTest extends TestCase
         
         // Clean up
         $smartCache->forget('integration-test-key');
+    }
+
+    public function test_status_command_with_force_shows_all_non_managed_keys()
+    {
+        // Use real SmartCache and Laravel Cache instances from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        $laravelCache = $this->app['cache'];
+        
+        // Add SmartCache managed data (both must be large enough to trigger optimization)
+        $smartCache->put('smart-cache-key-1', $this->createCompressibleData());
+        $smartCache->put('smart-cache-key-2', $this->createLargeTestData(100));
+        
+        // Add Laravel native cache data (not managed by SmartCache)
+        $laravelCache->put('laravel-key-1', 'laravel data 1');
+        $laravelCache->put('laravel-key-2', ['laravel' => 'data 2']);
+        $laravelCache->put('laravel-key-3', 'laravel data 3');
+        
+        // Verify setup - SmartCache keys should be managed
+        $managedKeys = $smartCache->getManagedKeys();
+        $this->assertContains('smart-cache-key-1', $managedKeys);
+        $this->assertContains('smart-cache-key-2', $managedKeys);
+        $this->assertNotContains('laravel-key-1', $managedKeys);
+        $this->assertNotContains('laravel-key-2', $managedKeys);
+        $this->assertNotContains('laravel-key-3', $managedKeys);
+        
+        // Create command with Laravel application set
+        $command = new StatusCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        
+        // Execute command with --force flag
+        $exitCode = $commandTester->execute(['--force' => true]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output shows non-managed keys
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('SmartCache Status', $output);
+        $this->assertStringContainsString('Managed Keys: 2', $output);
+        $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
+        $this->assertStringContainsString('Found 3 non-managed Laravel cache keys:', $output);
+        $this->assertStringContainsString('laravel-key-1', $output);
+        $this->assertStringContainsString('laravel-key-2', $output);
+        $this->assertStringContainsString('laravel-key-3', $output);
+        $this->assertStringContainsString('These keys are stored in Laravel cache but not managed by SmartCache.', $output);
+        $this->assertStringContainsString('Consider running: php artisan smart-cache:clear --force', $output);
+        $this->assertStringContainsString('✓ All managed keys exist in cache.', $output);
+        
+        // Clean up
+        $smartCache->forget('smart-cache-key-1');
+        $smartCache->forget('smart-cache-key-2');
+        $laravelCache->forget('laravel-key-1');
+        $laravelCache->forget('laravel-key-2');
+        $laravelCache->forget('laravel-key-3');
+    }
+    
+    public function test_status_command_without_force_only_shows_managed_keys()
+    {
+        // Use real SmartCache and Laravel Cache instances from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        $laravelCache = $this->app['cache'];
+        
+        // Add SmartCache managed data
+        $smartCache->put('smart-cache-key-1', $this->createCompressibleData());
+        
+        // Add Laravel native cache data (not managed by SmartCache)
+        $laravelCache->put('laravel-key-1', 'laravel data 1');
+        
+        // Create command with Laravel application set
+        $command = new StatusCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        
+        // Execute command WITHOUT --force flag
+        $exitCode = $commandTester->execute([]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output shows managed keys but not Laravel cache analysis
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('SmartCache Status', $output);
+        $this->assertStringContainsString('Managed Keys: 1', $output);
+        $this->assertStringContainsString('smart-cache-key-1', $output);
+        $this->assertStringNotContainsString('Laravel Cache Analysis (--force)', $output);
+        $this->assertStringNotContainsString('laravel-key-1', $output);
+        
+        // Clean up
+        $smartCache->forget('smart-cache-key-1');
+        $laravelCache->forget('laravel-key-1');
+    }
+
+    public function test_status_command_with_force_shows_no_non_managed_keys_when_none_exist()
+    {
+        // Use real SmartCache instance from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        
+        // Add only SmartCache managed data
+        $smartCache->put('smart-cache-key-1', $this->createCompressibleData());
+        
+        // Create command with Laravel application set
+        $command = new StatusCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        
+        // Execute command with --force flag
+        $exitCode = $commandTester->execute(['--force' => true]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output shows no non-managed keys
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('SmartCache Status', $output);
+        $this->assertStringContainsString('Managed Keys: 1', $output);
+        $this->assertStringContainsString('Laravel Cache Analysis (--force)', $output);
+        $this->assertStringContainsString('✓ No non-managed cache keys found.', $output);
+        $this->assertStringContainsString('✓ All managed keys exist in cache.', $output);
+        
+        // Clean up
+        $smartCache->forget('smart-cache-key-1');
     }
 
     /**

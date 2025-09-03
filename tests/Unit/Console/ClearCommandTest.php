@@ -60,14 +60,20 @@ class ClearCommandTest extends TestCase
     {
         // Setup mock to return empty array for managed keys
         $this->mockSmartCache->shouldReceive('getManagedKeys')
-            ->once()
+            ->twice() // Called once for display, once in clearOrphanedKeys
             ->andReturn([]);
 
         // Mock the store to return a cache repository that will be used for orphaned key detection
-        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
-        $this->mockSmartCache->shouldReceive('store')
+        $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        
+        $mockRepository->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
+            
+        $this->mockSmartCache->shouldReceive('store')
+            ->once()
+            ->andReturn($mockRepository);
 
         // Inject the mock into the command
         $this->command->setLaravel($this->app);
@@ -81,8 +87,8 @@ class ClearCommandTest extends TestCase
 
         // Assert correct output
         $output = $this->commandTester->getDisplay();
-        $this->assertStringContainsString('No SmartCache managed items found. Checking for orphaned SmartCache keys...', $output);
-        $this->assertStringContainsString('Could not scan for orphaned keys with this cache driver. Only managed keys were cleared.', $output);
+        $this->assertStringContainsString('No SmartCache managed items found. Checking for non-managed cache keys...', $output);
+        $this->assertStringContainsString('Could not scan for non-managed keys with this cache driver. Only managed keys were cleared.', $output);
     }
 
     public function test_clear_command_with_managed_keys_success()
@@ -422,6 +428,109 @@ class ClearCommandTest extends TestCase
         
         $output = $commandTester->getDisplay();
         $this->assertStringContainsString("Cache key 'non-existent-key' is not managed by SmartCache or does not exist.", $output);
+    }
+
+    public function test_clear_command_with_force_clears_all_non_managed_keys()
+    {
+        // Use real SmartCache and Laravel Cache instances from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        $laravelCache = $this->app['cache'];
+        
+        // Add SmartCache managed data (both must be large enough to trigger optimization)
+        $smartCache->put('smart-cache-key-1', $this->createCompressibleData());
+        $smartCache->put('smart-cache-key-2', $this->createLargeTestData(100));
+        
+        // Add Laravel native cache data (not managed by SmartCache)
+        $laravelCache->put('laravel-key-1', 'laravel data 1');
+        $laravelCache->put('laravel-key-2', ['laravel' => 'data 2']);
+        $laravelCache->put('laravel-key-3', 'laravel data 3');
+        
+        // Verify setup - SmartCache keys should be managed
+        $managedKeys = $smartCache->getManagedKeys();
+        $this->assertContains('smart-cache-key-1', $managedKeys);
+        $this->assertContains('smart-cache-key-2', $managedKeys);
+        $this->assertNotContains('laravel-key-1', $managedKeys);
+        $this->assertNotContains('laravel-key-2', $managedKeys);
+        $this->assertNotContains('laravel-key-3', $managedKeys);
+        
+        // All keys should exist
+        $this->assertTrue($smartCache->has('smart-cache-key-1'));
+        $this->assertTrue($smartCache->has('smart-cache-key-2'));
+        $this->assertTrue($laravelCache->has('laravel-key-1'));
+        $this->assertTrue($laravelCache->has('laravel-key-2'));
+        $this->assertTrue($laravelCache->has('laravel-key-3'));
+        
+        // Create command with Laravel application set
+        $command = new ClearCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        
+        // Clear all with --force flag
+        $exitCode = $commandTester->execute(['--force' => true]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output contains expected messages
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('Clearing 2 SmartCache managed items...', $output);
+        $this->assertStringContainsString('All SmartCache managed items have been cleared successfully.', $output);
+        $this->assertStringContainsString('Checking for non-managed cache keys...', $output);
+        $this->assertStringContainsString('Cleared 3 non-managed cache keys.', $output);
+        
+        // Verify all keys have been cleared
+        $this->assertFalse($smartCache->has('smart-cache-key-1'));
+        $this->assertFalse($smartCache->has('smart-cache-key-2'));
+        $this->assertFalse($laravelCache->has('laravel-key-1'));
+        $this->assertFalse($laravelCache->has('laravel-key-2'));
+        $this->assertFalse($laravelCache->has('laravel-key-3'));
+        
+        // Verify managed keys list is cleared
+        $remainingManagedKeys = $smartCache->getManagedKeys();
+        $this->assertEmpty($remainingManagedKeys);
+    }
+    
+    public function test_clear_command_without_force_only_clears_managed_keys()
+    {
+        // Use real SmartCache and Laravel Cache instances from service container
+        $smartCache = $this->app->make(SmartCache::class);
+        $laravelCache = $this->app['cache'];
+        
+        // Add SmartCache managed data
+        $smartCache->put('smart-cache-key-1', $this->createCompressibleData());
+        
+        // Add Laravel native cache data (not managed by SmartCache)
+        $laravelCache->put('laravel-key-1', 'laravel data 1');
+        
+        // Verify setup
+        $this->assertTrue($smartCache->has('smart-cache-key-1'));
+        $this->assertTrue($laravelCache->has('laravel-key-1'));
+        
+        // Create command with Laravel application set
+        $command = new ClearCommand();
+        $command->setLaravel($this->app);
+        
+        $commandTester = new CommandTester($command);
+        
+        // Clear all WITHOUT --force flag
+        $exitCode = $commandTester->execute([]);
+        
+        // Assert success
+        $this->assertEquals(0, $exitCode);
+        
+        // Verify output
+        $output = $commandTester->getDisplay();
+        $this->assertStringContainsString('Clearing 1 SmartCache managed items...', $output);
+        $this->assertStringContainsString('All SmartCache managed items have been cleared successfully.', $output);
+        $this->assertStringNotContainsString('Checking for non-managed cache keys...', $output);
+        
+        // Verify only SmartCache managed keys are cleared, Laravel keys remain
+        $this->assertFalse($smartCache->has('smart-cache-key-1'));
+        $this->assertTrue($laravelCache->has('laravel-key-1')); // Should remain
+        
+        // Clean up
+        $laravelCache->forget('laravel-key-1');
     }
 
     protected function tearDown(): void
