@@ -90,7 +90,7 @@ class ClearCommand extends Command
         
         if ($count === 0) {
             if ($force) {
-                $this->info('No SmartCache managed items found. Checking for orphaned SmartCache keys...');
+                $this->info('No SmartCache managed items found. Checking for non-managed cache keys...');
                 return $this->clearOrphanedKeys($cache);
             } else {
                 $this->info('No SmartCache managed items found.');
@@ -106,7 +106,7 @@ class ClearCommand extends Command
             $this->info('All SmartCache managed items have been cleared successfully.');
             
             if ($force) {
-                $this->info('Checking for orphaned SmartCache keys...');
+                $this->info('Checking for non-managed cache keys...');
                 $this->clearOrphanedKeys($cache);
             }
             
@@ -118,36 +118,39 @@ class ClearCommand extends Command
     }
     
     /**
-     * Clear orphaned SmartCache keys (chunk keys, meta keys, etc.).
+     * Clear orphaned keys (with --force, clears ALL non-managed keys).
      */
     protected function clearOrphanedKeys(SmartCache $cache): int
     {
-        $store = $cache->store();
+        $repository = $cache->store();
+        $store = $repository->getStore();
         $cleared = 0;
+        $managedKeys = $cache->getManagedKeys();
         
         // Try to get all cache keys (this varies by cache driver)
         try {
             $allKeys = $this->getAllCacheKeys($store);
             
             foreach ($allKeys as $key) {
-                // Look for SmartCache-related patterns
-                if ($this->isSmartCacheRelatedKey($key)) {
-                    if ($store->forget($key)) {
+                // With --force, clear ALL keys that are not currently managed by SmartCache
+                // but exclude SmartCache internal keys
+                if (!in_array($key, $managedKeys) && !$this->isSmartCacheInternalKey($key)) {
+                    if ($repository->forget($key)) {
                         $cleared++;
-                        $this->line("Cleared orphaned key: {$key}");
+                        $this->line("Cleared key: {$key}");
                     }
                 }
             }
             
             if ($cleared > 0) {
-                $this->info("Cleared {$cleared} orphaned SmartCache-related keys.");
+                $this->info("Cleared {$cleared} non-managed cache keys.");
             } else {
-                $this->info('No orphaned SmartCache keys found.');
+                $this->info('No non-managed cache keys found.');
             }
             
             return 0;
         } catch (\Exception $e) {
-            $this->warn('Could not scan for orphaned keys with this cache driver. Only managed keys were cleared.');
+            $this->warn('Could not scan for non-managed keys with this cache driver. Only managed keys were cleared.');
             return 0;
         }
     }
@@ -164,20 +167,50 @@ class ClearCommand extends Command
             return $store->connection()->keys('*');
         }
         
+        // Array store (used in testing)
+        if (str_contains($storeClass, 'ArrayStore')) {
+            return $this->getArrayStoreKeys($store);
+        }
+        
         // For other drivers, we can't easily get all keys
         // This is a limitation of Laravel's cache abstraction
         throw new \Exception('Cannot enumerate keys for this cache driver');
     }
-    
+
     /**
-     * Check if a key is SmartCache-related.
+     * Get all keys from ArrayStore (Laravel version compatible).
      */
-    protected function isSmartCacheRelatedKey(string $key): bool
+    protected function getArrayStoreKeys($store): array
     {
-        // Look for SmartCache-specific patterns
+        // Try the newer method first (Laravel 10+)
+        if (method_exists($store, 'all')) {
+            return array_keys($store->all(false)); // false to avoid unserializing values
+        }
+        
+        // Fall back to reflection for older versions or when all() doesn't exist
+        try {
+            $reflection = new \ReflectionClass($store);
+            $storageProperty = $reflection->getProperty('storage');
+            $storageProperty->setAccessible(true);
+            $storage = $storageProperty->getValue($store);
+            
+            return array_keys($storage ?? []);
+        } catch (\ReflectionException $e) {
+            // If reflection fails, return empty array
+            return [];
+        }
+    }
+
+    /**
+     * Check if a key is a SmartCache internal key.
+     */
+    protected function isSmartCacheInternalKey(string $key): bool
+    {
+        // Look for SmartCache-specific patterns (internal keys that shouldn't be cleared as "non-managed")
         return str_contains($key, '_sc_') || 
                str_contains($key, '_sc_meta') || 
                str_contains($key, '_sc_chunk_') ||
                $key === '_sc_managed_keys';
     }
+
 } 
