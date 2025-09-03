@@ -63,9 +63,9 @@ class ClearCommandTest extends TestCase
             ->twice() // Called once for display, once in clearOrphanedKeys
             ->andReturn([]);
 
-        // Mock the store to return a cache repository that will be used for orphaned key detection
+        // Mock the store to return a cache repository that will simulate an unsupported driver
         $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
-        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        $mockStore = Mockery::mock(\stdClass::class); // Use stdClass to simulate unsupported driver
         
         $mockRepository->shouldReceive('getStore')
             ->once()
