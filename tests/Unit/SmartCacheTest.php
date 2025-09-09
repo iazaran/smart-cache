@@ -351,7 +351,7 @@ class SmartCacheTest extends TestCase
         };
 
         // Laravel format: [freshTtl, staleTtl] 
-        $durations = [3600, 7200]; // Fresh for 1 hour, stale for additional 2 hours
+        $durations = [3600, 7200]; // Fresh for 1 hour, stale until 2 hours
 
         // Test the flexible method with real SmartCache instance
         $result = $this->smartCache->flexible($key, $durations, $callback);
@@ -379,7 +379,7 @@ class SmartCacheTest extends TestCase
             return $expectedValue . '-' . $callCount;
         };
 
-        // Fresh for 10 seconds, stale for additional 20 seconds
+        // Fresh for 10 seconds, stale until 20 seconds
         $durations = [10, 20];
 
         // First call should execute callback and cache result
@@ -403,7 +403,7 @@ class SmartCacheTest extends TestCase
             return 'value-' . $callCount;
         };
 
-        // Fresh for 1 second, stale for additional 5 seconds
+        // Fresh for 1 second, stale until 5 seconds
         $durations = [1, 5];
 
         // Initial call
@@ -435,7 +435,7 @@ class SmartCacheTest extends TestCase
             return 'value-' . $callCount;
         };
 
-        // Very short durations for testing: fresh for 1 second, stale for 1 additional second
+        // Very short durations for testing: fresh for 1 second, stale until 1 second (no stale period)
         $durations = [1, 1];
 
         // Initial call
@@ -513,7 +513,7 @@ class SmartCacheTest extends TestCase
             return $largeValue;
         };
 
-        $durations = [3600, 7200]; // Fresh 1h, stale 2h
+        $durations = [3600, 7200]; // Fresh 1h, stale until 2h
 
         // Test with real SmartCache instance
         $result = $this->smartCache->flexible($key, $durations, $callback);

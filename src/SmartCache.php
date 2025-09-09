@@ -374,7 +374,7 @@ class SmartCache implements SmartCacheContract
      * 
      * Laravel's flexible method uses: [freshTtl, staleTtl]
      * - freshTtl: seconds data is considered fresh
-     * - staleTtl: additional seconds to serve stale data while revalidating
+     * - staleTtl: absolute seconds to serve stale data while revalidating
      *
      * @param string $key
      * @param array $durations [freshTtl, staleTtl]
@@ -384,8 +384,8 @@ class SmartCache implements SmartCacheContract
     public function flexible(string $key, array $durations, \Closure $callback): mixed
     {
         $freshTtl = $durations[0] ?? 3600;  // Default 1 hour fresh
-        $staleTtl = $durations[1] ?? 7200;  // Default 2 hours stale
-        $totalTtl = $freshTtl + $staleTtl;
+        $staleTtl = $durations[1] ?? 7200;  // Default 2 hours stale (absolute time)
+        $totalTtl = $staleTtl;
         
         // Get cached value with timestamp
         $metaKey = $key . '_sc_meta';
@@ -424,7 +424,7 @@ class SmartCache implements SmartCacheContract
         $value = $callback();
         $freshTtl = $durations[0] ?? 3600;
         $staleTtl = $durations[1] ?? 7200;
-        $totalTtl = $freshTtl + $staleTtl;
+        $totalTtl = $staleTtl;
         
         // Optimize the value
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $totalTtl);
