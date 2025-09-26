@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Laravel SmartCache - Intelligent caching optimization package for Laravel applications with compression, chunking, and performance strategies">
-    <meta name="keywords" content="Laravel, caching, PHP, performance, optimization, Redis, cache management, smart cache, data compression">
+    <meta name="keywords" content="Laravel, caching, PHP, performance, optimization, Redis, cache management, smart cache, data compression, cache invalidation, model observers, dependency tracking">
     <meta name="author" content="Ismael Azaran">
     <title>Laravel SmartCache - Intelligent Caching Optimization</title>
     <style>
@@ -106,6 +106,18 @@
                 <h3>🛡️ Driver Compatibility</h3>
                 <p>Optional fallback for incompatible cache drivers with seamless integration.</p>
             </div>
+            <div class="feature">
+                <h3>🔗 Dependency Tracking</h3>
+                <p>Create cache hierarchies with cascade invalidation for complex data relationships.</p>
+            </div>
+            <div class="feature">
+                <h3>🎯 Pattern Invalidation</h3>
+                <p>Bulk cache clearing with advanced wildcard and regex pattern matching.</p>
+            </div>
+            <div class="feature">
+                <h3>🔄 Model Auto-Invalidation</h3>
+                <p>Automatic cache clearing when Eloquent models change using observers and traits.</p>
+            </div>
         </div>
 
         <h2>📦 Installation</h2>
@@ -125,6 +137,26 @@ $data = SmartCache::get('key');
 
 // Use helper function
 smart_cache(['key' => $largeData], 600);
+        </div>
+
+        <h2>🚀 Advanced Cache Invalidation</h2>
+        <p>SmartCache provides powerful <strong>cache invalidation features</strong> for complex applications:</p>
+        
+        <div class="code">
+// Dependency tracking - cascade invalidation
+SmartCache::dependsOn('user_posts', 'user_data');
+SmartCache::invalidate('user_data'); // Also clears user_posts
+
+// Pattern-based invalidation
+SmartCache::flushPattern('user_*');    // Clear all user cache
+SmartCache::flushPattern('/api_\d+/'); // Regex patterns
+
+// Model auto-invalidation
+use SmartCache\Traits\CacheInvalidation;
+class User extends Model {
+    use CacheInvalidation;
+    // Cache cleared automatically on save/delete!
+}
         </div>
 
         <h2>🎯 Smart Strategy Selection</h2>
@@ -148,8 +180,10 @@ smart_cache(['key' => $largeData], 600);
         <h2>🎯 Use Cases</h2>
         <ul>
             <li>Large dataset caching (API responses, database queries)</li>
+            <li>Model-based cache invalidation with Eloquent observers</li>
+            <li>Complex cache hierarchies with dependency tracking</li>
+            <li>Pattern-based bulk cache operations (wildcards/regex)</li>
             <li>Session data optimization</li>
-            <li>Complex object serialization</li>
             <li>High-traffic application performance</li>
             <li>Memory-constrained environments</li>
         </ul>
@@ -217,7 +251,7 @@ Laravel Cache     → Store: 3.6ms, Retrieve: 8.5ms
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "Laravel SmartCache",
-        "description": "Intelligent caching optimization package for Laravel applications with compression, chunking, and performance strategies",
+        "description": "Intelligent caching optimization package for Laravel applications with compression, chunking, cache invalidation, and performance strategies",
         "url": "https://github.com/iazaran/smart-cache",
         "author": {
             "@type": "Person",
