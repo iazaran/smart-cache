@@ -179,10 +179,10 @@ class SmartCacheIntegrationTest extends TestCase
         $this->assertContains('array-large', $managedKeys);
         $this->assertContains('array-chunked', $managedKeys);
         
-        // Small values should not be managed
-        $this->assertNotContains('string-small', $managedKeys);
-        $this->assertNotContains('array-small', $managedKeys);
-        $this->assertNotContains('integer', $managedKeys);
+        // All values are now managed for advanced invalidation features
+        $this->assertContains('string-small', $managedKeys);
+        $this->assertContains('array-small', $managedKeys);
+        $this->assertContains('integer', $managedKeys);
         
         // Clean up
         foreach (array_keys($testCases) as $key) {

@@ -234,14 +234,14 @@ class SmartCacheTest extends TestCase
         $largeValue = $this->createCompressibleData();
         $this->smartCache->put($key1, $largeValue);
         
-        // Store a small value that doesn't trigger optimization
+        // Store a small value (still tracked for pattern matching and invalidation)
         $this->smartCache->put($key2, 'small value');
 
         $managedKeys = $this->smartCache->getManagedKeys();
         
-        // Only the optimized key should be tracked
+        // Both keys should now be tracked for advanced invalidation features
         $this->assertContains($key1, $managedKeys);
-        $this->assertNotContains($key2, $managedKeys);
+        $this->assertContains($key2, $managedKeys);
     }
 
     public function test_can_get_different_cache_stores()
@@ -491,6 +491,7 @@ class SmartCacheTest extends TestCase
         // Also mock other necessary methods that SmartCache constructor might call
         $mockCache->shouldReceive('getStore')->andReturn($mockCache);
         $mockCache->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
+        $mockCache->shouldReceive('get')->with('_sc_dependencies', [])->andReturn([]);
         
         $smartCache = new SmartCache(
             $mockCache,

@@ -97,9 +97,9 @@ class SmartCacheServiceProviderTest extends TestCase
         $largeData = $this->createCompressibleData();
         $smartCache->put('no-compression-test', $largeData);
         
-        // Should not be tracked since compression is disabled
+        // All keys are now tracked for advanced invalidation features
         $managedKeys = $smartCache->getManagedKeys();
-        $this->assertNotContains('no-compression-test', $managedKeys);
+        $this->assertContains('no-compression-test', $managedKeys);
     }
 
     public function test_service_provider_respects_chunking_configuration()
@@ -118,9 +118,9 @@ class SmartCacheServiceProviderTest extends TestCase
         $largeArray = $this->createChunkableData();
         $smartCache->put('no-chunking-test', $largeArray);
         
-        // Should not be tracked since both strategies are disabled
+        // All keys are now tracked for advanced invalidation features
         $managedKeys = $smartCache->getManagedKeys();
-        $this->assertNotContains('no-chunking-test', $managedKeys);
+        $this->assertContains('no-chunking-test', $managedKeys);
     }
 
     public function test_service_provider_uses_custom_compression_settings()
@@ -271,7 +271,7 @@ class SmartCacheServiceProviderTest extends TestCase
         $this->assertTrue($smartCache->put('test-key', 'test-value'));
         $this->assertEquals('test-value', $smartCache->get('test-key'));
         
-        // No strategies means no managed keys
-        $this->assertEmpty($smartCache->getManagedKeys());
+        // Keys are still tracked even without optimization strategies
+        $this->assertNotEmpty($smartCache->getManagedKeys());
     }
 }
