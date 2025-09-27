@@ -492,6 +492,7 @@ class SmartCacheTest extends TestCase
         $mockCache->shouldReceive('getStore')->andReturn($mockCache);
         $mockCache->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
         $mockCache->shouldReceive('get')->with('_sc_dependencies', [])->andReturn([]);
+        $mockCache->shouldReceive('get')->with('_sc_performance_metrics', [])->andReturn([]);
         
         $smartCache = new SmartCache(
             $mockCache,
