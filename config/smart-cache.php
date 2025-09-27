@@ -57,6 +57,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Performance Monitoring
+    |--------------------------------------------------------------------------
+    |
+    | Enable performance monitoring to track cache hit/miss ratios,
+    | optimization impact, and operation durations.
+    |
+    */
+    'monitoring' => [
+        'enabled' => true,
+        'metrics_ttl' => 3600, // How long to keep metrics in cache (seconds)
+        'recent_entries_limit' => 100, // Number of recent operations to track per type
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Drivers
     |--------------------------------------------------------------------------
     |
