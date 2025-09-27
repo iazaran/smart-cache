@@ -159,4 +159,84 @@ interface SmartCache
      * @return \SmartCache\Services\CacheInvalidationService
      */
     public function invalidationService(): \SmartCache\Services\CacheInvalidationService;
+
+    /**
+     * Flexible caching with stale-while-revalidate support.
+     *
+     * @param string $key
+     * @param array $durations [freshTtl, staleTtl]
+     * @param \Closure $callback
+     * @return mixed
+     */
+    public function flexible(string $key, array $durations, \Closure $callback): mixed;
+
+    /**
+     * Stale-While-Revalidate (SWR) caching pattern.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl
+     * @param int $staleTtl
+     * @return mixed
+     */
+    public function swr(string $key, \Closure $callback, int $ttl = 3600, int $staleTtl = 7200): mixed;
+
+    /**
+     * Stale cache pattern - allows serving stale data beyond TTL.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl
+     * @param int $staleTtl
+     * @return mixed
+     */
+    public function stale(string $key, \Closure $callback, int $ttl = 1800, int $staleTtl = 86400): mixed;
+
+    /**
+     * Refresh-Ahead caching pattern.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl
+     * @param int $refreshWindow
+     * @return mixed
+     */
+    public function refreshAhead(string $key, \Closure $callback, int $ttl = 3600, int $refreshWindow = 600): mixed;
+
+    /**
+     * Get available Artisan commands information.
+     *
+     * @return array
+     */
+    public function getAvailableCommands(): array;
+
+    /**
+     * Execute a command programmatically.
+     *
+     * @param string $command
+     * @param array $parameters
+     * @return array
+     */
+    public function executeCommand(string $command, array $parameters = []): array;
+
+    /**
+     * Get performance metrics.
+     *
+     * @return array
+     */
+    public function getPerformanceMetrics(): array;
+
+    /**
+     * Reset performance metrics.
+     *
+     * @return void
+     */
+    public function resetPerformanceMetrics(): void;
+
+    /**
+     * Analyze cache performance and provide recommendations.
+     *
+     * @return array
+     */
+    public function analyzePerformance(): array;
 } 

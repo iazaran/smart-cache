@@ -58,6 +58,16 @@ class SmartCache implements SmartCacheContract
     protected ?CacheInvalidationService $invalidationService = null;
 
     /**
+     * @var array
+     */
+    protected array $performanceMetrics = [];
+
+    /**
+     * @var bool
+     */
+    protected bool $enablePerformanceMonitoring = true;
+
+    /**
      * SmartCache constructor.
      *
      * @param Repository $cache
@@ -82,6 +92,10 @@ class SmartCache implements SmartCacheContract
         // Load tracked keys and dependencies
         $this->loadManagedKeys();
         $this->loadDependencies();
+        
+        // Initialize performance monitoring
+        $this->enablePerformanceMonitoring = $config->get('smart-cache.monitoring.enabled', true);
+        $this->loadPerformanceMetrics();
     }
 
     /**
@@ -101,13 +115,19 @@ class SmartCache implements SmartCacheContract
      */
     public function get(string $key, mixed $default = null): mixed
     {
+        $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
+        
         $value = $this->cache->get($key, null);
         
         if ($value === null) {
+            $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             return $default;
         }
         
-        return $this->maybeRestoreValue($value, $key);
+        $restoredValue = $this->maybeRestoreValue($value, $key);
+        $this->recordPerformanceMetric('cache_hit', $key, $startTime);
+        
+        return $restoredValue;
     }
 
     /**
@@ -115,6 +135,8 @@ class SmartCache implements SmartCacheContract
      */
     public function put(string $key, mixed $value, $ttl = null): bool
     {
+        $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
+        
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $ttl);
         
         // Track all keys for pattern matching and invalidation
@@ -125,7 +147,14 @@ class SmartCache implements SmartCacheContract
             $this->associateTagsWithKey($key, $this->activeTags);
         }
         
-        return $this->cache->put($key, $optimizedValue, $ttl);
+        $result = $this->cache->put($key, $optimizedValue, $ttl);
+        $this->recordPerformanceMetric('cache_write', $key, $startTime, [
+            'original_size' => $this->calculateDataSize($value),
+            'optimized_size' => $this->calculateDataSize($optimizedValue),
+            'ttl' => $ttl
+        ]);
+        
+        return $result;
     }
 
     /**
@@ -481,6 +510,58 @@ class SmartCache implements SmartCacheContract
     }
 
     /**
+     * Stale-While-Revalidate (SWR) caching pattern.
+     * 
+     * Returns cached data immediately, triggers background refresh if stale.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl TTL in seconds (default: 1 hour)
+     * @param int $staleTtl Maximum stale time in seconds (default: 2 hours)
+     * @return mixed
+     */
+    public function swr(string $key, \Closure $callback, int $ttl = 3600, int $staleTtl = 7200): mixed
+    {
+        return $this->flexible($key, [$ttl, $staleTtl], $callback);
+    }
+
+    /**
+     * Stale cache pattern - allows serving stale data beyond TTL.
+     * 
+     * Serves stale data for extended period while attempting background refresh.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl Fresh TTL in seconds (default: 30 minutes)
+     * @param int $staleTtl Extended stale TTL in seconds (default: 24 hours)
+     * @return mixed
+     */
+    public function stale(string $key, \Closure $callback, int $ttl = 1800, int $staleTtl = 86400): mixed
+    {
+        return $this->flexible($key, [$ttl, $staleTtl], $callback);
+    }
+
+    /**
+     * Refresh-Ahead caching pattern.
+     * 
+     * Proactively refreshes cache before expiration to avoid cache misses.
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @param int $ttl Cache TTL in seconds (default: 1 hour)
+     * @param int $refreshWindow Time before expiry to trigger refresh in seconds (default: 10 minutes)
+     * @return mixed
+     */
+    public function refreshAhead(string $key, \Closure $callback, int $ttl = 3600, int $refreshWindow = 600): mixed
+    {
+        // For refresh-ahead, we use a shorter fresh period and longer stale period
+        $freshTtl = max(1, $ttl - $refreshWindow); // Refresh before actual expiry
+        $staleTtl = $ttl + $refreshWindow; // Allow some grace period
+        
+        return $this->flexible($key, [$freshTtl, $staleTtl], $callback);
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function tags(string|array $tags): static
@@ -696,6 +777,361 @@ class SmartCache implements SmartCacheContract
     public function healthCheck(): array
     {
         return $this->invalidationService()->healthCheckAndCleanup();
+    }
+
+    /**
+     * Get available Artisan commands information.
+     *
+     * @return array
+     */
+    public function getAvailableCommands(): array
+    {
+        try {
+            return app('smart-cache.commands', []);
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Execute a command programmatically (HTTP context).
+     *
+     * @param string $command
+     * @param array $parameters
+     * @return array
+     */
+    public function executeCommand(string $command, array $parameters = []): array
+    {
+        try {
+            switch ($command) {
+                case 'clear':
+                case 'smart-cache:clear':
+                    return $this->executeClearCommand($parameters);
+                    
+                case 'status':
+                case 'smart-cache:status':
+                    return $this->executeStatusCommand($parameters);
+                    
+                default:
+                    return [
+                        'success' => false,
+                        'message' => "Unknown command: {$command}",
+                        'available_commands' => array_keys($this->getAvailableCommands())
+                    ];
+            }
+        } catch (\Throwable $e) {
+            return [
+                'success' => false,
+                'message' => "Command execution failed: " . $e->getMessage(),
+                'exception' => get_class($e)
+            ];
+        }
+    }
+
+    /**
+     * Execute clear command programmatically.
+     */
+    protected function executeClearCommand(array $parameters = []): array
+    {
+        $key = $parameters['key'] ?? null;
+        $force = $parameters['force'] ?? false;
+        $cleared = 0;
+        $messages = [];
+        
+        if ($key) {
+            // Clear specific key
+            $managedKeys = $this->getManagedKeys();
+            $isManaged = in_array($key, $managedKeys);
+            $keyExists = $this->has($key);
+            
+            if (!$isManaged && !$force) {
+                return [
+                    'success' => false,
+                    'message' => "Key '{$key}' is not managed by SmartCache. Use force=true to clear anyway.",
+                    'cleared_count' => 0
+                ];
+            }
+            
+            if (!$keyExists) {
+                return [
+                    'success' => false,
+                    'message' => "Key '{$key}' does not exist.",
+                    'cleared_count' => 0
+                ];
+            }
+            
+            $success = $isManaged ? $this->forget($key) : $this->store()->forget($key);
+            
+            return [
+                'success' => $success,
+                'message' => $success ? "Key '{$key}' cleared successfully." : "Failed to clear key '{$key}'.",
+                'cleared_count' => $success ? 1 : 0,
+                'key' => $key,
+                'was_managed' => $isManaged
+            ];
+        } else {
+            // Clear all managed keys
+            $keys = $this->getManagedKeys();
+            $count = count($keys);
+            
+            if ($count === 0) {
+                return [
+                    'success' => true,
+                    'message' => 'No SmartCache managed keys found.',
+                    'cleared_count' => 0
+                ];
+            }
+            
+            $success = $this->clear();
+            
+            return [
+                'success' => $success,
+                'message' => $success ? "Cleared {$count} SmartCache managed keys." : 'Some keys could not be cleared.',
+                'cleared_count' => $success ? $count : 0,
+                'total_managed_keys' => $count
+            ];
+        }
+    }
+
+    /**
+     * Execute status command programmatically.
+     */
+    protected function executeStatusCommand(array $parameters = []): array
+    {
+        $force = $parameters['force'] ?? false;
+        $managedKeys = $this->getManagedKeys();
+        $count = count($managedKeys);
+        
+        $result = [
+            'success' => true,
+            'cache_driver' => $this->config->get('cache.default'),
+            'managed_keys_count' => $count,
+            'sample_keys' => array_slice($managedKeys, 0, min(5, $count)),
+            'configuration' => $this->config->get('smart-cache'),
+            'statistics' => $this->getStatistics(),
+            'health_check' => $this->healthCheck()
+        ];
+        
+        if ($force) {
+            // Add extended analysis
+            $missingKeys = [];
+            foreach ($managedKeys as $key) {
+                if (!$this->has($key)) {
+                    $missingKeys[] = $key;
+                }
+            }
+            
+            $result['analysis'] = [
+                'managed_keys_missing_from_cache' => $missingKeys,
+                'missing_keys_count' => count($missingKeys)
+            ];
+        }
+        
+        return $result;
+    }
+
+    /**
+     * Record performance metrics.
+     */
+    protected function recordPerformanceMetric(string $operation, string $key, ?float $startTime, array $metadata = []): void
+    {
+        if (!$this->enablePerformanceMonitoring || $startTime === null) {
+            return;
+        }
+        
+        $duration = microtime(true) - $startTime;
+        $timestamp = time();
+        
+        if (!isset($this->performanceMetrics[$operation])) {
+            $this->performanceMetrics[$operation] = [
+                'count' => 0,
+                'total_duration' => 0.0,
+                'average_duration' => 0.0,
+                'max_duration' => 0.0,
+                'min_duration' => PHP_FLOAT_MAX
+            ];
+        }
+        
+        $metrics = &$this->performanceMetrics[$operation];
+        $metrics['count']++;
+        $metrics['total_duration'] += $duration;
+        $metrics['average_duration'] = $metrics['total_duration'] / $metrics['count'];
+        $metrics['max_duration'] = max($metrics['max_duration'], $duration);
+        $metrics['min_duration'] = min($metrics['min_duration'], $duration);
+        
+        // Keep recent entries for trend analysis
+        if (!isset($metrics['recent'])) {
+            $metrics['recent'] = [];
+        }
+        
+        $metrics['recent'][] = [
+            'key' => $key,
+            'duration' => $duration,
+            'timestamp' => $timestamp,
+            'metadata' => $metadata
+        ];
+        
+        // Keep only last 100 entries per operation
+        if (count($metrics['recent']) > 100) {
+            $metrics['recent'] = array_slice($metrics['recent'], -100);
+        }
+        
+        // Persist metrics periodically
+        if ($metrics['count'] % 50 === 0) {
+            $this->persistPerformanceMetrics();
+        }
+    }
+
+    /**
+     * Calculate data size in bytes.
+     */
+    protected function calculateDataSize(mixed $data): int
+    {
+        return strlen(serialize($data));
+    }
+
+    /**
+     * Get performance metrics.
+     */
+    public function getPerformanceMetrics(): array
+    {
+        return [
+            'monitoring_enabled' => $this->enablePerformanceMonitoring,
+            'metrics' => $this->performanceMetrics,
+            'cache_efficiency' => $this->calculateCacheEfficiency(),
+            'optimization_impact' => $this->calculateOptimizationImpact()
+        ];
+    }
+
+    /**
+     * Calculate cache hit/miss ratio.
+     */
+    protected function calculateCacheEfficiency(): array
+    {
+        $hits = $this->performanceMetrics['cache_hit']['count'] ?? 0;
+        $misses = $this->performanceMetrics['cache_miss']['count'] ?? 0;
+        $total = $hits + $misses;
+        
+        return [
+            'hit_count' => $hits,
+            'miss_count' => $misses,
+            'total_requests' => $total,
+            'hit_ratio' => $total > 0 ? round(($hits / $total) * 100, 2) : 0,
+            'miss_ratio' => $total > 0 ? round(($misses / $total) * 100, 2) : 0
+        ];
+    }
+
+    /**
+     * Calculate optimization impact metrics.
+     */
+    protected function calculateOptimizationImpact(): array
+    {
+        $writes = $this->performanceMetrics['cache_write']['recent'] ?? [];
+        $totalOriginalSize = 0;
+        $totalOptimizedSize = 0;
+        $optimizationCount = 0;
+        
+        foreach ($writes as $write) {
+            if (isset($write['metadata']['original_size'], $write['metadata']['optimized_size'])) {
+                $originalSize = $write['metadata']['original_size'];
+                $optimizedSize = $write['metadata']['optimized_size'];
+                
+                $totalOriginalSize += $originalSize;
+                $totalOptimizedSize += $optimizedSize;
+                
+                if ($optimizedSize < $originalSize) {
+                    $optimizationCount++;
+                }
+            }
+        }
+        
+        return [
+            'total_writes' => count($writes),
+            'optimizations_applied' => $optimizationCount,
+            'optimization_ratio' => count($writes) > 0 ? round(($optimizationCount / count($writes)) * 100, 2) : 0,
+            'size_reduction_bytes' => max(0, $totalOriginalSize - $totalOptimizedSize),
+            'size_reduction_percentage' => $totalOriginalSize > 0 ? round((($totalOriginalSize - $totalOptimizedSize) / $totalOriginalSize) * 100, 2) : 0
+        ];
+    }
+
+    /**
+     * Load performance metrics from cache.
+     */
+    protected function loadPerformanceMetrics(): void
+    {
+        $this->performanceMetrics = $this->cache->get('_sc_performance_metrics', []);
+    }
+
+    /**
+     * Persist performance metrics to cache.
+     */
+    protected function persistPerformanceMetrics(): void
+    {
+        if ($this->enablePerformanceMonitoring) {
+            $this->cache->put('_sc_performance_metrics', $this->performanceMetrics, 3600); // 1 hour TTL
+        }
+    }
+
+    /**
+     * Reset performance metrics.
+     */
+    public function resetPerformanceMetrics(): void
+    {
+        $this->performanceMetrics = [];
+        $this->cache->forget('_sc_performance_metrics');
+    }
+
+    /**
+     * Analyze cache performance and provide recommendations.
+     */
+    public function analyzePerformance(): array
+    {
+        $metrics = $this->getPerformanceMetrics();
+        $recommendations = [];
+        $efficiency = $metrics['cache_efficiency'];
+        $optimization = $metrics['optimization_impact'];
+        
+        // Hit ratio recommendations
+        if ($efficiency['hit_ratio'] < 70) {
+            $recommendations[] = [
+                'type' => 'low_hit_ratio',
+                'severity' => 'warning',
+                'message' => 'Cache hit ratio is below 70%. Consider increasing TTL values or reviewing cache key strategies.',
+                'current_ratio' => $efficiency['hit_ratio']
+            ];
+        }
+        
+        // Optimization recommendations
+        if ($optimization['optimization_ratio'] < 20 && $optimization['total_writes'] > 10) {
+            $recommendations[] = [
+                'type' => 'low_optimization',
+                'severity' => 'info',
+                'message' => 'Few cache entries are being optimized. Consider adjusting compression/chunking thresholds.',
+                'current_ratio' => $optimization['optimization_ratio']
+            ];
+        }
+        
+        // Performance issues
+        $writes = $metrics['metrics']['cache_write'] ?? [];
+        if (isset($writes['average_duration']) && $writes['average_duration'] > 0.1) {
+            $recommendations[] = [
+                'type' => 'slow_writes',
+                'severity' => 'warning',
+                'message' => 'Cache write operations are taking longer than 100ms on average.',
+                'average_duration' => round($writes['average_duration'] * 1000, 2) . 'ms'
+            ];
+        }
+        
+        return [
+            'analysis_timestamp' => now()->toDateTimeString(),
+            'overall_health' => count($recommendations) === 0 ? 'good' : 'needs_attention',
+            'recommendations' => $recommendations,
+            'metrics_summary' => [
+                'cache_efficiency' => $efficiency,
+                'optimization_impact' => $optimization,
+                'total_operations' => array_sum(array_column($metrics['metrics'], 'count'))
+            ]
+        ];
     }
 
     /**
