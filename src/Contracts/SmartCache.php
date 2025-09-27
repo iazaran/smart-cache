@@ -89,6 +89,21 @@ interface SmartCache
     public function getManagedKeys(): array;
 
     /**
+     * Clean up expired keys from managed keys tracking.
+     *
+     * @return int Number of expired keys removed
+     */
+    public function cleanupExpiredManagedKeys(): int;
+
+    /**
+     * Check if a specific feature is available.
+     *
+     * @param string $feature The feature name to check
+     * @return bool
+     */
+    public function hasFeature(string $feature): bool;
+
+    /**
      * Tag cache entries for organized invalidation.
      *
      * @param string|array $tags

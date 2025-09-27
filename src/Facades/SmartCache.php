@@ -33,6 +33,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static array getPerformanceMetrics()
  * @method static void resetPerformanceMetrics()
  * @method static array analyzePerformance()
+ * @method static int cleanupExpiredManagedKeys()
+ * @method static bool hasFeature(string $feature)
  * 
  * @see \SmartCache\SmartCache
  */

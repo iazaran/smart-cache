@@ -256,6 +256,9 @@ class SmartCache implements SmartCacheContract
     {
         $success = true;
         
+        // Clean up expired keys first
+        $this->cleanupExpiredManagedKeys();
+        
         // Get all tracked keys
         $keys = $this->getManagedKeys();
         
@@ -403,6 +406,62 @@ class SmartCache implements SmartCacheContract
     public function getManagedKeys(): array
     {
         return $this->managedKeys;
+    }
+
+    /**
+     * Clean up expired keys from managed keys tracking.
+     *
+     * @return int Number of expired keys removed
+     */
+    public function cleanupExpiredManagedKeys(): int
+    {
+        $cleaned = 0;
+        $validKeys = [];
+        
+        foreach ($this->managedKeys as $key) {
+            if ($this->has($key)) {
+                $validKeys[] = $key;
+            } else {
+                $cleaned++;
+            }
+        }
+        
+        if ($cleaned > 0) {
+            $this->managedKeys = $validKeys;
+            $this->cache->forever('_sc_managed_keys', $this->managedKeys);
+        }
+        
+        return $cleaned;
+    }
+
+    /**
+     * Check if a specific feature is available.
+     *
+     * @param string $feature The feature name to check
+     * @return bool
+     */
+    public function hasFeature(string $feature): bool
+    {
+        $features = [
+            'tags' => method_exists($this, 'tags'),
+            'flushTags' => method_exists($this, 'flushTags'),
+            'dependsOn' => method_exists($this, 'dependsOn'),
+            'invalidate' => method_exists($this, 'invalidate'),
+            'flushPatterns' => method_exists($this, 'flushPatterns'),
+            'invalidateModel' => method_exists($this, 'invalidateModel'),
+            'swr' => method_exists($this, 'swr'),
+            'stale' => method_exists($this, 'stale'),
+            'refreshAhead' => method_exists($this, 'refreshAhead'),
+            'flexible' => method_exists($this, 'flexible'),
+            'getStatistics' => method_exists($this, 'getStatistics'),
+            'healthCheck' => method_exists($this, 'healthCheck'),
+            'getPerformanceMetrics' => method_exists($this, 'getPerformanceMetrics'),
+            'analyzePerformance' => method_exists($this, 'analyzePerformance'),
+            'getAvailableCommands' => method_exists($this, 'getAvailableCommands'),
+            'executeCommand' => method_exists($this, 'executeCommand'),
+        ];
+        
+        return $features[$feature] ?? false;
     }
 
     /**
@@ -882,13 +941,30 @@ class SmartCache implements SmartCacheContract
                 ];
             }
             
+            // Clean up expired keys first
+            $expiredCleaned = $this->cleanupExpiredManagedKeys();
+            $keys = $this->getManagedKeys();
+            $actualCount = count($keys);
+            
+            if ($actualCount === 0) {
+                return [
+                    'success' => true,
+                    'message' => "All {$count} managed keys were expired and have been cleaned up.",
+                    'cleared_count' => $count,
+                    'expired_cleaned' => $expiredCleaned,
+                    'total_managed_keys' => $count
+                ];
+            }
+            
             $success = $this->clear();
             
             return [
                 'success' => $success,
-                'message' => $success ? "Cleared {$count} SmartCache managed keys." : 'Some keys could not be cleared.',
-                'cleared_count' => $success ? $count : 0,
-                'total_managed_keys' => $count
+                'message' => $success ? "Cleared {$actualCount} SmartCache managed keys." : 'Some keys could not be cleared.',
+                'cleared_count' => $success ? $actualCount : 0,
+                'expired_cleaned' => $expiredCleaned,
+                'total_managed_keys' => $count,
+                'active_keys_cleared' => $actualCount
             ];
         }
     }
@@ -1091,34 +1167,42 @@ class SmartCache implements SmartCacheContract
         $efficiency = $metrics['cache_efficiency'];
         $optimization = $metrics['optimization_impact'];
         
+        // Get warning thresholds from config
+        $hitRatioThreshold = $this->config->get('smart-cache.warnings.hit_ratio_threshold', 70);
+        $optimizationThreshold = $this->config->get('smart-cache.warnings.optimization_ratio_threshold', 20);
+        $slowWriteThreshold = $this->config->get('smart-cache.warnings.slow_write_threshold', 0.1);
+        
         // Hit ratio recommendations
-        if ($efficiency['hit_ratio'] < 70) {
+        if ($efficiency['hit_ratio'] < $hitRatioThreshold) {
             $recommendations[] = [
                 'type' => 'low_hit_ratio',
                 'severity' => 'warning',
-                'message' => 'Cache hit ratio is below 70%. Consider increasing TTL values or reviewing cache key strategies.',
-                'current_ratio' => $efficiency['hit_ratio']
+                'message' => "Cache hit ratio is below {$hitRatioThreshold}%. Consider increasing TTL values or reviewing cache key strategies.",
+                'current_ratio' => $efficiency['hit_ratio'],
+                'threshold' => $hitRatioThreshold
             ];
         }
         
         // Optimization recommendations
-        if ($optimization['optimization_ratio'] < 20 && $optimization['total_writes'] > 10) {
+        if ($optimization['optimization_ratio'] < $optimizationThreshold && $optimization['total_writes'] > 10) {
             $recommendations[] = [
                 'type' => 'low_optimization',
                 'severity' => 'info',
-                'message' => 'Few cache entries are being optimized. Consider adjusting compression/chunking thresholds.',
-                'current_ratio' => $optimization['optimization_ratio']
+                'message' => "Few cache entries are being optimized. Consider adjusting compression/chunking thresholds.",
+                'current_ratio' => $optimization['optimization_ratio'],
+                'threshold' => $optimizationThreshold
             ];
         }
         
         // Performance issues
         $writes = $metrics['metrics']['cache_write'] ?? [];
-        if (isset($writes['average_duration']) && $writes['average_duration'] > 0.1) {
+        if (isset($writes['average_duration']) && $writes['average_duration'] > $slowWriteThreshold) {
             $recommendations[] = [
                 'type' => 'slow_writes',
                 'severity' => 'warning',
-                'message' => 'Cache write operations are taking longer than 100ms on average.',
-                'average_duration' => round($writes['average_duration'] * 1000, 2) . 'ms'
+                'message' => "Cache write operations are taking longer than " . round($slowWriteThreshold * 1000) . "ms on average.",
+                'average_duration' => round($writes['average_duration'] * 1000, 2) . 'ms',
+                'threshold' => round($slowWriteThreshold * 1000) . 'ms'
             ];
         }
         

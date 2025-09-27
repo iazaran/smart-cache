@@ -72,6 +72,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Performance Warnings
+    |--------------------------------------------------------------------------
+    |
+    | Configure thresholds for performance warnings and recommendations.
+    |
+    */
+    'warnings' => [
+        'hit_ratio_threshold' => 70, // Percentage below which to warn about low hit ratio
+        'optimization_ratio_threshold' => 20, // Percentage below which to warn about low optimization usage
+        'slow_write_threshold' => 0.1, // Seconds above which to warn about slow writes
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Drivers
     |--------------------------------------------------------------------------
     |
