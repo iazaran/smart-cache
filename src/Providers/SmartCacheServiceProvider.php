@@ -69,5 +69,21 @@ class SmartCacheServiceProvider extends ServiceProvider
                 StatusCommand::class,
             ]);
         }
+
+        // Register command metadata for HTTP context
+        $this->app->singleton('smart-cache.commands', function ($app) {
+            return [
+                'smart-cache:clear' => [
+                    'class' => ClearCommand::class,
+                    'description' => 'Clear SmartCache managed items',
+                    'signature' => 'smart-cache:clear {key? : The specific cache key to clear} {--force : Force clear keys even if not managed by SmartCache}'
+                ],
+                'smart-cache:status' => [
+                    'class' => StatusCommand::class,
+                    'description' => 'Display information about SmartCache usage and configuration',
+                    'signature' => 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}'
+                ]
+            ];
+        });
     }
 } 
