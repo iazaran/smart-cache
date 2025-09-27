@@ -47,6 +47,80 @@ composer test-coverage
 # Generates HTML coverage report in ./coverage/ directory
 ```
 
+### Test New Features
+```bash
+# Test Laravel 12 SWR methods
+vendor/bin/phpunit tests/Unit/Laravel12/Laravel12SWRTest.php
+
+# Test HTTP command execution
+vendor/bin/phpunit tests/Unit/Http/HttpCommandExecutionTest.php
+
+# Test performance monitoring
+vendor/bin/phpunit tests/Unit/Monitoring/PerformanceMonitoringTest.php
+
+# Test complete feature integration
+vendor/bin/phpunit tests/Feature/EnhancedSmartCacheControllerTest.php
+```
+
+## New Enhanced Features Testing
+
+SmartCache v1.5+ includes comprehensive testing for new enterprise features:
+
+### Laravel 12 SWR Methods Testing
+- **SWR (Stale-While-Revalidate)** pattern validation
+- **Stale serving** with extended TTL support
+- **Refresh-ahead** proactive caching
+- **Flexible caching** with custom duration arrays
+- **Cross-compatibility** between facade and helper methods
+- **Optimization integration** with SWR patterns
+
+### HTTP Command Execution Testing
+- **Command discovery** and metadata retrieval
+- **Programmatic execution** of cache commands
+- **Parameter handling** and validation
+- **Error handling** and graceful failures
+- **Security validation** for non-managed keys
+- **Facade integration** for HTTP commands
+
+### Performance Monitoring Testing
+- **Metrics collection** for hits, misses, and writes
+- **Cache efficiency** calculation and reporting
+- **Optimization impact** tracking and analysis
+- **Performance analysis** with automated recommendations
+- **Metrics persistence** across application instances
+- **Dashboard integration** capabilities
+
+### Integration Testing
+- **Real-world scenarios** like e-commerce platforms
+- **Multi-pattern usage** combining SWR methods
+- **Performance monitoring integration** with caching operations
+- **HTTP command execution** in application context
+- **Complete feature workflows** from cache to monitoring
+
+## Testing Best Practices
+
+When contributing to SmartCache, follow these testing guidelines:
+
+### Unit Tests
+- **Isolated functionality** - Test individual components
+- **Mock external dependencies** - Use Laravel's testing mocks
+- **Edge case coverage** - Test boundary conditions
+- **Error scenarios** - Ensure graceful failure handling
+
+### Feature Tests
+- **Real Laravel environment** - Use Orchestra Testbench
+- **Integration scenarios** - Test component interactions
+- **End-to-end workflows** - Validate complete user journeys
+- **Performance validation** - Ensure optimization benefits
+
+### Test Data Organization
+```bash
+# Generate test data of different sizes
+$smallData = range(1, 10);           # No optimization
+$mediumData = range(1, 1000);        # May trigger compression
+$largeData = range(1, 5000);         # Likely chunking + compression
+```
+
 ### Test with Different PHP Versions
 If you have multiple PHP versions installed:
 ```bash
@@ -57,23 +131,41 @@ php8.3 vendor/bin/phpunit
 
 ## Test Structure
 
+SmartCache maintains **comprehensive test coverage** with **252 tests** organized for maintainability:
+
 ```
 tests/
-├── bootstrap.php              # Test bootstrap (sets up environment)
-├── TestCase.php              # Base test class
-├── Unit/                     # Unit tests (isolated component testing)
-│   ├── SmartCacheTest.php    # Main SmartCache functionality
-│   ├── Console/              # Console command tests
+├── bootstrap.php                    # Test bootstrap (sets up environment)
+├── TestCase.php                    # Base test class with common utilities
+├── Unit/                           # Unit tests (isolated component testing)
+│   ├── SmartCacheTest.php          # Core SmartCache functionality
+│   ├── Console/                    # Console command tests
 │   │   ├── ClearCommandTest.php
 │   │   └── StatusCommandTest.php
-│   ├── Providers/            # Service provider tests
+│   ├── Http/                       # HTTP-related tests
+│   │   └── HttpCommandExecutionTest.php  # HTTP command execution
+│   ├── Laravel12/                  # Laravel 12+ features
+│   │   └── Laravel12SWRTest.php    # SWR methods (swr, stale, refreshAhead)
+│   ├── Monitoring/                 # Performance monitoring
+│   │   └── PerformanceMonitoringTest.php
+│   ├── Providers/                  # Service provider tests
 │   │   └── SmartCacheServiceProviderTest.php
-│   └── Strategies/           # Strategy tests
-│       ├── CompressionStrategyTest.php
-│       └── ChunkingStrategyTest.php
-├── Feature/                  # Integration tests
-│   └── SmartCacheIntegrationTest.php
-└── Fixtures/                 # Test fixtures and data
+│   ├── Services/                   # Service tests
+│   │   └── CacheInvalidationServiceTest.php
+│   ├── Strategies/                 # Strategy tests
+│   │   ├── CompressionStrategyTest.php
+│   │   └── ChunkingStrategyTest.php
+│   ├── Traits/                     # Trait tests
+│   │   └── ModelIntegrationTest.php
+│   ├── DependencyTrackingTest.php
+│   ├── PatternBasedInvalidationTest.php
+│   ├── StrategyOrderingTest.php
+│   └── TagBasedInvalidationTest.php
+├── Feature/                        # Integration tests
+│   ├── SmartCacheIntegrationTest.php
+│   ├── AdvancedInvalidationIntegrationTest.php
+│   └── EnhancedSmartCacheControllerTest.php  # Full feature integration
+└── Fixtures/                       # Test fixtures and data
 ```
 
 ## Test Categories
