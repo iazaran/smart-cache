@@ -154,7 +154,7 @@ class CacheInvalidationService
 
         // Analyze optimization usage
         foreach ($managedKeys as $key) {
-            $value = Cache::get($key);
+            $value = $this->smartCache->get($key);
             if (is_array($value)) {
                 if (isset($value['_sc_compressed'])) {
                     $stats['optimization_stats']['compressed']++;
@@ -182,19 +182,23 @@ class CacheInvalidationService
             'orphaned_chunks_cleaned' => 0,
             'broken_dependencies_fixed' => 0,
             'invalid_tags_removed' => 0,
+            'expired_keys_cleaned' => 0,
             'total_keys_checked' => 0,
         ];
 
         $managedKeys = $this->smartCache->getManagedKeys();
         $results['total_keys_checked'] = count($managedKeys);
 
+        // Clean up expired managed keys first
+        $results['expired_keys_cleaned'] = $this->smartCache->cleanupExpiredManagedKeys();
+
         // Check for orphaned chunks
         foreach ($managedKeys as $key) {
-            $value = Cache::get($key);
+            $value = $this->smartCache->get($key);
             if (is_array($value) && isset($value['_sc_chunked'])) {
                 $missingChunks = 0;
                 foreach ($value['chunk_keys'] as $chunkKey) {
-                    if (!Cache::has($chunkKey)) {
+                    if (!$this->smartCache->has($chunkKey)) {
                         $missingChunks++;
                     }
                 }

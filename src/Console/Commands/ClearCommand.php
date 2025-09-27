@@ -100,6 +100,23 @@ class ClearCommand extends Command
         
         $this->info("Clearing {$count} SmartCache managed items...");
         
+        // Clean up expired keys first and report
+        $expiredCleaned = $cache->cleanupExpiredManagedKeys();
+        if ($expiredCleaned > 0) {
+            $this->info("Cleaned up {$expiredCleaned} expired keys from tracking list.");
+        }
+        
+        // Get updated key count after cleanup
+        $keys = $cache->getManagedKeys();
+        $actualCount = count($keys);
+        
+        if ($actualCount === 0) {
+            $this->info('All managed keys were expired and have been cleaned up.');
+            return 0;
+        }
+        
+        $this->info("Clearing {$actualCount} active SmartCache managed items...");
+        
         $success = $cache->clear();
         
         if ($success) {
@@ -113,6 +130,7 @@ class ClearCommand extends Command
             return 0;
         } else {
             $this->error('Some SmartCache items could not be cleared.');
+            $this->comment('This may be due to cache driver limitations or permission issues.');
             return 1;
         }
     }
