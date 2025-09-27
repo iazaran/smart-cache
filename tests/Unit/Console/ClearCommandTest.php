@@ -97,8 +97,12 @@ class ClearCommandTest extends TestCase
         
         // Setup mock expectations
         $this->mockSmartCache->shouldReceive('getManagedKeys')
-            ->once()
+            ->twice() // Once for initial count, once after cleanup
             ->andReturn($managedKeys);
+        
+        $this->mockSmartCache->shouldReceive('cleanupExpiredManagedKeys')
+            ->once()
+            ->andReturn(0);
         
         $this->mockSmartCache->shouldReceive('clear')
             ->once()
@@ -126,8 +130,12 @@ class ClearCommandTest extends TestCase
         
         // Setup mock expectations
         $this->mockSmartCache->shouldReceive('getManagedKeys')
-            ->once()
+            ->twice() // Once for initial count, once after cleanup
             ->andReturn($managedKeys);
+        
+        $this->mockSmartCache->shouldReceive('cleanupExpiredManagedKeys')
+            ->once()
+            ->andReturn(0);
         
         $this->mockSmartCache->shouldReceive('clear')
             ->once()
@@ -155,8 +163,12 @@ class ClearCommandTest extends TestCase
         
         // Setup mock expectations
         $this->mockSmartCache->shouldReceive('getManagedKeys')
-            ->once()
+            ->twice() // Once for initial count, once after cleanup
             ->andReturn($managedKeys);
+        
+        $this->mockSmartCache->shouldReceive('cleanupExpiredManagedKeys')
+            ->once()
+            ->andReturn(0);
         
         $this->mockSmartCache->shouldReceive('clear')
             ->once()
