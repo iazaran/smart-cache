@@ -8,6 +8,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
+use SmartCache\Services\CacheInvalidationService;
 
 class SmartCache implements SmartCacheContract
 {
@@ -42,6 +43,21 @@ class SmartCache implements SmartCacheContract
     protected array $managedKeys = [];
 
     /**
+     * @var array
+     */
+    protected array $activeTags = [];
+
+    /**
+     * @var array
+     */
+    protected array $dependencies = [];
+
+    /**
+     * @var CacheInvalidationService|null
+     */
+    protected ?CacheInvalidationService $invalidationService = null;
+
+    /**
      * SmartCache constructor.
      *
      * @param Repository $cache
@@ -63,8 +79,9 @@ class SmartCache implements SmartCacheContract
         $store = $cache->getStore();
         $this->driver = $this->determineCacheDriver($store);
         
-        // Load tracked keys
+        // Load tracked keys and dependencies
         $this->loadManagedKeys();
+        $this->loadDependencies();
     }
 
     /**
@@ -100,9 +117,12 @@ class SmartCache implements SmartCacheContract
     {
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $ttl);
         
-        // Track the key if it was optimized
-        if ($value !== $optimizedValue) {
-            $this->trackKey($key);
+        // Track all keys for pattern matching and invalidation
+        $this->trackKey($key);
+
+        // Handle active tags
+        if (!empty($this->activeTags)) {
+            $this->associateTagsWithKey($key, $this->activeTags);
         }
         
         return $this->cache->put($key, $optimizedValue, $ttl);
@@ -147,9 +167,12 @@ class SmartCache implements SmartCacheContract
     {
         $optimizedValue = $this->maybeOptimizeValue($value, $key, null);
         
-        // Track the key if it was optimized
-        if ($value !== $optimizedValue) {
-            $this->trackKey($key);
+        // Track all keys for pattern matching and invalidation
+        $this->trackKey($key);
+
+        // Handle active tags
+        if (!empty($this->activeTags)) {
+            $this->associateTagsWithKey($key, $this->activeTags);
         }
         
         return $this->cache->forever($key, $optimizedValue);
@@ -429,10 +452,8 @@ class SmartCache implements SmartCacheContract
         // Optimize the value
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $totalTtl);
         
-        // Track the key if it was optimized
-        if ($value !== $optimizedValue) {
-            $this->trackKey($key);
-        }
+        // Track all keys for pattern matching and invalidation
+        $this->trackKey($key);
         
         // Store data and metadata
         $metaKey = $key . '_sc_meta';
@@ -457,6 +478,224 @@ class SmartCache implements SmartCacheContract
                 Log::warning("SmartCache background refresh failed for {$key}: " . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function tags(string|array $tags): static
+    {
+        $this->activeTags = is_array($tags) ? $tags : [$tags];
+        return $this;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function flushTags(string|array $tags): bool
+    {
+        $tags = is_array($tags) ? $tags : [$tags];
+
+        foreach ($tags as $tag) {
+            $tagKeys = $this->getKeysForTag($tag);
+            foreach ($tagKeys as $key) {
+                // Use forget method which handles both regular and optimized cache cleanup
+                // We don't care about the return value - if key doesn't exist, that's fine
+                $this->forget($key);
+            }
+            // Clean up the tag itself
+            $this->cache->forget("_sc_tag_{$tag}");
+        }
+
+        return true; // Always return true since we handle missing keys gracefully
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function dependsOn(string $key, string|array $dependencies): static
+    {
+        $dependencies = is_array($dependencies) ? $dependencies : [$dependencies];
+        
+        if (!isset($this->dependencies[$key])) {
+            $this->dependencies[$key] = [];
+        }
+        
+        $this->dependencies[$key] = array_unique(array_merge($this->dependencies[$key], $dependencies));
+        $this->saveDependencies();
+        
+        return $this;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function invalidate(string $key): bool
+    {
+        return $this->invalidateWithVisited($key, []);
+    }
+
+    /**
+     * Invalidate with circular dependency detection.
+     */
+    protected function invalidateWithVisited(string $key, array $visited): bool
+    {
+        // Prevent circular dependency loops
+        if (in_array($key, $visited)) {
+            return true;
+        }
+        
+        $visited[] = $key;
+        $success = true;
+        
+        // Find all keys that depend on this key
+        $dependentKeys = $this->getDependentKeys($key);
+        
+        // Invalidate dependent keys first
+        foreach ($dependentKeys as $dependentKey) {
+            $success = $this->invalidateWithVisited($dependentKey, $visited) && $success;
+        }
+        
+        // Invalidate the key itself (don't let missing keys affect success)
+        $this->forget($key);
+        
+        // Remove from dependencies
+        unset($this->dependencies[$key]);
+        $this->saveDependencies();
+        
+        return $success;
+    }
+
+    /**
+     * Associate tags with a cache key.
+     *
+     * @param string $key
+     * @param array $tags
+     * @return void
+     */
+    protected function associateTagsWithKey(string $key, array $tags): void
+    {
+        foreach ($tags as $tag) {
+            $tagKey = "_sc_tag_{$tag}";
+            $taggedKeys = $this->cache->get($tagKey, []);
+            
+            if (!in_array($key, $taggedKeys)) {
+                $taggedKeys[] = $key;
+                $this->cache->forever($tagKey, $taggedKeys);
+            }
+        }
+        
+        // Clear active tags after use
+        $this->activeTags = [];
+    }
+
+    /**
+     * Get all keys associated with a tag.
+     *
+     * @param string $tag
+     * @return array
+     */
+    protected function getKeysForTag(string $tag): array
+    {
+        $tagKey = "_sc_tag_{$tag}";
+        return $this->cache->get($tagKey, []);
+    }
+
+    /**
+     * Get all keys that depend on the given key.
+     *
+     * @param string $key
+     * @return array
+     */
+    protected function getDependentKeys(string $key): array
+    {
+        $dependentKeys = [];
+        
+        foreach ($this->dependencies as $dependentKey => $deps) {
+            if (in_array($key, $deps)) {
+                $dependentKeys[] = $dependentKey;
+            }
+        }
+        
+        return $dependentKeys;
+    }
+
+    /**
+     * Load dependencies from cache.
+     *
+     * @return void
+     */
+    protected function loadDependencies(): void
+    {
+        $this->dependencies = $this->cache->get('_sc_dependencies', []);
+    }
+
+    /**
+     * Save dependencies to cache.
+     *
+     * @return void
+     */
+    protected function saveDependencies(): void
+    {
+        $this->cache->forever('_sc_dependencies', $this->dependencies);
+    }
+
+    /**
+     * Get the cache invalidation service.
+     *
+     * @return CacheInvalidationService
+     */
+    public function invalidationService(): CacheInvalidationService
+    {
+        if ($this->invalidationService === null) {
+            $this->invalidationService = new CacheInvalidationService($this);
+        }
+        
+        return $this->invalidationService;
+    }
+
+    /**
+     * Flush cache by patterns.
+     *
+     * @param array $patterns
+     * @return int Number of keys invalidated
+     */
+    public function flushPatterns(array $patterns): int
+    {
+        return $this->invalidationService()->flushPatterns($patterns);
+    }
+
+    /**
+     * Invalidate model-related cache.
+     *
+     * @param string $modelClass
+     * @param mixed $modelId
+     * @param array $relationships
+     * @return int Number of keys invalidated
+     */
+    public function invalidateModel(string $modelClass, mixed $modelId, array $relationships = []): int
+    {
+        return $this->invalidationService()->invalidateModelRelations($modelClass, $modelId, $relationships);
+    }
+
+    /**
+     * Get cache statistics.
+     *
+     * @return array
+     */
+    public function getStatistics(): array
+    {
+        return $this->invalidationService()->getCacheStatistics();
+    }
+
+    /**
+     * Perform health check and cleanup.
+     *
+     * @return array
+     */
+    public function healthCheck(): array
+    {
+        return $this->invalidationService()->healthCheckAndCleanup();
     }
 
     /**

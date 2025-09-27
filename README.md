@@ -20,6 +20,10 @@ Perfect for **Laravel developers** looking to optimize **cache performance**, re
 - 🔄 **Laravel-style helper function** support
 - 🎯 **Redis and file cache driver** optimization
 - 📊 **Performance monitoring** and cache statistics
+- 🔗 **Dependency tracking** - Cascade invalidation with cache hierarchies
+- 🎯 **Pattern-based invalidation** - Advanced wildcard and regex pattern matching
+- 🏷️ **Tag-based cache management** - Group and flush related cache entries
+- 🔄 **Model-based auto-invalidation** - Automatic cache clearing on Eloquent model changes
 
 ## 📦 Installation
 
@@ -84,6 +88,63 @@ public function __construct(\SmartCache\Contracts\SmartCache $cache)
 {
     $this->cache = $cache;
 }
+```
+
+## 🚀 Advanced Cache Invalidation
+
+SmartCache provides powerful **cache invalidation features** for complex applications:
+
+### 🔗 Dependency Tracking & Cascade Invalidation
+
+Create cache hierarchies where invalidating a parent automatically clears all dependent children:
+
+```php
+// Create dependencies
+SmartCache::dependsOn('user_posts', 'user_data');
+SmartCache::dependsOn('user_stats', 'user_data');
+
+// When user_data is invalidated, user_posts and user_stats are automatically cleared
+SmartCache::invalidate('user_data');
+```
+
+### 🎯 Pattern-Based Invalidation
+
+Clear multiple cache keys using **wildcards and regex patterns**:
+
+```php
+// Wildcard patterns
+SmartCache::flushPattern('user_*');          // Clear all user-related keys
+SmartCache::flushPattern('api_response_*');  // Clear all API cache
+
+// Regex patterns (advanced)
+SmartCache::flushPattern('/user_\d+_profile/'); // Clear user profiles with numeric IDs
+```
+
+### 🏷️ Model-Based Auto-Invalidation
+
+Automatically clear cache when **Eloquent models change**:
+
+```php
+use SmartCache\Traits\CacheInvalidation;
+
+class User extends Model
+{
+    use CacheInvalidation;
+    
+    public function getCacheKeysToInvalidate(): array
+    {
+        return [
+            "user_{$this->id}_profile",
+            "user_{$this->id}_stats",
+            'users_list_*'
+        ];
+    }
+}
+
+// Cache automatically clears when user is updated/deleted
+$user = User::find(123);
+$user->name = 'New Name';
+$user->save(); // Related cache keys automatically invalidated!
 ```
 
 ## 🔧 Optimization Strategies
@@ -245,8 +306,10 @@ php artisan smart-cache:clear --force
 
 - **Large API response caching** - Optimize storage of external API data
 - **Database query result caching** - Cache complex query results efficiently
+- **Model-based cache invalidation** - Automatic cache clearing for Eloquent models
+- **Complex cache hierarchies** - Dependency tracking and cascade invalidation
+- **Pattern-based cache management** - Bulk cache operations with wildcards/regex
 - **Session data optimization** - Reduce session storage requirements
-- **File-based cache optimization** - Improve file cache performance
 - **Redis memory optimization** - Reduce Redis memory usage
 - **High-traffic applications** - Improve performance under load
 
@@ -289,4 +352,4 @@ Laravel SmartCache is open-sourced software licensed under the [MIT license](LIC
 
 Built with ❤️ for developers who care about **Laravel performance optimization** and **efficient caching strategies**.
 
-**Keywords**: Laravel caching, PHP cache optimization, Redis optimization, cache compression, Laravel performance, data chunking, cache management, Laravel package
+**Keywords**: Laravel caching, PHP cache optimization, Redis optimization, cache compression, Laravel performance, data chunking, cache management, Laravel package, cache invalidation, model observers, dependency tracking
