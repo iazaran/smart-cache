@@ -254,4 +254,56 @@ interface SmartCache
      * @return array
      */
     public function analyzePerformance(): array;
-} 
+
+    /**
+     * Get a lock instance.
+     *
+     * @param string $name
+     * @param int $seconds
+     * @param string|null $owner
+     * @return \Illuminate\Contracts\Cache\Lock
+     */
+    public function lock(string $name, int $seconds = 0, ?string $owner = null): \Illuminate\Contracts\Cache\Lock;
+
+    /**
+     * Restore a lock instance using the owner identifier.
+     *
+     * @param string $name
+     * @param string $owner
+     * @return \Illuminate\Contracts\Cache\Lock
+     */
+    public function restoreLock(string $name, string $owner): \Illuminate\Contracts\Cache\Lock;
+
+    /**
+     * Retrieve multiple items from the cache by key.
+     *
+     * @param array $keys
+     * @return array
+     */
+    public function many(array $keys): array;
+
+    /**
+     * Store multiple items in the cache for a given number of seconds.
+     *
+     * @param array $values
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @return bool
+     */
+    public function putMany(array $values, $ttl = null): bool;
+
+    /**
+     * Remove multiple items from the cache.
+     *
+     * @param array $keys
+     * @return bool
+     */
+    public function deleteMultiple(array $keys): bool;
+
+    /**
+     * Get a memoized cache instance.
+     *
+     * @param string|null $store
+     * @return static
+     */
+    public function memo(?string $store = null): static;
+}
