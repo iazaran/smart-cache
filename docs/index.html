@@ -500,14 +500,14 @@
                 <!-- Getting Started Tab -->
                 <div id="getting-started" class="tab-container active">
                     <h1>🚀 Getting Started with Laravel SmartCache</h1>
-                    
+
                     <div class="alert alert-info">
-                        <strong>Welcome!</strong> SmartCache is a powerful Laravel caching package that enhances your application's performance with intelligent compression, smart chunking, and automatic optimization.
+                        <strong>Welcome!</strong> SmartCache optimizes Laravel caching for <strong>large datasets</strong> through intelligent compression (up to 70% size reduction), smart chunking, and automatic optimization.
                     </div>
 
                     <h2>What is SmartCache?</h2>
-                    <p>Laravel SmartCache is a drop-in replacement for Laravel's built-in Cache facade that adds:</p>
-                    
+                    <p>Laravel SmartCache is a drop-in replacement for Laravel's built-in Cache facade that optimizes caching for large data:</p>
+
                     <div class="feature-grid">
                         <div class="feature-card">
                             <h4>📦 Intelligent Compression</h4>
@@ -518,12 +518,28 @@
                             <p>Breaks large arrays/objects into manageable pieces for better performance.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>🔄 Zero Breaking Changes</h4>
-                            <p>Use exactly like Laravel's Cache facade with automatic optimizations behind the scenes.</p>
+                            <h4>🔒 Atomic Locks</h4>
+                            <p>Prevent cache stampede and race conditions with distributed locking.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>⚡ Automatic Optimization</h4>
-                            <p>No configuration needed, works out-of-the-box with intelligent strategy selection.</p>
+                            <h4>⚡ Cache Memoization</h4>
+                            <p>10-100x faster repeated access within same request/job.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🎯 Adaptive Compression</h4>
+                            <p>Auto-optimize compression levels based on data characteristics.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>💾 Lazy Loading</h4>
+                            <p>30-50% memory savings for large datasets with on-demand chunk loading.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>📡 Cache Events</h4>
+                            <p>Monitor and react to cache operations in real-time.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🔄 Zero Breaking Changes</h4>
+                            <p>Use exactly like Laravel's Cache facade with automatic optimizations.</p>
                         </div>
                     </div>
 
@@ -564,9 +580,13 @@ $users = SmartCache::get('users');</code></pre>
                     <h2>Requirements</h2>
                     <ul>
                         <li>PHP 8.1 or higher</li>
-                        <li>Laravel 8.0 or higher (including Laravel 12+)</li>
+                        <li>Laravel 8.0 - 12.x (fully tested on Laravel 8, 9, 10, 11, and 12)</li>
                         <li>Any Laravel-supported cache driver (Redis, File, Database, Array, Memcached)</li>
                     </ul>
+
+                    <div class="alert alert-success">
+                        <strong>✅ Full Laravel Support:</strong> All features work on Laravel 8-12. No version-specific limitations!
+                    </div>
 
                     <h2>Installation Steps</h2>
                     
@@ -842,6 +862,59 @@ SmartCache::put('all_users', $users, 3600);
                         </tbody>
                     </table>
 
+                    <h2>🎯 Adaptive Compression (New!)</h2>
+                    <p>Auto-optimize compression levels based on data characteristics:</p>
+
+                    <pre><code class="language-php">// Enable adaptive compression
+config(['smart-cache.strategies.compression.mode' => 'adaptive']);
+
+// Automatically selects optimal compression level:
+// - Hot data (frequently accessed) = level 3-4 (faster)
+// - Cold data (rarely accessed) = level 7-9 (smaller)
+// - Based on compressibility analysis
+
+SmartCache::put('hot_data', $frequentlyAccessed, 3600);
+SmartCache::put('cold_data', $rarelyAccessed, 3600);</code></pre>
+
+                    <h2>💾 Lazy Loading (New!)</h2>
+                    <p>Load large datasets on-demand to save memory (30-50% savings):</p>
+
+                    <pre><code class="language-php">// Enable lazy loading
+config(['smart-cache.strategies.chunking.lazy_loading' => true]);
+
+// Returns LazyChunkedCollection - loads chunks on-demand
+$largeDataset = SmartCache::get('100k_records');
+
+foreach ($largeDataset as $record) {
+    processRecord($record);
+    // Only 3 chunks in memory at once
+}</code></pre>
+
+                    <h2>🧠 Smart Serialization (New!)</h2>
+                    <p>Auto-select best serialization method:</p>
+
+                    <pre><code class="language-php">// Automatically chooses:
+// - JSON for simple arrays (fastest)
+// - igbinary for complex data (if available)
+// - PHP serialize as fallback
+
+SmartCache::put('data', $value, 3600);
+// Best method selected automatically</code></pre>
+
+                    <h2>📏 Smart Chunk Sizing (New!)</h2>
+                    <p>Auto-calculate optimal chunk sizes based on cache driver:</p>
+
+                    <pre><code class="language-php">// Enable smart chunk sizing
+config(['smart-cache.strategies.chunking.smart_sizing' => true]);
+
+// Automatically calculates optimal chunk size based on:
+// - Cache driver limits (Redis: 512MB, Memcached: 1MB)
+// - Data structure complexity
+// - Serialization overhead
+
+SmartCache::put('large_array', $data, 3600);
+// Optimal chunk size calculated automatically</code></pre>
+
                     <h2>Configuration Options</h2>
                     <pre><code class="language-php">// config/smart-cache.php
 return [
@@ -849,18 +922,25 @@ return [
         'compression' => 1024 * 50, // 50KB
         'chunking' => 1024 * 100,   // 100KB
     ],
-    
+
     'strategies' => [
         'compression' => [
             'enabled' => true,
-            'level' => 6, // gzip compression level (1-9)
+            'mode' => 'fixed',       // 'fixed' or 'adaptive'
+            'level' => 6,            // 1-9 (higher = better compression)
         ],
         'chunking' => [
             'enabled' => true,
-            'chunk_size' => 1000, // Items per chunk
+            'chunk_size' => 1000,    // Items per chunk
+            'lazy_loading' => false, // Enable for memory savings
+            'smart_sizing' => false, // Auto-calculate chunk size
         ],
     ],
-    
+
+    'events' => [
+        'enabled' => false,          // Enable for monitoring
+    ],
+
     'monitoring' => [
         'enabled' => true,
         'metrics_ttl' => 3600,
@@ -1038,9 +1118,156 @@ php artisan smart-cache:clear --force</code></pre>
                 <!-- Advanced Tab -->
                 <div id="advanced" class="tab-container">
                     <h1>🔧 Advanced Features</h1>
-                    
+
+                    <div class="alert alert-info">
+                        <strong>New Features!</strong> SmartCache now includes powerful features for production environments: Atomic Locks, Cache Memoization, Events, Adaptive Compression, Lazy Loading, and more!
+                    </div>
+
+                    <h2>🔒 Atomic Locks - Prevent Cache Stampede</h2>
+                    <p>Prevent multiple processes from regenerating expensive cache simultaneously (prevents race conditions):</p>
+
+                    <pre><code class="language-php">// Prevent cache stampede with distributed locks
+$lock = SmartCache::lock('expensive_operation', 10);
+
+if ($lock->get()) {
+    // Only one process executes this
+    $data = expensiveApiCall();
+    SmartCache::put('api_data', $data, 3600);
+    $lock->release();
+}
+
+// Or use callback pattern for automatic release
+SmartCache::lock('regenerate_cache', 30)->get(function() {
+    return regenerateExpensiveData();
+});</code></pre>
+
+                    <div class="alert alert-success">
+                        <strong>Benefit:</strong> Prevents cache stampede, reduces server load, ensures only one process regenerates expensive data.
+                    </div>
+
+                    <h2>⚡ Cache Memoization - 10-100x Faster</h2>
+                    <p>Cache data in memory for the current request/job (in-memory caching):</p>
+
+                    <pre><code class="language-php">// Get memoized cache instance
+$memo = SmartCache::memo();
+
+// First call hits cache, subsequent calls are instant (from memory)
+$users = $memo->remember('users', 3600, fn() => User::all());
+$users = $memo->get('users'); // Instant! No cache hit
+$users = $memo->get('users'); // Still instant!
+
+// Perfect for loops and repeated access
+foreach ($products as $product) {
+    $category = $memo->get("category_{$product->category_id}");
+    // First access hits cache, subsequent accesses are instant
+}
+
+// Get memoization statistics
+$stats = $memo->getMemoizationStats();
+// Returns: memoized_count, missing_count, total_memory</code></pre>
+
+                    <div class="alert alert-success">
+                        <strong>Benefit:</strong> 10-100x faster repeated access within same request/job. Perfect for loops and repeated data access.
+                    </div>
+
+                    <h2>📡 Cache Events - Monitor Everything</h2>
+                    <p>Monitor and react to cache operations in real-time:</p>
+
+                    <pre><code class="language-php">// Enable events in config
+config(['smart-cache.events.enabled' => true]);
+
+// Listen to cache operations
+use SmartCache\Events\{CacheHit, CacheMissed, KeyWritten, KeyForgotten, OptimizationApplied};
+
+Event::listen(CacheHit::class, function ($event) {
+    Log::info("Cache hit: {$event->key}", ['tags' => $event->tags]);
+});
+
+Event::listen(CacheMissed::class, function ($event) {
+    Log::warning("Cache miss: {$event->key}");
+});
+
+Event::listen(OptimizationApplied::class, function ($event) {
+    Log::info("Optimized {$event->key}: {$event->strategy} - {$event->ratio}% reduction");
+});</code></pre>
+
+                    <div class="alert alert-warning">
+                        <strong>Note:</strong> Events are disabled by default for performance. Enable only when you need monitoring.
+                    </div>
+
+                    <h2>🔢 Batch Operations</h2>
+                    <p>Optimize multiple cache operations:</p>
+
+                    <pre><code class="language-php">// Retrieve multiple keys at once
+$values = SmartCache::many(['key1', 'key2', 'key3']);
+
+// Store multiple keys at once
+SmartCache::putMany([
+    'key1' => 'value1',
+    'key2' => 'value2',
+    'key3' => 'value3',
+], 3600);
+
+// Delete multiple keys at once
+SmartCache::deleteMultiple(['key1', 'key2', 'key3']);</code></pre>
+
+                    <h2>🎯 Adaptive Compression</h2>
+                    <p>Auto-optimize compression levels based on data characteristics:</p>
+
+                    <pre><code class="language-php">// Enable adaptive compression in config
+config(['smart-cache.strategies.compression.mode' => 'adaptive']);
+
+// Automatically selects optimal compression level based on:
+// - Data compressibility (sample-based analysis)
+// - Access frequency (hot data = faster compression)
+// - Data size (larger data = higher compression)
+
+SmartCache::put('hot_data', $frequentlyAccessed, 3600);  // Uses level 3-4 (faster)
+SmartCache::put('cold_data', $rarelyAccessed, 3600);     // Uses level 7-9 (smaller)
+
+// Get compression statistics
+$stats = SmartCache::getCompressionStats($optimizedValue);
+// Returns: level, original_size, compressed_size, ratio, savings_bytes, savings_percent</code></pre>
+
+                    <h2>💾 Lazy Loading - Save Memory</h2>
+                    <p>Load large datasets on-demand to save memory (30-50% memory savings):</p>
+
+                    <pre><code class="language-php">// Enable lazy loading in config
+config(['smart-cache.strategies.chunking.lazy_loading' => true]);
+
+// Large datasets return LazyChunkedCollection
+$largeDataset = SmartCache::get('100k_records');
+
+// Chunks loaded on-demand (max 3 in memory at once)
+foreach ($largeDataset as $record) {
+    processRecord($record);
+    // Only loads chunks as needed
+}
+
+// Access specific items
+$item = $largeDataset[50000]; // Only loads the chunk containing this item
+
+// Collection methods work too
+$filtered = $largeDataset->filter(fn($item) => $item->active);
+$mapped = $largeDataset->map(fn($item) => $item->name);</code></pre>
+
+                    <h2>🧠 Smart Serialization</h2>
+                    <p>Auto-select best serialization method for optimal performance:</p>
+
+                    <pre><code class="language-php">// Automatically chooses best method:
+// - JSON for simple arrays (fastest, most compact)
+// - igbinary for complex data (if available)
+// - PHP serialize as fallback
+
+SmartCache::put('simple_data', ['key' => 'value'], 3600);  // Uses JSON
+SmartCache::put('complex_data', $objectGraph, 3600);       // Uses igbinary/PHP
+
+// Get serialization statistics
+$stats = SmartCache::getSerializationStats($optimizedValue);
+// Returns: method, original_size, serialized_size, ratio</code></pre>
+
                     <h2>Smart Cache Invalidation</h2>
-                    
+
                     <h3>Dependency Tracking</h3>
                     <p>Create cache hierarchies where invalidating a parent clears all children:</p>
 
@@ -1465,6 +1692,140 @@ Returns:
                             <strong>Example:</strong>
                             <pre><code class="language-php">$status = SmartCache::executeCommand('status');
 $result = SmartCache::executeCommand('clear', ['key' => 'specific_key']);</code></pre>
+                        </div>
+                    </div>
+
+                    <h2 id="new-features-api">🆕 New Features</h2>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::lock() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::lock(string $name, int $seconds = 0, string|null $owner = null): \Illuminate\Contracts\Cache\Lock</div>
+                        <p>Get a lock instance to prevent cache stampede and race conditions.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$name</span> <span class="parameter-type">(string)</span> - Lock name
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$seconds</span> <span class="parameter-type">(int)</span> - Lock timeout in seconds
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$owner</span> <span class="parameter-type">(string|null)</span> - Lock owner identifier
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> Lock - Lock instance
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$lock = SmartCache::lock('expensive_operation', 10);
+if ($lock->get()) {
+    $data = expensiveApiCall();
+    SmartCache::put('api_data', $data, 3600);
+    $lock->release();
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::memo() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::memo(): \SmartCache\Drivers\MemoizedCacheDriver</div>
+                        <p>Get a memoized cache instance for 10-100x faster repeated access.</p>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> MemoizedCacheDriver - Memoized cache instance
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$memo = SmartCache::memo();
+$users = $memo->remember('users', 3600, fn() => User::all());
+$users = $memo->get('users'); // Instant! (from memory)</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::many() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::many(array $keys): array</div>
+                        <p>Retrieve multiple cache keys at once.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$keys</span> <span class="parameter-type">(array)</span> - Array of cache keys
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> array - Associative array of key => value pairs
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$values = SmartCache::many(['key1', 'key2', 'key3']);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::putMany() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::putMany(array $values, DateTimeInterface|DateInterval|int|null $ttl = null): bool</div>
+                        <p>Store multiple cache keys at once.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$values</span> <span class="parameter-type">(array)</span> - Associative array of key => value pairs
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$ttl</span> <span class="parameter-type">(int|null)</span> - Time to live in seconds
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> bool - True on success
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">SmartCache::putMany([
+    'key1' => 'value1',
+    'key2' => 'value2',
+], 3600);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::deleteMultiple() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::deleteMultiple(array $keys): bool</div>
+                        <p>Delete multiple cache keys at once.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$keys</span> <span class="parameter-type">(array)</span> - Array of cache keys
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> bool - True on success
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">SmartCache::deleteMultiple(['key1', 'key2', 'key3']);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::getCompressionStats() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::getCompressionStats(mixed $optimizedValue): array</div>
+                        <p>Get compression statistics for optimized data.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$optimizedValue</span> <span class="parameter-type">(mixed)</span> - Optimized value from cache
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> array - Compression stats (level, sizes, ratio, savings)
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$optimized = SmartCache::optimize($data);
+$stats = SmartCache::getCompressionStats($optimized);
+// Returns: level, original_size, compressed_size, ratio, savings_bytes, savings_percent</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::getSerializationStats() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::getSerializationStats(mixed $optimizedValue): array</div>
+                        <p>Get serialization statistics for optimized data.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$optimizedValue</span> <span class="parameter-type">(mixed)</span> - Optimized value from cache
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> array - Serialization stats (method, sizes, ratio)
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$optimized = SmartCache::optimize($data);
+$stats = SmartCache::getSerializationStats($optimized);
+// Returns: method, original_size, serialized_size, ratio</code></pre>
                         </div>
                     </div>
 
