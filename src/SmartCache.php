@@ -9,9 +9,12 @@ use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
 use SmartCache\Services\CacheInvalidationService;
+use SmartCache\Traits\HasLocks;
+use SmartCache\Traits\DispatchesCacheEvents;
 
 class SmartCache implements SmartCacheContract
 {
+    use HasLocks, DispatchesCacheEvents;
     /**
      * @var Repository
      */
@@ -116,17 +119,19 @@ class SmartCache implements SmartCacheContract
     public function get(string $key, mixed $default = null): mixed
     {
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
-        
+
         $value = $this->cache->get($key, null);
-        
+
         if ($value === null) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
+            $this->dispatchCacheMissed($key);
             return $default;
         }
-        
+
         $restoredValue = $this->maybeRestoreValue($value, $key);
         $this->recordPerformanceMetric('cache_hit', $key, $startTime);
-        
+        $this->dispatchCacheHit($key, $restoredValue);
+
         return $restoredValue;
     }
 
@@ -136,9 +141,9 @@ class SmartCache implements SmartCacheContract
     public function put(string $key, mixed $value, $ttl = null): bool
     {
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
-        
+
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $ttl);
-        
+
         // Track all keys for pattern matching and invalidation
         $this->trackKey($key);
 
@@ -146,14 +151,18 @@ class SmartCache implements SmartCacheContract
         if (!empty($this->activeTags)) {
             $this->associateTagsWithKey($key, $this->activeTags);
         }
-        
+
         $result = $this->cache->put($key, $optimizedValue, $ttl);
         $this->recordPerformanceMetric('cache_write', $key, $startTime, [
             'original_size' => $this->calculateDataSize($value),
             'optimized_size' => $this->calculateDataSize($optimizedValue),
             'ttl' => $ttl
         ]);
-        
+
+        // Dispatch event
+        $seconds = is_int($ttl) ? $ttl : null;
+        $this->dispatchKeyWritten($key, $value, $seconds);
+
         return $result;
     }
 
@@ -171,22 +180,29 @@ class SmartCache implements SmartCacheContract
     public function forget(string $key): bool
     {
         $value = $this->cache->get($key);
-        
+
         // If value is chunked, clean up all chunk keys
         if (is_array($value) && isset($value['_sc_chunked']) && $value['_sc_chunked'] === true) {
             foreach ($value['chunk_keys'] as $chunkKey) {
                 $this->cache->forget($chunkKey);
             }
         }
-        
+
         // Clean up flexible method metadata if it exists
         $metaKey = $key . '_sc_meta';
         $this->cache->forget($metaKey);
-        
+
         // Remove from tracked keys
         $this->untrackKey($key);
-        
-        return $this->cache->forget($key);
+
+        $result = $this->cache->forget($key);
+
+        // Dispatch event
+        if ($result) {
+            $this->dispatchKeyForgotten($key);
+        }
+
+        return $result;
     }
 
     /**
@@ -1219,6 +1235,85 @@ class SmartCache implements SmartCacheContract
     }
 
     /**
+     * Retrieve multiple items from the cache by key.
+     *
+     * @param array $keys
+     * @return array
+     */
+    public function many(array $keys): array
+    {
+        $results = [];
+
+        foreach ($keys as $key) {
+            $results[$key] = $this->get($key);
+        }
+
+        return $results;
+    }
+
+    /**
+     * Store multiple items in the cache for a given number of seconds.
+     *
+     * @param array $values
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @return bool
+     */
+    public function putMany(array $values, $ttl = null): bool
+    {
+        $success = true;
+
+        foreach ($values as $key => $value) {
+            if (!$this->put($key, $value, $ttl)) {
+                $success = false;
+            }
+        }
+
+        return $success;
+    }
+
+    /**
+     * Remove multiple items from the cache.
+     *
+     * @param array $keys
+     * @return bool
+     */
+    public function deleteMultiple(array $keys): bool
+    {
+        $success = true;
+
+        foreach ($keys as $key) {
+            if (!$this->forget($key)) {
+                $success = false;
+            }
+        }
+
+        return $success;
+    }
+
+    /**
+     * Get a memoized cache instance.
+     *
+     * @param string|null $store
+     * @return static
+     */
+    public function memo(?string $store = null): static
+    {
+        // Get the cache repository
+        $repository = $store ? $this->cacheManager->store($store) : $this->cache;
+
+        // Wrap it with memoization
+        $memoizedRepository = new \SmartCache\Drivers\MemoizedCacheDriver($repository);
+
+        // Create a new SmartCache instance with the memoized repository
+        return new static(
+            $memoizedRepository,
+            $this->cacheManager,
+            $this->config,
+            $this->strategies
+        );
+    }
+
+    /**
      * Handle dynamic method calls to the underlying cache repository.
      *
      * @param string $method
@@ -1229,4 +1324,4 @@ class SmartCache implements SmartCacheContract
     {
         return $this->cache->{$method}(...$arguments);
     }
-} 
+}

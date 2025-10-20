@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
 use SmartCache\SmartCache;
 use SmartCache\Strategies\CompressionStrategy;
+use SmartCache\Strategies\AdaptiveCompressionStrategy;
 use SmartCache\Strategies\ChunkingStrategy;
 use SmartCache\Console\Commands\ClearCommand;
 use SmartCache\Console\Commands\StatusCommand;
@@ -30,19 +31,34 @@ class SmartCacheServiceProvider extends ServiceProvider
             // Create strategies based on config
             // Order matters: more specific strategies (chunking) should be tried first
             $strategies = [];
-            
+
             if ($config->get('smart-cache.strategies.chunking.enabled', true)) {
                 $strategies[] = new ChunkingStrategy(
                     $config->get('smart-cache.thresholds.chunking', 102400),
-                    $config->get('smart-cache.strategies.chunking.chunk_size', 1000)
+                    $config->get('smart-cache.strategies.chunking.chunk_size', 1000),
+                    $config->get('smart-cache.strategies.chunking.lazy_loading', false),
+                    $config->get('smart-cache.strategies.chunking.smart_sizing', false)
                 );
             }
-            
+
             if ($config->get('smart-cache.strategies.compression.enabled', true)) {
-                $strategies[] = new CompressionStrategy(
-                    $config->get('smart-cache.thresholds.compression', 51200),
-                    $config->get('smart-cache.strategies.compression.level', 6)
-                );
+                $compressionMode = $config->get('smart-cache.strategies.compression.mode', 'fixed');
+
+                if ($compressionMode === 'adaptive') {
+                    $strategies[] = new AdaptiveCompressionStrategy(
+                        $config->get('smart-cache.thresholds.compression', 51200),
+                        $config->get('smart-cache.strategies.compression.level', 6),
+                        $config->get('smart-cache.strategies.compression.adaptive.sample_size', 1024),
+                        $config->get('smart-cache.strategies.compression.adaptive.high_compression_threshold', 0.5),
+                        $config->get('smart-cache.strategies.compression.adaptive.low_compression_threshold', 0.7),
+                        $config->get('smart-cache.strategies.compression.adaptive.frequency_threshold', 100)
+                    );
+                } else {
+                    $strategies[] = new CompressionStrategy(
+                        $config->get('smart-cache.thresholds.compression', 51200),
+                        $config->get('smart-cache.strategies.compression.level', 6)
+                    );
+                }
             }
             
             return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies);

@@ -3,6 +3,8 @@
 namespace SmartCache\Strategies;
 
 use SmartCache\Contracts\OptimizationStrategy;
+use SmartCache\Collections\LazyChunkedCollection;
+use SmartCache\Services\SmartChunkSizeCalculator;
 
 class ChunkingStrategy implements OptimizationStrategy
 {
@@ -17,15 +19,42 @@ class ChunkingStrategy implements OptimizationStrategy
     protected int $chunkSize;
 
     /**
+     * @var bool
+     */
+    protected bool $lazyLoading;
+
+    /**
+     * @var bool
+     */
+    protected bool $smartSizing;
+
+    /**
+     * @var SmartChunkSizeCalculator|null
+     */
+    protected ?SmartChunkSizeCalculator $sizeCalculator = null;
+
+    /**
      * ChunkingStrategy constructor.
      *
      * @param int $threshold Size threshold for chunking (in bytes)
      * @param int $chunkSize Maximum items per chunk
+     * @param bool $lazyLoading Enable lazy loading
+     * @param bool $smartSizing Enable smart chunk sizing
      */
-    public function __construct(int $threshold = 102400, int $chunkSize = 1000)
-    {
+    public function __construct(
+        int $threshold = 102400,
+        int $chunkSize = 1000,
+        bool $lazyLoading = false,
+        bool $smartSizing = false
+    ) {
         $this->threshold = $threshold;
         $this->chunkSize = $chunkSize;
+        $this->lazyLoading = $lazyLoading;
+        $this->smartSizing = $smartSizing;
+
+        if ($smartSizing) {
+            $this->sizeCalculator = new SmartChunkSizeCalculator();
+        }
     }
 
     /**
@@ -75,7 +104,13 @@ class ChunkingStrategy implements OptimizationStrategy
         $ttl = $context['ttl'] ?? null;
         $driver = $context['driver'] ?? null;
 
-        $chunks = array_chunk($value, $this->chunkSize, true);
+        // Calculate optimal chunk size if smart sizing is enabled
+        $chunkSize = $this->chunkSize;
+        if ($this->smartSizing && $this->sizeCalculator) {
+            $chunkSize = $this->sizeCalculator->calculateOptimalSize($value, $driver, $this->chunkSize);
+        }
+
+        $chunks = array_chunk($value, $chunkSize, true);
         $chunkKeys = [];
 
         // Store each chunk separately
@@ -95,6 +130,8 @@ class ChunkingStrategy implements OptimizationStrategy
             'is_collection' => $isCollection,
             'original_key' => $prefix,
             'driver' => $driver,
+            'lazy_loading' => $this->lazyLoading,
+            'chunk_size' => $chunkSize, // Use actual chunk size (may be different if smart sizing is enabled)
         ];
     }
 
@@ -112,16 +149,33 @@ class ChunkingStrategy implements OptimizationStrategy
             throw new \RuntimeException('Cache repository is required to restore chunked data');
         }
 
+        // Check if lazy loading is enabled
+        $lazyLoading = $value['lazy_loading'] ?? $this->lazyLoading;
+
+        // Get the chunk size that was used (may be different if smart sizing was enabled)
+        $chunkSize = $value['chunk_size'] ?? $this->chunkSize;
+
+        if ($lazyLoading) {
+            // Return lazy collection
+            return new LazyChunkedCollection(
+                $cache,
+                $value['chunk_keys'],
+                $chunkSize,
+                $value['total_items'],
+                $value['is_collection'] ?? false
+            );
+        }
+
         $result = [];
-        
-        // Retrieve and merge all chunks
+
+        // Retrieve and merge all chunks (eager loading)
         foreach ($value['chunk_keys'] as $chunkKey) {
             $chunk = $cache->get($chunkKey);
             if ($chunk === null) {
                 // If any chunk is missing, return null indicating cache miss
                 return null;
             }
-            
+
             $result = array_merge($result, $chunk);
         }
 
