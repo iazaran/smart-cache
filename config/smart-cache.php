@@ -34,11 +34,20 @@ return [
     'strategies' => [
         'compression' => [
             'enabled' => true,
-            'level' => 6, // 0-9 (higher = better compression but slower)
+            'mode' => 'fixed', // 'fixed' or 'adaptive'
+            'level' => 6, // 0-9 (higher = better compression but slower) - used in fixed mode
+            'adaptive' => [
+                'sample_size' => 1024, // Bytes to sample for compressibility test
+                'high_compression_threshold' => 0.5, // Ratio below which to use level 9
+                'low_compression_threshold' => 0.7,  // Ratio above which to use level 3
+                'frequency_threshold' => 100, // Access count for speed priority
+            ],
         ],
         'chunking' => [
             'enabled' => true,
             'chunk_size' => 1000, // Items per chunk for arrays/collections
+            'lazy_loading' => false, // Enable lazy loading for chunks
+            'smart_sizing' => false, // Enable smart chunk size calculation
         ],
     ],
 
@@ -104,4 +113,24 @@ return [
             'chunking' => true,
         ],
     ],
-]; 
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cache Events
+    |--------------------------------------------------------------------------
+    |
+    | Enable cache events to track cache operations and optimization effectiveness.
+    | Events can be used for monitoring, logging, and debugging.
+    |
+    */
+    'events' => [
+        'enabled' => false, // Disabled by default for backward compatibility
+        'dispatch' => [
+            'cache_hit' => true,
+            'cache_missed' => true,
+            'key_written' => true,
+            'key_forgotten' => true,
+            'optimization_applied' => true,
+        ],
+    ],
+];
