@@ -2,3 +2,7 @@ vendor/
 .phpunit.cache/
 coverage/
 .DS_Store
+tests/storage/framework/cache/
+tests/storage/framework/sessions/
+tests/storage/framework/views/
+tests/storage/logs/

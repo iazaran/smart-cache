@@ -119,11 +119,22 @@ class MemoizationTest extends TestCase
 
     public function test_memo_with_different_stores()
     {
-        $memoRedis = SmartCache::memo('redis');
+        // Test that memoization works with different cache stores
+        // Use stores that don't require external services (file, array)
+
+        // Test with file store
         $memoFile = SmartCache::memo('file');
-        
-        $this->assertInstanceOf(\SmartCache\SmartCache::class, $memoRedis);
         $this->assertInstanceOf(\SmartCache\SmartCache::class, $memoFile);
+
+        $memoFile->put('file_test', 'file_value', 60);
+        $this->assertEquals('file_value', $memoFile->get('file_test'));
+
+        // Test with array store
+        $memoArray = SmartCache::memo('array');
+        $this->assertInstanceOf(\SmartCache\SmartCache::class, $memoArray);
+
+        $memoArray->put('array_test', 'array_value', 60);
+        $this->assertEquals('array_value', $memoArray->get('array_test'));
     }
 
     public function test_memo_performance_improvement()
