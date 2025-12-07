@@ -9,7 +9,7 @@ use SmartCache\Contracts\SmartCache;
  * Comprehensive SmartCache Feature Tests
  * 
  * Based on the gist test controller: https://gist.github.com/iazaran/d0706e21db6a445c1e9a63de7fcbb2ad
- * Tests all SmartCache features including new v2.0 features.
+ * Tests all SmartCache features including new v1.6 features.
  */
 class ComprehensiveSmartCacheTest extends TestCase
 {
@@ -331,7 +331,7 @@ class ComprehensiveSmartCacheTest extends TestCase
     }
 
     // ========================================
-    // NEW v2.0 FEATURES
+    // NEW v1.6 FEATURES
     // ========================================
 
     public function test_namespace_prefixing(): void
