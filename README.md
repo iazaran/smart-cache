@@ -247,6 +247,161 @@ Event::listen(OptimizationApplied::class, fn($e) =>
 
 **Events:** CacheHit, CacheMissed, KeyWritten, KeyForgotten, OptimizationApplied
 
+### 🔐 Encryption Strategy
+
+Encrypt sensitive cached data automatically:
+
+```php
+// Enable in config
+config(['smart-cache.encryption.enabled' => true]);
+config(['smart-cache.encryption.keys' => ['user_*', 'payment_*']]);
+
+// Sensitive data is automatically encrypted
+SmartCache::put('user_123_ssn', $sensitiveData, 3600);
+// Data encrypted at rest, decrypted on retrieval
+```
+
+**Benefit:** Secure sensitive data in cache without code changes
+
+### 🏷️ Cache Namespacing
+
+Group and manage cache keys by namespace:
+
+```php
+// Set namespace for operations
+SmartCache::namespace('users')->put('profile', $data, 3600);
+SmartCache::namespace('users')->put('settings', $settings, 3600);
+
+// Flush entire namespace
+SmartCache::flushNamespace('users'); // Clears all user:* keys
+
+// Get all keys in namespace
+$keys = SmartCache::getNamespaceKeys('users');
+```
+
+**Benefit:** Organize cache keys, easy bulk invalidation
+
+### ⏱️ TTL Jitter
+
+Prevent thundering herd with randomized TTL:
+
+```php
+// Add 10% jitter to TTL
+SmartCache::withJitter(0.1)->put('popular_data', $data, 3600);
+// Actual TTL: 3240-3960 seconds (±10%)
+
+// Or use dedicated methods
+SmartCache::putWithJitter('key', $value, 3600, 0.15); // 15% jitter
+SmartCache::rememberWithJitter('key', 3600, 0.1, fn() => expensiveCall());
+```
+
+**Benefit:** Prevents cache stampede when many keys expire simultaneously
+
+### 🔌 Circuit Breaker
+
+Auto-fallback when cache backend fails:
+
+```php
+// Check if cache is available
+if (SmartCache::isAvailable()) {
+    $data = SmartCache::get('key');
+}
+
+// Execute with automatic fallback
+$data = SmartCache::withFallback(
+    fn() => SmartCache::get('key'),           // Primary
+    fn() => Database::query('SELECT ...')     // Fallback
+);
+
+// Get circuit breaker stats
+$stats = SmartCache::getCircuitBreakerStats();
+// Returns: state, failure_count, success_count, last_failure_at
+```
+
+**States:** Closed (normal) → Open (failing) → Half-Open (testing)
+
+### 🚦 Rate Limiting & Stampede Protection
+
+Prevent cache stampede with rate limiting:
+
+```php
+// Throttle cache operations
+$result = SmartCache::throttle('api_call', 10, 60, function() {
+    return expensiveApiCall();
+}); // Max 10 calls per 60 seconds
+
+// Remember with stampede protection (XFetch algorithm)
+$data = SmartCache::rememberWithStampedeProtection('key', 3600, function() {
+    return expensiveComputation();
+});
+```
+
+**Benefit:** Prevents multiple processes from regenerating cache simultaneously
+
+### 🔥 Cache Warming
+
+Pre-warm cache with artisan command:
+
+```bash
+# Warm cache using registered warmers
+php artisan smart-cache:warm
+
+# Warm specific warmer
+php artisan smart-cache:warm --warmer=ProductCacheWarmer
+```
+
+Register warmers in your service provider:
+
+```php
+use SmartCache\Contracts\CacheWarmer;
+
+class ProductCacheWarmer implements CacheWarmer
+{
+    public function warm(): void
+    {
+        $products = Product::all();
+        SmartCache::put('all_products', $products, 3600);
+    }
+
+    public function getKey(): string
+    {
+        return 'products';
+    }
+}
+
+// Register in AppServiceProvider
+$this->app->tag([ProductCacheWarmer::class], 'smart-cache.warmers');
+```
+
+### 🧹 Orphan Chunk Cleanup
+
+Automatically clean up orphan chunks:
+
+```bash
+# Clean up orphan chunks
+php artisan smart-cache:cleanup-chunks
+
+# Dry run (show what would be cleaned)
+php artisan smart-cache:cleanup-chunks --dry-run
+```
+
+### 📊 Cache Statistics Dashboard
+
+View cache statistics via web interface:
+
+```php
+// Enable in config
+config(['smart-cache.dashboard.enabled' => true]);
+config(['smart-cache.dashboard.prefix' => 'smart-cache']);
+config(['smart-cache.dashboard.middleware' => ['web', 'auth']]);
+```
+
+**Routes:**
+- `GET /smart-cache/dashboard` - HTML dashboard
+- `GET /smart-cache/statistics` - JSON statistics
+- `GET /smart-cache/health` - Health check
+- `GET /smart-cache/keys` - Managed keys list
+
 ## 🌊 Modern Patterns (Laravel 12+)
 
 ### SWR (Stale-While-Revalidate)
@@ -374,6 +529,41 @@ return [
     'monitoring' => [
         'enabled' => true,
         'metrics_ttl' => 3600,
+    ],
+
+    // Encryption for sensitive data
+    'encryption' => [
+        'enabled' => false,
+        'keys' => [],              // Keys to encrypt: ['user_*', 'payment_*']
+        'patterns' => [],          // Regex patterns: ['/secret_.*/']
+    ],
+
+    // Circuit breaker for cache backend failures
+    'circuit_breaker' => [
+        'enabled' => true,
+        'failure_threshold' => 5,  // Failures before opening
+        'success_threshold' => 2,  // Successes to close
+        'timeout' => 30,           // Seconds before half-open
+    ],
+
+    // Rate limiting for cache operations
+    'rate_limiter' => [
+        'enabled' => true,
+        'default_limit' => 100,    // Max operations per window
+        'window' => 60,            // Window in seconds
+    ],
+
+    // TTL jitter to prevent thundering herd
+    'jitter' => [
+        'enabled' => false,
+        'percentage' => 0.1,       // 10% jitter by default
+    ],
+
+    // Statistics dashboard
+    'dashboard' => [
+        'enabled' => false,
+        'prefix' => 'smart-cache',
+        'middleware' => ['web'],
     ],
 ];
 ```

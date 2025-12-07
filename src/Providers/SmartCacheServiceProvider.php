@@ -8,8 +8,11 @@ use SmartCache\SmartCache;
 use SmartCache\Strategies\CompressionStrategy;
 use SmartCache\Strategies\AdaptiveCompressionStrategy;
 use SmartCache\Strategies\ChunkingStrategy;
+use SmartCache\Strategies\EncryptionStrategy;
 use SmartCache\Console\Commands\ClearCommand;
+use SmartCache\Console\Commands\CleanupChunksCommand;
 use SmartCache\Console\Commands\StatusCommand;
+use SmartCache\Console\Commands\WarmCacheCommand;
 
 class SmartCacheServiceProvider extends ServiceProvider
 {
@@ -60,7 +63,19 @@ class SmartCacheServiceProvider extends ServiceProvider
                     );
                 }
             }
-            
+
+            // Add encryption strategy if enabled
+            if ($config->get('smart-cache.strategies.encryption.enabled', false)) {
+                $strategies[] = new EncryptionStrategy(
+                    $app['encrypter'],
+                    [
+                        'keys' => $config->get('smart-cache.strategies.encryption.keys', []),
+                        'patterns' => $config->get('smart-cache.strategies.encryption.patterns', []),
+                        'encrypt_all' => $config->get('smart-cache.strategies.encryption.encrypt_all', false),
+                    ]
+                );
+            }
+
             return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies);
         });
 
@@ -83,23 +98,54 @@ class SmartCacheServiceProvider extends ServiceProvider
             $this->commands([
                 ClearCommand::class,
                 StatusCommand::class,
+                CleanupChunksCommand::class,
+                WarmCacheCommand::class,
             ]);
         }
 
+        // Register dashboard routes if enabled
+        $this->registerDashboardRoutes();
+
         // Register command metadata for HTTP context
-        $this->app->singleton('smart-cache.commands', function ($app) {
-            return [
-                'smart-cache:clear' => [
-                    'class' => ClearCommand::class,
-                    'description' => 'Clear SmartCache managed items',
-                    'signature' => 'smart-cache:clear {key? : The specific cache key to clear} {--force : Force clear keys even if not managed by SmartCache}'
-                ],
-                'smart-cache:status' => [
-                    'class' => StatusCommand::class,
-                    'description' => 'Display information about SmartCache usage and configuration',
-                    'signature' => 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}'
-                ]
-            ];
-        });
+        $this->app->singleton('smart-cache.commands', fn () => [
+            'smart-cache:clear' => [
+                'class' => ClearCommand::class,
+                'description' => 'Clear SmartCache managed items',
+                'signature' => 'smart-cache:clear {key? : The specific cache key to clear} {--force : Force clear keys even if not managed by SmartCache}'
+            ],
+            'smart-cache:status' => [
+                'class' => StatusCommand::class,
+                'description' => 'Display information about SmartCache usage and configuration',
+                'signature' => 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}'
+            ],
+            'smart-cache:cleanup-chunks' => [
+                'class' => CleanupChunksCommand::class,
+                'description' => 'Clean up orphan cache chunks whose main keys have expired',
+                'signature' => 'smart-cache:cleanup-chunks'
+            ],
+            'smart-cache:warm' => [
+                'class' => WarmCacheCommand::class,
+                'description' => 'Pre-warm the cache using registered warmers',
+                'signature' => 'smart-cache:warm {--warmer=* : Specific warmer(s) to run} {--list : List available warmers}'
+            ]
+        ]);
     }
-} 
+
+    /**
+     * Register dashboard routes if enabled.
+     */
+    protected function registerDashboardRoutes(): void
+    {
+        if (!$this->app['config']->get('smart-cache.dashboard.enabled', false)) {
+            return;
+        }
+
+        $prefix = $this->app['config']->get('smart-cache.dashboard.prefix', 'smart-cache');
+        $middleware = $this->app['config']->get('smart-cache.dashboard.middleware', ['web']);
+
+        $this->app['router']
+            ->prefix($prefix)
+            ->middleware($middleware)
+            ->group(__DIR__ . '/../../routes/smart-cache.php');
+    }
+}

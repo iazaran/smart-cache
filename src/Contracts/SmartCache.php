@@ -306,4 +306,126 @@ interface SmartCache
      * @return static
      */
     public function memo(?string $store = null): static;
+
+    /**
+     * Set the active namespace for cache keys.
+     *
+     * @param string $namespace
+     * @return static
+     */
+    public function namespace(string $namespace): static;
+
+    /**
+     * Clear the active namespace.
+     *
+     * @return static
+     */
+    public function withoutNamespace(): static;
+
+    /**
+     * Flush all keys in a namespace.
+     *
+     * @param string $namespace
+     * @return int Number of keys flushed
+     */
+    public function flushNamespace(string $namespace): int;
+
+    /**
+     * Get all keys in a namespace.
+     *
+     * @param string $namespace
+     * @return array
+     */
+    public function getNamespaceKeys(string $namespace): array;
+
+    /**
+     * Enable TTL jitter with specified percentage.
+     *
+     * @param float $percentage Jitter percentage (0.0 to 1.0)
+     * @return static
+     */
+    public function withJitter(float $percentage = 0.1): static;
+
+    /**
+     * Disable TTL jitter.
+     *
+     * @return static
+     */
+    public function withoutJitter(): static;
+
+    /**
+     * Apply jitter to a TTL value.
+     *
+     * @param int|null $ttl
+     * @param float|null $jitterPercentage Optional override for jitter percentage
+     * @return int|null
+     */
+    public function applyJitter(?int $ttl, ?float $jitterPercentage = null): ?int;
+
+    /**
+     * Store an item with TTL jitter applied.
+     *
+     * @param string $key
+     * @param mixed $value
+     * @param int $ttl
+     * @param float $jitterPercentage
+     * @return bool
+     */
+    public function putWithJitter(string $key, mixed $value, int $ttl, float $jitterPercentage = 0.1): bool;
+
+    /**
+     * Remember with TTL jitter applied.
+     *
+     * @param string $key
+     * @param int $ttl
+     * @param float $jitterPercentage
+     * @param \Closure $callback
+     * @return mixed
+     */
+    public function rememberWithJitter(string $key, int $ttl, float $jitterPercentage, \Closure $callback): mixed;
+
+    /**
+     * Check if the cache is available (circuit breaker).
+     *
+     * @return bool
+     */
+    public function isAvailable(): bool;
+
+    /**
+     * Get circuit breaker statistics.
+     *
+     * @return array
+     */
+    public function getCircuitBreakerStats(): array;
+
+    /**
+     * Execute with fallback on circuit breaker open.
+     *
+     * @param callable $primary
+     * @param callable $fallback
+     * @return mixed
+     */
+    public function withFallback(callable $primary, callable $fallback): mixed;
+
+    /**
+     * Throttle cache operations.
+     *
+     * @param string $key
+     * @param int $maxAttempts
+     * @param int $decaySeconds
+     * @param callable $callback
+     * @return mixed
+     */
+    public function throttle(string $key, int $maxAttempts, int $decaySeconds, callable $callback): mixed;
+
+    /**
+     * Remember with stampede protection using probabilistic early expiration.
+     *
+     * @param string $key
+     * @param int $ttl
+     * @param \Closure $callback
+     * @param float $beta XFetch beta parameter
+     * @return mixed
+     */
+    public function rememberWithStampedeProtection(string $key, int $ttl, \Closure $callback, float $beta = 1.0): mixed;
 }

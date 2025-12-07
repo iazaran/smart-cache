@@ -25,15 +25,22 @@ class SmartSerializationStrategy implements OptimizationStrategy
     protected bool $autoDetect;
 
     /**
+     * @var int Minimum size in bytes to apply serialization optimization
+     */
+    protected int $sizeThreshold;
+
+    /**
      * SmartSerializationStrategy constructor.
      *
      * @param string $preferredMethod Preferred serialization method (auto, json, igbinary, php)
      * @param bool $autoDetect Auto-detect best method
+     * @param int $sizeThreshold Minimum size in bytes to apply optimization (default: 1024)
      */
-    public function __construct(string $preferredMethod = 'auto', bool $autoDetect = true)
+    public function __construct(string $preferredMethod = 'auto', bool $autoDetect = true, int $sizeThreshold = 1024)
     {
         $this->preferredMethod = $preferredMethod;
         $this->autoDetect = $autoDetect;
+        $this->sizeThreshold = $sizeThreshold;
     }
 
     /**
@@ -41,9 +48,9 @@ class SmartSerializationStrategy implements OptimizationStrategy
      */
     public function shouldApply(mixed $value, array $context = []): bool
     {
-        // This strategy can be applied to any value
-        // It's more about choosing the right serialization method
-        return true;
+        // Only apply to values above the size threshold
+        $serialized = serialize($value);
+        return \strlen($serialized) >= $this->sizeThreshold;
     }
 
     /**

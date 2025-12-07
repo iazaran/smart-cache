@@ -5,6 +5,7 @@ namespace SmartCache\Strategies;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Collections\LazyChunkedCollection;
 use SmartCache\Services\SmartChunkSizeCalculator;
+use SmartCache\Services\OrphanChunkCleanupService;
 
 class ChunkingStrategy implements OptimizationStrategy
 {
@@ -34,6 +35,11 @@ class ChunkingStrategy implements OptimizationStrategy
     protected ?SmartChunkSizeCalculator $sizeCalculator = null;
 
     /**
+     * @var OrphanChunkCleanupService|null
+     */
+    protected ?OrphanChunkCleanupService $cleanupService = null;
+
+    /**
      * ChunkingStrategy constructor.
      *
      * @param int $threshold Size threshold for chunking (in bytes)
@@ -58,6 +64,17 @@ class ChunkingStrategy implements OptimizationStrategy
     }
 
     /**
+     * Set the cleanup service for tracking chunks.
+     *
+     * @param OrphanChunkCleanupService $cleanupService
+     * @return void
+     */
+    public function setCleanupService(OrphanChunkCleanupService $cleanupService): void
+    {
+        $this->cleanupService = $cleanupService;
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function shouldApply(mixed $value, array $context = []): bool
@@ -70,19 +87,19 @@ class ChunkingStrategy implements OptimizationStrategy
         }
 
         // Only chunk arrays and array-like objects
-        if (!is_array($value) && !($value instanceof \Traversable)) {
+        if (!\is_array($value) && !($value instanceof \Traversable)) {
             return false;
         }
 
         // For Laravel collections, get the underlying array
-        if (class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
+        if (\class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
             $value = $value->all();
         }
 
-        $serialized = serialize($value);
-        
+        $serialized = \serialize($value);
+
         // Check if size exceeds threshold and the array is large enough to benefit from chunking
-        return strlen($serialized) > $this->threshold && (is_array($value) && count($value) > $this->chunkSize);
+        return \strlen($serialized) > $this->threshold && (\is_array($value) && \count($value) > $this->chunkSize);
     }
 
     /**
@@ -91,7 +108,7 @@ class ChunkingStrategy implements OptimizationStrategy
     public function optimize(mixed $value, array $context = []): mixed
     {
         // Convert to array if it's a collection
-        if (class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
+        if (\class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
             $isCollection = true;
             $value = $value->all();
         } else {
@@ -117,10 +134,15 @@ class ChunkingStrategy implements OptimizationStrategy
         foreach ($chunks as $index => $chunk) {
             $chunkKey = "_sc_chunk_{$prefix}_{$index}";
             $chunkKeys[] = $chunkKey;
-            
+
             if ($cache) {
                 $cache->put($chunkKey, $chunk, $ttl);
             }
+        }
+
+        // Register chunks for orphan cleanup tracking
+        if ($this->cleanupService !== null) {
+            $this->cleanupService->registerChunks($prefix, $chunkKeys);
         }
 
         return [
@@ -180,7 +202,7 @@ class ChunkingStrategy implements OptimizationStrategy
         }
 
         // Convert back to collection if needed
-        if ($value['is_collection'] && class_exists('\Illuminate\Support\Collection')) {
+        if ($value['is_collection'] && \class_exists('\Illuminate\Support\Collection')) {
             return new \Illuminate\Support\Collection($result);
         }
 

@@ -21,7 +21,7 @@ trait HasLocks
         
         if (!$store instanceof LockProvider) {
             throw new \RuntimeException(
-                "Cache store [" . get_class($store) . "] does not support atomic locks. " .
+                "Cache store [" . \get_class($store) . "] does not support atomic locks. " .
                 "Please use a cache driver that implements LockProvider (redis, memcached, dynamodb, database, file, array)."
             );
         }
@@ -42,7 +42,7 @@ trait HasLocks
         
         if (!$store instanceof LockProvider) {
             throw new \RuntimeException(
-                "Cache store [" . get_class($store) . "] does not support atomic locks."
+                "Cache store [" . \get_class($store) . "] does not support atomic locks."
             );
         }
         

@@ -31,7 +31,7 @@ class ClearCommandTest extends TestCase
     public function test_command_has_correct_signature_and_description()
     {
         $this->assertEquals('smart-cache:clear', $this->command->getName());
-        $this->assertEquals('Clear SmartCache managed items. Optionally specify a key to clear only that item. Use --force to clear keys even if not managed by SmartCache.', $this->command->getDescription());
+        $this->assertEquals('Clear SmartCache managed items. Optionally specify a key to clear only that item.', $this->command->getDescription());
     }
 
     public function test_clear_command_with_no_managed_keys()

@@ -49,6 +49,52 @@ return [
             'lazy_loading' => false, // Enable lazy loading for chunks
             'smart_sizing' => false, // Enable smart chunk size calculation
         ],
+        'encryption' => [
+            'enabled' => false, // Disabled by default
+            'keys' => [], // Specific keys to encrypt
+            'patterns' => [], // Regex patterns for keys to encrypt (e.g., '/^user_token_/')
+            'encrypt_all' => false, // Encrypt all cached values
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Circuit Breaker
+    |--------------------------------------------------------------------------
+    |
+    | Configure the circuit breaker for cache backend failures.
+    |
+    */
+    'circuit_breaker' => [
+        'failure_threshold' => 5, // Number of failures before opening circuit
+        'recovery_timeout' => 30, // Seconds to wait before trying again
+        'success_threshold' => 3, // Successful calls needed to close circuit
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Rate Limiter
+    |--------------------------------------------------------------------------
+    |
+    | Configure rate limiting for cache operations.
+    |
+    */
+    'rate_limiter' => [
+        'window' => 60, // Window in seconds
+        'max_attempts' => 10, // Maximum attempts per window
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | TTL Jitter
+    |--------------------------------------------------------------------------
+    |
+    | Configure TTL jitter to prevent thundering herd problem.
+    |
+    */
+    'jitter' => [
+        'enabled' => false, // Disabled by default
+        'percentage' => 0.1, // 10% jitter by default
     ],
 
     /*
@@ -132,5 +178,19 @@ return [
             'key_forgotten' => true,
             'optimization_applied' => true,
         ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard
+    |--------------------------------------------------------------------------
+    |
+    | Configure the web dashboard for viewing cache statistics.
+    |
+    */
+    'dashboard' => [
+        'enabled' => false, // Disabled by default for security
+        'prefix' => 'smart-cache', // URL prefix for dashboard routes
+        'middleware' => ['web'], // Middleware to apply to dashboard routes
     ],
 ];
