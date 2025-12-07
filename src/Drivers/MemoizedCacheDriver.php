@@ -7,9 +7,10 @@ use Illuminate\Contracts\Cache\Store;
 
 /**
  * Memoized Cache Driver
- * 
+ *
  * Wraps a cache repository and adds in-memory memoization for the current request.
  * This prevents repeated cache hits for the same key within a single request/job execution.
+ * Includes LRU eviction to prevent memory leaks in long-running processes.
  */
 class MemoizedCacheDriver implements Repository
 {
@@ -29,13 +30,75 @@ class MemoizedCacheDriver implements Repository
     protected array $memoizedMissing = [];
 
     /**
+     * @var array LRU tracking - keys in order of last access
+     */
+    protected array $accessOrder = [];
+
+    /**
+     * @var int Maximum number of items to keep in memory
+     */
+    protected int $maxSize;
+
+    /**
      * Create a new memoized cache driver.
      *
      * @param Repository $repository
+     * @param int $maxSize Maximum items to memoize (default: 1000)
      */
-    public function __construct(Repository $repository)
+    public function __construct(Repository $repository, int $maxSize = 1000)
     {
         $this->repository = $repository;
+        $this->maxSize = $maxSize;
+    }
+
+    /**
+     * Set the maximum size of the memoization cache.
+     *
+     * @param int $maxSize
+     * @return void
+     */
+    public function setMaxSize(int $maxSize): void
+    {
+        $this->maxSize = $maxSize;
+        $this->evictIfNeeded();
+    }
+
+    /**
+     * Touch a key to mark it as recently used.
+     *
+     * @param string $key
+     * @return void
+     */
+    protected function touchKey(string $key): void
+    {
+        // Remove from current position
+        $index = array_search($key, $this->accessOrder, true);
+        if ($index !== false) {
+            unset($this->accessOrder[$index]);
+        }
+        // Add to end (most recently used)
+        $this->accessOrder[] = $key;
+    }
+
+    /**
+     * Evict least recently used items if over capacity.
+     *
+     * @return void
+     */
+    protected function evictIfNeeded(): void
+    {
+        while (count($this->memoized) > $this->maxSize) {
+            // Re-index array to ensure we get the first element
+            $this->accessOrder = array_values($this->accessOrder);
+
+            if (empty($this->accessOrder)) {
+                break;
+            }
+
+            // Remove the least recently used (first in array)
+            $lruKey = array_shift($this->accessOrder);
+            unset($this->memoized[$lruKey]);
+        }
     }
 
     /**
@@ -68,6 +131,7 @@ class MemoizedCacheDriver implements Repository
     {
         // Check if already memoized
         if (array_key_exists($key, $this->memoized)) {
+            $this->touchKey($key);
             return $this->memoized[$key];
         }
 
@@ -82,6 +146,8 @@ class MemoizedCacheDriver implements Repository
         // Memoize the result
         if ($value !== $default) {
             $this->memoized[$key] = $value;
+            $this->touchKey($key);
+            $this->evictIfNeeded();
         } else {
             $this->memoizedMissing[$key] = true;
         }
@@ -222,11 +288,14 @@ class MemoizedCacheDriver implements Repository
     {
         // Check if already memoized
         if (array_key_exists($key, $this->memoized)) {
+            $this->touchKey($key);
             return $this->memoized[$key];
         }
 
         $value = $this->repository->remember($key, $ttl, $callback);
         $this->memoized[$key] = $value;
+        $this->touchKey($key);
+        $this->evictIfNeeded();
 
         return $value;
     }
@@ -254,11 +323,14 @@ class MemoizedCacheDriver implements Repository
     {
         // Check if already memoized
         if (array_key_exists($key, $this->memoized)) {
+            $this->touchKey($key);
             return $this->memoized[$key];
         }
 
         $value = $this->repository->rememberForever($key, $callback);
         $this->memoized[$key] = $value;
+        $this->touchKey($key);
+        $this->evictIfNeeded();
 
         return $value;
     }
@@ -271,6 +343,10 @@ class MemoizedCacheDriver implements Repository
      */
     public function forget($key): bool
     {
+        $index = array_search($key, $this->accessOrder, true);
+        if ($index !== false) {
+            unset($this->accessOrder[$index]);
+        }
         unset($this->memoized[$key], $this->memoizedMissing[$key]);
         return $this->repository->forget($key);
     }
@@ -284,6 +360,7 @@ class MemoizedCacheDriver implements Repository
     {
         $this->memoized = [];
         $this->memoizedMissing = [];
+        $this->accessOrder = [];
         return $this->repository->flush();
     }
 
@@ -326,6 +403,7 @@ class MemoizedCacheDriver implements Repository
     {
         $this->memoized = [];
         $this->memoizedMissing = [];
+        $this->accessOrder = [];
     }
 
     /**
@@ -336,9 +414,10 @@ class MemoizedCacheDriver implements Repository
     public function getMemoizationStats(): array
     {
         return [
-            'memoized_count' => count($this->memoized),
-            'missing_count' => count($this->memoizedMissing),
-            'total_memory' => strlen(serialize($this->memoized)),
+            'memoized_count' => \count($this->memoized),
+            'missing_count' => \count($this->memoizedMissing),
+            'total_memory' => \strlen(serialize($this->memoized)),
+            'max_size' => $this->maxSize,
         ];
     }
 
