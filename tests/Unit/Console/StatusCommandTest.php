@@ -34,7 +34,7 @@ class StatusCommandTest extends TestCase
     public function test_command_has_correct_signature_and_description()
     {
         $this->assertEquals('smart-cache:status', $this->command->getName());
-        $this->assertEquals('Display information about SmartCache usage and configuration. Use --force to include Laravel cache analysis.', $this->command->getDescription());
+        $this->assertEquals('Display information about SmartCache usage and configuration.', $this->command->getDescription());
     }
 
     public function test_status_command_with_no_managed_keys()

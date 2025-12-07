@@ -9,11 +9,20 @@ class SmartSerializationStrategyTest extends TestCase
 {
     public function test_should_apply_returns_true()
     {
-        $strategy = new SmartSerializationStrategy();
-        
-        $this->assertTrue($strategy->shouldApply('any_value'));
-        $this->assertTrue($strategy->shouldApply(['array']));
-        $this->assertTrue($strategy->shouldApply(new \stdClass()));
+        // Use a low threshold to test with small data
+        $strategy = new SmartSerializationStrategy('auto', true, 10);
+
+        $this->assertTrue($strategy->shouldApply('any_value_that_is_long_enough'));
+        $this->assertTrue($strategy->shouldApply(['array', 'with', 'multiple', 'elements']));
+        $this->assertTrue($strategy->shouldApply((object) ['key' => 'value', 'another' => 'data']));
+
+        // Test with default threshold (1024 bytes) - small values should return false
+        $defaultStrategy = new SmartSerializationStrategy();
+        $this->assertFalse($defaultStrategy->shouldApply('small'));
+
+        // Large data should return true with default threshold
+        $largeData = str_repeat('x', 2000);
+        $this->assertTrue($defaultStrategy->shouldApply($largeData));
     }
 
     public function test_optimize_serializes_data()
