@@ -110,7 +110,7 @@ class BackgroundCacheRefreshJob implements ShouldQueue
         }
 
         // If it's an invokable class name
-        if (\is_string($callback) && class_exists($callback)) {
+        if (\is_string($callback) && \class_exists($callback)) {
             $instance = app($callback);
             return $instance();
         }

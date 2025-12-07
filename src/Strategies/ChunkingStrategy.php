@@ -87,19 +87,19 @@ class ChunkingStrategy implements OptimizationStrategy
         }
 
         // Only chunk arrays and array-like objects
-        if (!is_array($value) && !($value instanceof \Traversable)) {
+        if (!\is_array($value) && !($value instanceof \Traversable)) {
             return false;
         }
 
         // For Laravel collections, get the underlying array
-        if (class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
+        if (\class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
             $value = $value->all();
         }
 
-        $serialized = serialize($value);
-        
+        $serialized = \serialize($value);
+
         // Check if size exceeds threshold and the array is large enough to benefit from chunking
-        return strlen($serialized) > $this->threshold && (is_array($value) && count($value) > $this->chunkSize);
+        return \strlen($serialized) > $this->threshold && (\is_array($value) && \count($value) > $this->chunkSize);
     }
 
     /**
@@ -108,7 +108,7 @@ class ChunkingStrategy implements OptimizationStrategy
     public function optimize(mixed $value, array $context = []): mixed
     {
         // Convert to array if it's a collection
-        if (class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
+        if (\class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
             $isCollection = true;
             $value = $value->all();
         } else {
@@ -202,7 +202,7 @@ class ChunkingStrategy implements OptimizationStrategy
         }
 
         // Convert back to collection if needed
-        if ($value['is_collection'] && class_exists('\Illuminate\Support\Collection')) {
+        if ($value['is_collection'] && \class_exists('\Illuminate\Support\Collection')) {
             return new \Illuminate\Support\Collection($result);
         }
 

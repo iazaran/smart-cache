@@ -570,24 +570,24 @@ class SmartCache implements SmartCacheContract
     public function hasFeature(string $feature): bool
     {
         $features = [
-            'tags' => method_exists($this, 'tags'),
-            'flushTags' => method_exists($this, 'flushTags'),
-            'dependsOn' => method_exists($this, 'dependsOn'),
-            'invalidate' => method_exists($this, 'invalidate'),
-            'flushPatterns' => method_exists($this, 'flushPatterns'),
-            'invalidateModel' => method_exists($this, 'invalidateModel'),
-            'swr' => method_exists($this, 'swr'),
-            'stale' => method_exists($this, 'stale'),
-            'refreshAhead' => method_exists($this, 'refreshAhead'),
-            'flexible' => method_exists($this, 'flexible'),
-            'getStatistics' => method_exists($this, 'getStatistics'),
-            'healthCheck' => method_exists($this, 'healthCheck'),
-            'getPerformanceMetrics' => method_exists($this, 'getPerformanceMetrics'),
-            'analyzePerformance' => method_exists($this, 'analyzePerformance'),
-            'getAvailableCommands' => method_exists($this, 'getAvailableCommands'),
-            'executeCommand' => method_exists($this, 'executeCommand'),
+            'tags' => \method_exists($this, 'tags'),
+            'flushTags' => \method_exists($this, 'flushTags'),
+            'dependsOn' => \method_exists($this, 'dependsOn'),
+            'invalidate' => \method_exists($this, 'invalidate'),
+            'flushPatterns' => \method_exists($this, 'flushPatterns'),
+            'invalidateModel' => \method_exists($this, 'invalidateModel'),
+            'swr' => \method_exists($this, 'swr'),
+            'stale' => \method_exists($this, 'stale'),
+            'refreshAhead' => \method_exists($this, 'refreshAhead'),
+            'flexible' => \method_exists($this, 'flexible'),
+            'getStatistics' => \method_exists($this, 'getStatistics'),
+            'healthCheck' => \method_exists($this, 'healthCheck'),
+            'getPerformanceMetrics' => \method_exists($this, 'getPerformanceMetrics'),
+            'analyzePerformance' => \method_exists($this, 'analyzePerformance'),
+            'getAvailableCommands' => \method_exists($this, 'getAvailableCommands'),
+            'executeCommand' => \method_exists($this, 'executeCommand'),
         ];
-        
+
         return $features[$feature] ?? false;
     }
 
@@ -822,7 +822,7 @@ class SmartCache implements SmartCacheContract
             return $instance->$method();
         }
 
-        if (class_exists($callback)) {
+        if (\class_exists($callback)) {
             $instance = app($callback);
             return $instance();
         }
