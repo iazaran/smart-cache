@@ -490,6 +490,7 @@
                     <li><a href="#swr-patterns" class="nav-link" data-tab="swr-patterns">🌊 SWR Patterns</a></li>
                     <li><a href="#monitoring" class="nav-link" data-tab="monitoring">📊 Monitoring</a></li>
                     <li><a href="#advanced" class="nav-link" data-tab="advanced">🔧 Advanced</a></li>
+                    <li><a href="#new-features" class="nav-link" data-tab="new-features">✨ New Features</a></li>
                     <li><a href="#api-reference" class="nav-link" data-tab="api-reference">📚 API Reference</a></li>
                     <li><a href="#testing" class="nav-link" data-tab="testing">🧪 Testing & Validation</a></li>
                     <li><a href="#migration" class="nav-link" data-tab="migration">🔄 Migration</a></li>
@@ -540,6 +541,22 @@
                         <div class="feature-card">
                             <h4>🔄 Zero Breaking Changes</h4>
                             <p>Use exactly like Laravel's Cache facade with automatic optimizations.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🔐 Encryption</h4>
+                            <p>Automatically encrypt sensitive cached data with pattern matching.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>📁 Namespacing</h4>
+                            <p>Group cache keys by namespace for better organization and bulk operations.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>⏱️ TTL Jitter</h4>
+                            <p>Prevent thundering herd with random TTL variation.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🔌 Circuit Breaker</h4>
+                            <p>Protect your app from cache backend failures with automatic fallbacks.</p>
                         </div>
                     </div>
 
@@ -1354,6 +1371,236 @@ SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
 
                 </div>
 
+                <!-- New Features Tab -->
+                <div id="new-features" class="tab-container">
+                    <h1>✨ New Features (v2.0)</h1>
+
+                    <div class="alert alert-success">
+                        <strong>SmartCache v2.0</strong> introduces powerful new features for production environments: Encryption, Namespacing, TTL Jitter, Circuit Breaker, Rate Limiting, Cache Warming, and more!
+                    </div>
+
+                    <h2>🔐 Encryption Strategy</h2>
+                    <p>Encrypt sensitive cached data automatically:</p>
+
+                    <pre><code class="language-php">// Configure encryption in config/smart-cache.php
+'encryption' => [
+    'enabled' => true,
+    'keys' => ['user_*', 'payment_*'],     // Keys to encrypt
+    'patterns' => ['/secret_.*/'],          // Regex patterns
+],
+
+// Data matching patterns is automatically encrypted
+SmartCache::put('user_123_data', $sensitiveData, 3600);
+// Automatically encrypted at rest!
+
+// Decryption is automatic on retrieval
+$data = SmartCache::get('user_123_data');
+// Returns decrypted data</code></pre>
+
+                    <h2>📁 Cache Namespacing</h2>
+                    <p>Group cache keys by namespace for better organization:</p>
+
+                    <pre><code class="language-php">// Set active namespace
+SmartCache::namespace('api_v2');
+
+// All operations now use this namespace
+SmartCache::put('users', $users, 3600);  // Actually stores 'api_v2:users'
+SmartCache::get('users');                 // Gets 'api_v2:users'
+
+// Flush entire namespace
+SmartCache::flushNamespace('api_v2');
+
+// Get all keys in namespace
+$keys = SmartCache::getNamespaceKeys('api_v2');
+
+// Disable namespace temporarily
+SmartCache::withoutNamespace()->put('global_key', $value, 3600);</code></pre>
+
+                    <h2>⏱️ TTL Jitter</h2>
+                    <p>Prevent thundering herd by adding random variation to TTL:</p>
+
+                    <pre><code class="language-php">// Enable jitter globally in config
+'jitter' => [
+    'enabled' => true,
+    'percentage' => 0.1,  // 10% variation
+],
+
+// Or enable per-operation
+SmartCache::withJitter(0.15)->put('key', $value, 3600);
+// TTL will be 3060-3540 seconds (±15%)
+
+// Use jitter-specific methods
+SmartCache::putWithJitter('key', $value, 3600, 0.2);
+SmartCache::rememberWithJitter('key', 3600, fn() => $value, 0.1);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Why Jitter?</strong> When many cache entries expire at the same time, they all try to regenerate simultaneously (thundering herd). Jitter spreads out expirations to prevent this.
+                    </div>
+
+                    <h2>🔌 Circuit Breaker</h2>
+                    <p>Protect your application from cache backend failures:</p>
+
+                    <pre><code class="language-php">// Configure circuit breaker
+'circuit_breaker' => [
+    'enabled' => true,
+    'failure_threshold' => 5,   // Open after 5 failures
+    'success_threshold' => 2,   // Close after 2 successes
+    'timeout' => 30,            // Try again after 30 seconds
+],
+
+// Check if cache is available
+if (SmartCache::isAvailable()) {
+    $data = SmartCache::get('key');
+} else {
+    $data = $this->fallbackSource();
+}
+
+// Use fallback automatically
+$data = SmartCache::withFallback(
+    fn() => SmartCache::get('key'),
+    fn() => $this->fallbackSource()
+);
+
+// Get circuit breaker statistics
+$stats = SmartCache::getCircuitBreakerStats();
+// Returns: state, failures, successes, last_failure_time</code></pre>
+
+                    <h2>🚦 Rate Limiting & Stampede Protection</h2>
+                    <p>Prevent cache stampede with probabilistic early expiration:</p>
+
+                    <pre><code class="language-php">// Throttle cache regeneration
+SmartCache::throttle('expensive_key', 10, 60, function() {
+    return expensiveOperation();
+}); // Max 10 regenerations per 60 seconds
+
+// Stampede protection with XFetch algorithm
+$data = SmartCache::rememberWithStampedeProtection(
+    'popular_key',
+    3600,
+    fn() => expensiveQuery(),
+    1.0  // Beta factor (higher = earlier refresh)
+);
+
+// Configure rate limiter
+'rate_limiter' => [
+    'enabled' => true,
+    'default_limit' => 100,
+    'window' => 60,
+],</code></pre>
+
+                    <h2>🔥 Cache Warming</h2>
+                    <p>Pre-populate cache with frequently accessed data:</p>
+
+                    <pre><code class="language-php">// Create a cache warmer
+use SmartCache\Contracts\CacheWarmer;
+
+class ProductCacheWarmer implements CacheWarmer
+{
+    public function warm(): void
+    {
+        $products = Product::with('images')->get();
+        SmartCache::put('all_products', $products, 3600);
+    }
+
+    public function getKeys(): array
+    {
+        return ['all_products'];
+    }
+}
+
+// Register in service provider
+$this->app->tag([ProductCacheWarmer::class], 'cache.warmers');
+
+// Run cache warming command
+php artisan smart-cache:warm
+
+// Or warm specific keys
+php artisan smart-cache:warm --keys=all_products,categories</code></pre>
+
+                    <h2>🧹 Orphan Chunk Cleanup</h2>
+                    <p>Automatically clean up orphaned chunks from expired data:</p>
+
+                    <pre><code class="language-php">// Run cleanup command
+php artisan smart-cache:cleanup-chunks
+
+// Schedule automatic cleanup
+// In app/Console/Kernel.php
+$schedule->command('smart-cache:cleanup-chunks')->daily();
+
+// Cleanup is also triggered automatically when:
+// - A chunked key is forgotten
+// - A chunked key expires and is accessed</code></pre>
+
+                    <h2>📊 Cache Statistics Dashboard</h2>
+                    <p>Visual dashboard for monitoring cache performance:</p>
+
+                    <pre><code class="language-php">// Enable dashboard in config
+'dashboard' => [
+    'enabled' => true,
+    'prefix' => 'smart-cache',
+    'middleware' => ['web', 'auth'],
+],
+
+// Access dashboard at:
+// GET /smart-cache/dashboard
+
+// JSON API endpoints:
+// GET /smart-cache/stats     - Performance metrics
+// GET /smart-cache/health    - Health check
+// GET /smart-cache/keys      - Managed keys list</code></pre>
+
+                    <h2>🔄 Background Refresh</h2>
+                    <p>Queue-based background cache refresh:</p>
+
+                    <pre><code class="language-php">use SmartCache\Jobs\BackgroundCacheRefreshJob;
+
+// Dispatch background refresh
+BackgroundCacheRefreshJob::dispatch(
+    'expensive_key',
+    fn() => expensiveOperation(),
+    3600
+);
+
+// Or use the SWR pattern which handles this automatically
+SmartCache::swr('key', fn() => $data, 300, 900);</code></pre>
+
+                    <h2>Configuration Reference</h2>
+                    <pre><code class="language-php">// config/smart-cache.php - New options
+return [
+    // ... existing options ...
+
+    'encryption' => [
+        'enabled' => false,
+        'keys' => [],
+        'patterns' => [],
+    ],
+
+    'circuit_breaker' => [
+        'enabled' => true,
+        'failure_threshold' => 5,
+        'success_threshold' => 2,
+        'timeout' => 30,
+    ],
+
+    'rate_limiter' => [
+        'enabled' => true,
+        'default_limit' => 100,
+        'window' => 60,
+    ],
+
+    'jitter' => [
+        'enabled' => false,
+        'percentage' => 0.1,
+    ],
+
+    'dashboard' => [
+        'enabled' => false,
+        'prefix' => 'smart-cache',
+        'middleware' => ['web'],
+    ],
+];</code></pre>
+                </div>
+
                 <!-- API Reference Tab -->
                 <div id="api-reference" class="tab-container">
                     <h1>📚 Complete API Reference</h1>
@@ -1829,6 +2076,166 @@ $stats = SmartCache::getSerializationStats($optimized);
                         </div>
                     </div>
 
+                    <h2 id="v2-features-api">✨ v2.0 Features API</h2>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::namespace() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::namespace(string $namespace): static</div>
+                        <p>Set the active namespace for cache operations.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$namespace</span> <span class="parameter-type">(string)</span> - Namespace prefix
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> static - Chainable instance
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">SmartCache::namespace('api_v2')->put('users', $users, 3600);
+// Stores as 'api_v2:users'</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::flushNamespace() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::flushNamespace(string $namespace): int</div>
+                        <p>Flush all cache entries in a namespace.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$namespace</span> <span class="parameter-type">(string)</span> - Namespace to flush
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> int - Number of keys flushed
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$count = SmartCache::flushNamespace('api_v2');
+// Clears all keys prefixed with 'api_v2:'</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::withJitter() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::withJitter(float $percentage = 0.1): static</div>
+                        <p>Enable TTL jitter for subsequent operations.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$percentage</span> <span class="parameter-type">(float)</span> - Jitter percentage (0.1 = 10%)
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> static - Chainable instance
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">SmartCache::withJitter(0.15)->put('key', $value, 3600);
+// TTL will be 3060-3540 seconds (±15%)</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::isAvailable() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::isAvailable(): bool</div>
+                        <p>Check if cache backend is available (circuit breaker).</p>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> bool - True if cache is available
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">if (SmartCache::isAvailable()) {
+    $data = SmartCache::get('key');
+} else {
+    $data = $this->fallbackSource();
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::withFallback() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::withFallback(callable $operation, callable $fallback): mixed</div>
+                        <p>Execute cache operation with automatic fallback on failure.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$operation</span> <span class="parameter-type">(callable)</span> - Primary cache operation
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$fallback</span> <span class="parameter-type">(callable)</span> - Fallback if cache fails
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> mixed - Result from operation or fallback
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$data = SmartCache::withFallback(
+    fn() => SmartCache::get('key'),
+    fn() => $this->database->get('key')
+);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::throttle() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::throttle(string $key, int $maxAttempts, int $decaySeconds, callable $callback): mixed</div>
+                        <p>Rate-limit cache regeneration to prevent stampede.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$key</span> <span class="parameter-type">(string)</span> - Cache key
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$maxAttempts</span> <span class="parameter-type">(int)</span> - Max regenerations allowed
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$decaySeconds</span> <span class="parameter-type">(int)</span> - Time window in seconds
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$callback</span> <span class="parameter-type">(callable)</span> - Value generator
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> mixed - Cached or generated value
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$data = SmartCache::throttle('expensive_key', 10, 60, function() {
+    return expensiveOperation();
+}); // Max 10 regenerations per 60 seconds</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::rememberWithStampedeProtection() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::rememberWithStampedeProtection(string $key, int $ttl, callable $callback, float $beta = 1.0): mixed</div>
+                        <p>Remember with XFetch algorithm for probabilistic early refresh.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$key</span> <span class="parameter-type">(string)</span> - Cache key
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$ttl</span> <span class="parameter-type">(int)</span> - Time to live in seconds
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$callback</span> <span class="parameter-type">(callable)</span> - Value generator
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$beta</span> <span class="parameter-type">(float)</span> - Beta factor (higher = earlier refresh)
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> mixed - Cached or generated value
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$data = SmartCache::rememberWithStampedeProtection(
+    'popular_key', 3600, fn() => expensiveQuery(), 1.0
+);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::getCircuitBreakerStats() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">SmartCache::getCircuitBreakerStats(): array</div>
+                        <p>Get circuit breaker statistics.</p>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> array - Stats (state, failures, successes, last_failure_time)
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$stats = SmartCache::getCircuitBreakerStats();
+// Returns: ['state' => 'closed', 'failures' => 0, 'successes' => 5]</code></pre>
+                        </div>
+                    </div>
+
                     <h2 id="management-api">🛠️ Cache Management</h2>
 
                     <div class="method">
@@ -1930,6 +2337,37 @@ php artisan smart-cache:clear user_profile_123
 
 # Force clear any cache key
 php artisan smart-cache:clear --force</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">smart-cache:warm <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">php artisan smart-cache:warm [--keys=]</div>
+                        <p>Pre-populate cache with frequently accessed data using registered warmers.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">--keys</span> <span class="parameter-type">(optional)</span> - Comma-separated list of specific keys to warm
+                        </div>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-bash"># Warm all registered cache warmers
+php artisan smart-cache:warm
+
+# Warm specific keys only
+php artisan smart-cache:warm --keys=products,categories</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">smart-cache:cleanup-chunks <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-signature">php artisan smart-cache:cleanup-chunks</div>
+                        <p>Clean up orphaned chunks from expired or deleted chunked cache entries.</p>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-bash"># Run cleanup manually
+php artisan smart-cache:cleanup-chunks
+
+# Schedule in Kernel.php
+$schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                         </div>
                     </div>
 
