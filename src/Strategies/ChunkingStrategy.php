@@ -5,6 +5,7 @@ namespace SmartCache\Strategies;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Collections\LazyChunkedCollection;
 use SmartCache\Services\SmartChunkSizeCalculator;
+use SmartCache\Services\OrphanChunkCleanupService;
 
 class ChunkingStrategy implements OptimizationStrategy
 {
@@ -34,6 +35,11 @@ class ChunkingStrategy implements OptimizationStrategy
     protected ?SmartChunkSizeCalculator $sizeCalculator = null;
 
     /**
+     * @var OrphanChunkCleanupService|null
+     */
+    protected ?OrphanChunkCleanupService $cleanupService = null;
+
+    /**
      * ChunkingStrategy constructor.
      *
      * @param int $threshold Size threshold for chunking (in bytes)
@@ -55,6 +61,17 @@ class ChunkingStrategy implements OptimizationStrategy
         if ($smartSizing) {
             $this->sizeCalculator = new SmartChunkSizeCalculator();
         }
+    }
+
+    /**
+     * Set the cleanup service for tracking chunks.
+     *
+     * @param OrphanChunkCleanupService $cleanupService
+     * @return void
+     */
+    public function setCleanupService(OrphanChunkCleanupService $cleanupService): void
+    {
+        $this->cleanupService = $cleanupService;
     }
 
     /**
@@ -117,10 +134,15 @@ class ChunkingStrategy implements OptimizationStrategy
         foreach ($chunks as $index => $chunk) {
             $chunkKey = "_sc_chunk_{$prefix}_{$index}";
             $chunkKeys[] = $chunkKey;
-            
+
             if ($cache) {
                 $cache->put($chunkKey, $chunk, $ttl);
             }
+        }
+
+        // Register chunks for orphan cleanup tracking
+        if ($this->cleanupService !== null) {
+            $this->cleanupService->registerChunks($prefix, $chunkKeys);
         }
 
         return [
