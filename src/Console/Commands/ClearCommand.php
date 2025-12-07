@@ -5,230 +5,181 @@ namespace SmartCache\Console\Commands;
 use Illuminate\Console\Command;
 use SmartCache\Contracts\SmartCache;
 
+/**
+ * Clear SmartCache managed items.
+ */
 class ClearCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'smart-cache:clear {key? : The specific cache key to clear} {--force : Force clear keys even if not managed by SmartCache}';
+    protected $description = 'Clear SmartCache managed items. Optionally specify a key to clear only that item.';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Clear SmartCache managed items. Optionally specify a key to clear only that item. Use --force to clear keys even if not managed by SmartCache.';
-
-    /**
-     * Execute the console command.
-     */
     public function handle(SmartCache $cache): int
     {
         $specificKey = $this->argument('key');
-        
+
         if ($specificKey) {
             return $this->clearSpecificKey($cache, $specificKey);
         }
-        
+
         return $this->clearAllKeys($cache);
     }
-    
-    /**
-     * Clear a specific cache key.
-     */
+
     protected function clearSpecificKey(SmartCache $cache, string $key): int
     {
         $managedKeys = $cache->getManagedKeys();
-        $isManaged = in_array($key, $managedKeys);
+        $isManaged = \in_array($key, $managedKeys, true);
         $force = $this->option('force');
-        
-        // Check if key exists in cache (either managed or regular Laravel cache)
         $keyExists = $cache->has($key);
-        
+
         if (!$isManaged && !$force) {
             if ($keyExists) {
                 $this->error("Cache key '{$key}' exists but is not managed by SmartCache. Use --force to clear it anyway.");
             } else {
                 $this->error("Cache key '{$key}' is not managed by SmartCache or does not exist.");
             }
-            return 1;
+            return self::FAILURE;
         }
-        
+
         if (!$keyExists) {
             $this->error("Cache key '{$key}' does not exist.");
-            return 1;
+            return self::FAILURE;
         }
-        
+
         if ($isManaged) {
             $this->info("Clearing SmartCache managed item with key '{$key}'...");
             $success = $cache->forget($key);
         } else {
             $this->info("Clearing cache item with key '{$key}' (not managed by SmartCache)...");
-            // Use the underlying Laravel cache to clear non-managed keys
             $success = $cache->store()->forget($key);
         }
-        
+
         if ($success) {
             $this->info("Cache key '{$key}' has been cleared successfully.");
-            return 0;
-        } else {
-            $this->error("Failed to clear cache key '{$key}'.");
-            return 1;
+            return self::SUCCESS;
         }
+
+        $this->error("Failed to clear cache key '{$key}'.");
+        return self::FAILURE;
     }
-    
-    /**
-     * Clear all SmartCache managed keys.
-     */
+
     protected function clearAllKeys(SmartCache $cache): int
     {
         $keys = $cache->getManagedKeys();
-        $count = count($keys);
+        $count = \count($keys);
         $force = $this->option('force');
-        
+
         if ($count === 0) {
             if ($force) {
                 $this->info('No SmartCache managed items found. Checking for non-managed cache keys...');
                 return $this->clearOrphanedKeys($cache);
-            } else {
-                $this->info('No SmartCache managed items found.');
-                return 0;
             }
+            $this->info('No SmartCache managed items found.');
+            return self::SUCCESS;
         }
-        
+
         $this->info("Clearing {$count} SmartCache managed items...");
-        
-        // Clean up expired keys first and report
+
         $expiredCleaned = $cache->cleanupExpiredManagedKeys();
         if ($expiredCleaned > 0) {
             $this->info("Cleaned up {$expiredCleaned} expired keys from tracking list.");
         }
-        
-        // Get updated key count after cleanup
+
         $keys = $cache->getManagedKeys();
-        $actualCount = count($keys);
-        
+        $actualCount = \count($keys);
+
         if ($actualCount === 0) {
             $this->info('All managed keys were expired and have been cleaned up.');
-            return 0;
+            return self::SUCCESS;
         }
-        
+
         $this->info("Clearing {$actualCount} active SmartCache managed items...");
-        
+
         $success = $cache->clear();
-        
+
         if ($success) {
             $this->info('All SmartCache managed items have been cleared successfully.');
-            
             if ($force) {
                 $this->info('Checking for non-managed cache keys...');
                 $this->clearOrphanedKeys($cache);
             }
-            
-            return 0;
-        } else {
-            $this->error('Some SmartCache items could not be cleared.');
-            $this->comment('This may be due to cache driver limitations or permission issues.');
-            return 1;
+            return self::SUCCESS;
         }
+
+        $this->error('Some SmartCache items could not be cleared.');
+        $this->comment('This may be due to cache driver limitations or permission issues.');
+        return self::FAILURE;
     }
-    
-    /**
-     * Clear orphaned keys (with --force, clears ALL non-managed keys).
-     */
+
     protected function clearOrphanedKeys(SmartCache $cache): int
     {
         $repository = $cache->store();
         $store = $repository->getStore();
         $cleared = 0;
         $managedKeys = $cache->getManagedKeys();
-        
-        // Try to get all cache keys (this varies by cache driver)
+
         try {
             $allKeys = $this->getAllCacheKeys($store);
-            
+
             foreach ($allKeys as $key) {
-                // With --force, clear ALL keys that are not currently managed by SmartCache
-                // but exclude SmartCache internal keys
-                if (!in_array($key, $managedKeys) && !$this->isSmartCacheInternalKey($key)) {
+                if (!\in_array($key, $managedKeys, true) && !$this->isSmartCacheInternalKey($key)) {
                     if ($repository->forget($key)) {
                         $cleared++;
                         $this->line("Cleared key: {$key}");
                     }
                 }
             }
-            
+
             if ($cleared > 0) {
                 $this->info("Cleared {$cleared} non-managed cache keys.");
             } else {
                 $this->info('No non-managed cache keys found.');
             }
-            
-            return 0;
-        } catch (\Exception $e) {
+
+            return self::SUCCESS;
+        } catch (\Exception) {
             $this->warn('Could not scan for non-managed keys with this cache driver. Only managed keys were cleared.');
-            return 0;
+            return self::SUCCESS;
         }
     }
-    
-    /**
-     * Get all cache keys (driver-dependent).
-     */
-    protected function getAllCacheKeys($store): array
+
+    protected function getAllCacheKeys(object $store): array
     {
-        $storeClass = get_class($store);
-        
-        // Redis store
-        if (str_contains($storeClass, 'Redis')) {
+        $storeClass = \get_class($store);
+
+        if (\str_contains($storeClass, 'Redis')) {
             return $store->connection()->keys('*');
         }
-        
-        // Array store (used in testing)
-        if (str_contains($storeClass, 'ArrayStore')) {
+
+        if (\str_contains($storeClass, 'ArrayStore')) {
             return $this->getArrayStoreKeys($store);
         }
-        
-        // For other drivers, we can't easily get all keys
-        // This is a limitation of Laravel's cache abstraction
+
         throw new \Exception('Cannot enumerate keys for this cache driver');
     }
 
-    /**
-     * Get all keys from ArrayStore (Laravel version compatible).
-     */
-    protected function getArrayStoreKeys($store): array
+    protected function getArrayStoreKeys(object $store): array
     {
-        // Try the newer method first (Laravel 10+)
-        if (method_exists($store, 'all')) {
-            return array_keys($store->all(false)); // false to avoid unserializing values
+        if (\method_exists($store, 'all')) {
+            return \array_keys($store->all(false));
         }
-        
-        // Fall back to reflection for older versions or when all() doesn't exist
+
         try {
             $reflection = new \ReflectionClass($store);
             $storageProperty = $reflection->getProperty('storage');
             $storageProperty->setAccessible(true);
             $storage = $storageProperty->getValue($store);
-            
-            return array_keys($storage ?? []);
-        } catch (\ReflectionException $e) {
-            // If reflection fails, return empty array
+
+            return \array_keys($storage ?? []);
+        } catch (\ReflectionException) {
             return [];
         }
     }
 
-    /**
-     * Check if a key is a SmartCache internal key.
-     */
     protected function isSmartCacheInternalKey(string $key): bool
     {
-        // Look for SmartCache-specific patterns (internal keys that shouldn't be cleared as "non-managed")
-        return str_contains($key, '_sc_') || 
-               str_contains($key, '_sc_meta') || 
-               str_contains($key, '_sc_chunk_') ||
+        return \str_contains($key, '_sc_') ||
+               \str_contains($key, '_sc_meta') ||
+               \str_contains($key, '_sc_chunk_') ||
                $key === '_sc_managed_keys';
     }
-
-} 
+}
