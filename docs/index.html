@@ -2076,10 +2076,10 @@ $stats = SmartCache::getSerializationStats($optimized);
                         </div>
                     </div>
 
-                    <h2 id="v2-features-api">✨ v2.0 Features API</h2>
+                    <h2 id="v2-features-api">✨ v1.6 Features API</h2>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::namespace() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::namespace() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::namespace(string $namespace): static</div>
                         <p>Set the active namespace for cache operations.</p>
                         <div class="parameter">
@@ -2096,7 +2096,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::flushNamespace() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::flushNamespace() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::flushNamespace(string $namespace): int</div>
                         <p>Flush all cache entries in a namespace.</p>
                         <div class="parameter">
@@ -2113,7 +2113,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::withJitter() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::withJitter() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::withJitter(float $percentage = 0.1): static</div>
                         <p>Enable TTL jitter for subsequent operations.</p>
                         <div class="parameter">
@@ -2130,7 +2130,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::isAvailable() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::isAvailable() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::isAvailable(): bool</div>
                         <p>Check if cache backend is available (circuit breaker).</p>
                         <div class="parameter">
@@ -2147,7 +2147,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::withFallback() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::withFallback() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::withFallback(callable $operation, callable $fallback): mixed</div>
                         <p>Execute cache operation with automatic fallback on failure.</p>
                         <div class="parameter">
@@ -2169,7 +2169,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::throttle() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::throttle() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::throttle(string $key, int $maxAttempts, int $decaySeconds, callable $callback): mixed</div>
                         <p>Rate-limit cache regeneration to prevent stampede.</p>
                         <div class="parameter">
@@ -2196,7 +2196,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::rememberWithStampedeProtection() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::rememberWithStampedeProtection() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::rememberWithStampedeProtection(string $key, int $ttl, callable $callback, float $beta = 1.0): mixed</div>
                         <p>Remember with XFetch algorithm for probabilistic early refresh.</p>
                         <div class="parameter">
@@ -2223,7 +2223,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::getCircuitBreakerStats() <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">SmartCache::getCircuitBreakerStats() <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">SmartCache::getCircuitBreakerStats(): array</div>
                         <p>Get circuit breaker statistics.</p>
                         <div class="parameter">
@@ -2341,7 +2341,7 @@ php artisan smart-cache:clear --force</code></pre>
                     </div>
 
                     <div class="method">
-                        <div class="method-name">smart-cache:warm <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">smart-cache:warm <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">php artisan smart-cache:warm [--keys=]</div>
                         <p>Pre-populate cache with frequently accessed data using registered warmers.</p>
                         <div class="parameter">
@@ -2358,7 +2358,7 @@ php artisan smart-cache:warm --keys=products,categories</code></pre>
                     </div>
 
                     <div class="method">
-                        <div class="method-name">smart-cache:cleanup-chunks <span class="badge badge-info">v2.0</span></div>
+                        <div class="method-name">smart-cache:cleanup-chunks <span class="badge badge-info">v1.6</span></div>
                         <div class="method-signature">php artisan smart-cache:cleanup-chunks</div>
                         <p>Clean up orphaned chunks from expired or deleted chunked cache entries.</p>
                         <div class="example">
