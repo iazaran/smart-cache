@@ -543,19 +543,19 @@
                             <p>Use exactly like Laravel's Cache facade with automatic optimizations.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>🔐 Encryption</h4>
+                            <h4>🔐 Encryption <span class="badge badge-success">NEW</span></h4>
                             <p>Automatically encrypt sensitive cached data with pattern matching.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>📁 Namespacing</h4>
+                            <h4>📁 Namespacing <span class="badge badge-success">NEW</span></h4>
                             <p>Group cache keys by namespace for better organization and bulk operations.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>⏱️ TTL Jitter</h4>
+                            <h4>⏱️ TTL Jitter <span class="badge badge-success">NEW</span></h4>
                             <p>Prevent thundering herd with random TTL variation.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>🔌 Circuit Breaker</h4>
+                            <h4>🔌 Circuit Breaker <span class="badge badge-success">NEW</span></h4>
                             <p>Protect your app from cache backend failures with automatic fallbacks.</p>
                         </div>
                     </div>
@@ -879,7 +879,7 @@ SmartCache::put('all_users', $users, 3600);
                         </tbody>
                     </table>
 
-                    <h2>🎯 Adaptive Compression (New!)</h2>
+                    <h2>🎯 Adaptive Compression</h2>
                     <p>Auto-optimize compression levels based on data characteristics:</p>
 
                     <pre><code class="language-php">// Enable adaptive compression
@@ -893,7 +893,7 @@ config(['smart-cache.strategies.compression.mode' => 'adaptive']);
 SmartCache::put('hot_data', $frequentlyAccessed, 3600);
 SmartCache::put('cold_data', $rarelyAccessed, 3600);</code></pre>
 
-                    <h2>💾 Lazy Loading (New!)</h2>
+                    <h2>💾 Lazy Loading</h2>
                     <p>Load large datasets on-demand to save memory (30-50% savings):</p>
 
                     <pre><code class="language-php">// Enable lazy loading
@@ -907,7 +907,7 @@ foreach ($largeDataset as $record) {
     // Only 3 chunks in memory at once
 }</code></pre>
 
-                    <h2>🧠 Smart Serialization (New!)</h2>
+                    <h2>🧠 Smart Serialization</h2>
                     <p>Auto-select best serialization method:</p>
 
                     <pre><code class="language-php">// Automatically chooses:
@@ -918,7 +918,7 @@ foreach ($largeDataset as $record) {
 SmartCache::put('data', $value, 3600);
 // Best method selected automatically</code></pre>
 
-                    <h2>📏 Smart Chunk Sizing (New!)</h2>
+                    <h2>📏 Smart Chunk Sizing</h2>
                     <p>Auto-calculate optimal chunk sizes based on cache driver:</p>
 
                     <pre><code class="language-php">// Enable smart chunk sizing
@@ -1137,7 +1137,7 @@ php artisan smart-cache:clear --force</code></pre>
                     <h1>🔧 Advanced Features</h1>
 
                     <div class="alert alert-info">
-                        <strong>New Features!</strong> SmartCache now includes powerful features for production environments: Atomic Locks, Cache Memoization, Events, Adaptive Compression, Lazy Loading, and more!
+                        <strong>Production Ready!</strong> SmartCache includes powerful features for production environments: Atomic Locks, Cache Memoization, Events, Adaptive Compression, Lazy Loading, and more!
                     </div>
 
                     <h2>🔒 Atomic Locks - Prevent Cache Stampede</h2>
@@ -1373,10 +1373,10 @@ SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
 
                 <!-- New Features Tab -->
                 <div id="new-features" class="tab-container">
-                    <h1>✨ New Features (v2.0)</h1>
+                    <h1>✨ New Features (v1.6)</h1>
 
                     <div class="alert alert-success">
-                        <strong>SmartCache v2.0</strong> introduces powerful new features for production environments: Encryption, Namespacing, TTL Jitter, Circuit Breaker, Rate Limiting, Cache Warming, and more!
+                        <strong>SmartCache v1.6</strong> introduces powerful new features for production environments: Encryption, Namespacing, TTL Jitter, Circuit Breaker, Rate Limiting, Cache Warming, and more!
                     </div>
 
                     <h2>🔐 Encryption Strategy</h2>
