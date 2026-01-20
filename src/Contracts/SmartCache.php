@@ -68,11 +68,27 @@ interface SmartCache
     public function rememberForever(string $key, \Closure $callback): mixed;
 
     /**
-     * Get the underlying cache store.
+     * Get a SmartCache instance using a specific cache store.
      *
+     * When called without arguments, returns the current instance.
+     * When called with a store name, returns a new SmartCache instance
+     * configured to use that store while maintaining all optimization strategies.
+     *
+     * @param string|null $name The cache store name (e.g., 'redis', 'file', 'memcached')
+     * @return static
+     */
+    public function store(string|null $name = null): static;
+
+    /**
+     * Get the underlying cache repository directly.
+     *
+     * This provides raw access to Laravel's cache repository without SmartCache optimizations.
+     * Use this when you need direct access to the cache driver.
+     *
+     * @param string|null $name The store name (null for current store)
      * @return \Illuminate\Contracts\Cache\Repository
      */
-    public function store(string|null $name = null): \Illuminate\Contracts\Cache\Repository;
+    public function repository(string|null $name = null): \Illuminate\Contracts\Cache\Repository;
 
     /**
      * Clear all cache keys managed by SmartCache.

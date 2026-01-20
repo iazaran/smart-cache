@@ -334,12 +334,37 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function store(string|null $name = null): Repository
+    public function store(string|null $name = null): static
+    {
+        if ($name === null) {
+            return $this;
+        }
+
+        // Create a new SmartCache instance with the specified store
+        // This preserves all optimization strategies while using a different cache driver
+        return new static(
+            $this->cacheManager->store($name),
+            $this->cacheManager,
+            $this->config,
+            $this->strategies
+        );
+    }
+
+    /**
+     * Get the underlying cache repository.
+     *
+     * This provides direct access to the Laravel cache repository without SmartCache optimizations.
+     * Use this when you need raw access to the cache driver.
+     *
+     * @param string|null $name The store name (null for current store)
+     * @return Repository
+     */
+    public function repository(string|null $name = null): Repository
     {
         if ($name === null) {
             return $this->cache;
         }
-        
+
         return $this->cacheManager->store($name);
     }
 

@@ -16,7 +16,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static mixed swr(string $key, \Closure $callback, int $ttl = 3600, int $staleTtl = 7200)
  * @method static mixed stale(string $key, \Closure $callback, int $ttl = 1800, int $staleTtl = 86400)
  * @method static mixed refreshAhead(string $key, \Closure $callback, int $ttl = 3600, int $refreshWindow = 600)
- * @method static \Illuminate\Contracts\Cache\Repository store(string|null $name = null)
+ * @method static \SmartCache\SmartCache store(string|null $name = null)
+ * @method static \Illuminate\Contracts\Cache\Repository repository(string|null $name = null)
  * @method static bool clear()
  * @method static array getManagedKeys()
  * @method static static tags(string|array $tags)
@@ -35,7 +36,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array analyzePerformance()
  * @method static int cleanupExpiredManagedKeys()
  * @method static bool hasFeature(string $feature)
- * 
+ *
  * @see \SmartCache\SmartCache
  */
 class SmartCache extends Facade
