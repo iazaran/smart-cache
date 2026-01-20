@@ -244,15 +244,104 @@ class SmartCacheTest extends TestCase
         $this->assertContains($key2, $managedKeys);
     }
 
-    public function test_can_get_different_cache_stores()
+    public function test_store_returns_smart_cache_instance()
     {
-        // Test getting default store
+        // Test getting default store returns self
         $defaultStore = $this->smartCache->store();
-        $this->assertEquals($this->getCacheStore(), $defaultStore);
+        $this->assertInstanceOf(\SmartCache\SmartCache::class, $defaultStore);
+        $this->assertSame($this->smartCache, $defaultStore);
 
-        // Test getting named store
+        // Test getting named store returns a new SmartCache instance
         $arrayStore = $this->smartCache->store('array');
-        $this->assertNotNull($arrayStore);
+        $this->assertInstanceOf(\SmartCache\SmartCache::class, $arrayStore);
+        $this->assertNotSame($this->smartCache, $arrayStore);
+    }
+
+    public function test_store_method_preserves_optimization_strategies()
+    {
+        // Create a SmartCache instance with compression enabled
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [new CompressionStrategy(1024, 6)]
+        );
+
+        // Get a store instance for array driver
+        $arraySmartCache = $smartCache->store('array');
+
+        // Store large data through the new store instance
+        $key = 'store-optimization-test';
+        $value = $this->createCompressibleData();
+
+        $arraySmartCache->put($key, $value);
+
+        // Verify the value is compressed in the raw cache
+        $rawCached = $this->getCacheStore('array')->get($key);
+        $this->assertValueIsCompressed($rawCached);
+
+        // Verify we can retrieve the original value
+        $retrieved = $arraySmartCache->get($key);
+        $this->assertEquals($value, $retrieved);
+    }
+
+    public function test_store_method_allows_chaining_operations()
+    {
+        // Test that store() allows chaining cache operations
+        $key = 'chained-store-key';
+        $value = 'chained-value';
+
+        // Put using chained store
+        $this->smartCache->store('array')->put($key, $value, 3600);
+
+        // Get using chained store
+        $retrieved = $this->smartCache->store('array')->get($key);
+        $this->assertEquals($value, $retrieved);
+
+        // Remember using chained store
+        $rememberValue = $this->smartCache->store('array')->remember('remember-chain-key', 3600, fn() => 'remembered');
+        $this->assertEquals('remembered', $rememberValue);
+    }
+
+    public function test_store_method_uses_correct_driver()
+    {
+        $key = 'driver-test-key';
+        $value = 'test-value';
+
+        // Store in array driver via store() method
+        $this->smartCache->store('array')->put($key, $value);
+
+        // Value should be in array store
+        $this->assertTrue($this->smartCache->store('array')->has($key));
+
+        // Value should not be in file store (different driver)
+        $this->assertFalse($this->smartCache->store('file')->has($key));
+    }
+
+    public function test_repository_method_returns_raw_cache()
+    {
+        // Test getting default repository
+        $defaultRepo = $this->smartCache->repository();
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Repository::class, $defaultRepo);
+        $this->assertEquals($this->getCacheStore(), $defaultRepo);
+
+        // Test getting named repository
+        $arrayRepo = $this->smartCache->repository('array');
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Repository::class, $arrayRepo);
+    }
+
+    public function test_repository_bypasses_optimization()
+    {
+        $key = 'repository-bypass-test';
+        $value = $this->createCompressibleData(); // Large, compressible data
+
+        // Store via repository (should bypass SmartCache optimization)
+        $this->smartCache->repository()->put($key, $value);
+
+        // Get raw value - should NOT be compressed since we used repository
+        $rawCached = $this->getCacheStore()->get($key);
+        $this->assertEquals($value, $rawCached);
+        $this->assertIsString($rawCached); // Not wrapped in optimization array
     }
 
     public function test_chunked_data_cleanup_on_forget()
