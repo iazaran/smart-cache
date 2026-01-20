@@ -112,8 +112,7 @@ class ClearCommand extends Command
 
     protected function clearOrphanedKeys(SmartCache $cache): int
     {
-        $repository = $cache->store();
-        $store = $repository->getStore();
+        $store = $cache->getStore();
         $cleared = 0;
         $managedKeys = $cache->getManagedKeys();
 
@@ -122,7 +121,7 @@ class ClearCommand extends Command
 
             foreach ($allKeys as $key) {
                 if (!\in_array($key, $managedKeys, true) && !$this->isSmartCacheInternalKey($key)) {
-                    if ($repository->forget($key)) {
+                    if ($cache->store()->forget($key)) {
                         $cleared++;
                         $this->line("Cleared key: {$key}");
                     }

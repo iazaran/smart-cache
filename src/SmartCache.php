@@ -3,6 +3,7 @@
 namespace SmartCache;
 
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Contracts\Cache\Store;
 use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
@@ -16,7 +17,7 @@ use SmartCache\Jobs\BackgroundCacheRefreshJob;
 use SmartCache\Traits\HasLocks;
 use SmartCache\Traits\DispatchesCacheEvents;
 
-class SmartCache implements SmartCacheContract
+class SmartCache implements SmartCacheContract, Repository
 {
     use HasLocks, DispatchesCacheEvents;
     /**
@@ -170,9 +171,9 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function get(string $key, mixed $default = null): mixed
+    public function get($key, $default = null): mixed
     {
-        $key = $this->applyNamespace($key);
+        $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
         $value = $this->cache->get($key, null);
@@ -212,9 +213,9 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function put(string $key, mixed $value, $ttl = null): bool
+    public function put($key, $value, $ttl = null): bool
     {
-        $key = $this->applyNamespace($key);
+        $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
         $optimizedValue = $this->maybeOptimizeValue($value, $key, $ttl);
@@ -242,20 +243,44 @@ class SmartCache implements SmartCacheContract
     }
 
     /**
-     * {@inheritdoc}
+     * PSR-16 alias for put().
+     *
+     * @param string $key
+     * @param mixed $value
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @return bool
      */
-    public function has(string $key): bool
+    public function set($key, $value, $ttl = null): bool
     {
-        $key = $this->applyNamespace($key);
-        return $this->cache->has($key);
+        return $this->put($key, $value, $ttl);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function forget(string $key): bool
+    public function has($key): bool
     {
-        $key = $this->applyNamespace($key);
+        $key = $this->applyNamespace((string) $key);
+        return $this->cache->has($key);
+    }
+
+    /**
+     * PSR-16 alias for forget().
+     *
+     * @param string $key
+     * @return bool
+     */
+    public function delete($key): bool
+    {
+        return $this->forget($key);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function forget($key): bool
+    {
+        $key = $this->applyNamespace((string) $key);
         $value = $this->cache->get($key);
 
         // If value is chunked, clean up all chunk keys
@@ -285,9 +310,9 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function forever(string $key, mixed $value): bool
+    public function forever($key, $value): bool
     {
-        $key = $this->applyNamespace($key);
+        $key = $this->applyNamespace((string) $key);
         $optimizedValue = $this->maybeOptimizeValue($value, $key, null);
 
         // Track all keys for pattern matching and invalidation
@@ -304,43 +329,180 @@ class SmartCache implements SmartCacheContract
     /**
      * {@inheritdoc}
      */
-    public function remember(string $key, $ttl, \Closure $callback): mixed
+    public function remember($key, $ttl, \Closure $callback): mixed
     {
         if ($this->has($key)) {
             return $this->get($key);
         }
-        
+
         $value = $callback();
         $this->put($key, $value, $ttl);
-        
+
         return $value;
+    }
+
+    /**
+     * Get an item from the cache, or execute the given Closure and store the result forever.
+     * This is an alias for rememberForever().
+     *
+     * @param string $key
+     * @param \Closure $callback
+     * @return mixed
+     */
+    public function sear($key, \Closure $callback): mixed
+    {
+        return $this->rememberForever($key, $callback);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function rememberForever(string $key, \Closure $callback): mixed
+    public function rememberForever($key, \Closure $callback): mixed
     {
         if ($this->has($key)) {
             return $this->get($key);
         }
-        
+
         $value = $callback();
         $this->forever($key, $value);
-        
+
         return $value;
     }
 
     /**
      * {@inheritdoc}
      */
-    public function store(string|null $name = null): Repository
+    public function store(string|null $name = null): static
+    {
+        if ($name === null) {
+            return $this;
+        }
+
+        // Create a new SmartCache instance with the specified store
+        // This preserves all optimization strategies while using a different cache driver
+        return new static(
+            $this->cacheManager->store($name),
+            $this->cacheManager,
+            $this->config,
+            $this->strategies
+        );
+    }
+
+    /**
+     * Get the underlying cache repository.
+     *
+     * This provides direct access to the Laravel cache repository without SmartCache optimizations.
+     * Use this when you need raw access to the cache driver.
+     *
+     * @param string|null $name The store name (null for current store)
+     * @return Repository
+     */
+    public function repository(string|null $name = null): Repository
     {
         if ($name === null) {
             return $this->cache;
         }
-        
+
         return $this->cacheManager->store($name);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getStore(): Store
+    {
+        return $this->cache->getStore();
+    }
+
+    /**
+     * Retrieve an item from the cache and delete it.
+     *
+     * @param array|string $key
+     * @param mixed $default
+     * @return mixed
+     */
+    public function pull($key, $default = null): mixed
+    {
+        $value = $this->get($key, $default);
+        $this->forget($key);
+        return $value;
+    }
+
+    /**
+     * Store an item in the cache if the key does not exist.
+     *
+     * @param string $key
+     * @param mixed $value
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @return bool
+     */
+    public function add($key, $value, $ttl = null): bool
+    {
+        if ($this->has($key)) {
+            return false;
+        }
+
+        return $this->put($key, $value, $ttl);
+    }
+
+    /**
+     * Increment the value of an item in the cache.
+     *
+     * @param string $key
+     * @param mixed $value
+     * @return int|bool
+     */
+    public function increment($key, $value = 1): int|bool
+    {
+        $key = $this->applyNamespace((string) $key);
+        return $this->cache->increment($key, $value);
+    }
+
+    /**
+     * Decrement the value of an item in the cache.
+     *
+     * @param string $key
+     * @param mixed $value
+     * @return int|bool
+     */
+    public function decrement($key, $value = 1): int|bool
+    {
+        $key = $this->applyNamespace((string) $key);
+        return $this->cache->decrement($key, $value);
+    }
+
+    /**
+     * PSR-16: Obtains multiple cache items identified by their unique keys.
+     *
+     * @param iterable $keys
+     * @param mixed $default
+     * @return iterable
+     */
+    public function getMultiple($keys, $default = null): iterable
+    {
+        $results = [];
+        foreach ($keys as $key) {
+            $results[$key] = $this->get($key, $default);
+        }
+        return $results;
+    }
+
+    /**
+     * PSR-16: Persists a set of key => value pairs in the cache.
+     *
+     * @param iterable $values
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @return bool
+     */
+    public function setMultiple($values, $ttl = null): bool
+    {
+        $success = true;
+        foreach ($values as $key => $value) {
+            if (!$this->put($key, $value, $ttl)) {
+                $success = false;
+            }
+        }
+        return $success;
     }
 
     /**
@@ -1785,10 +1947,10 @@ class SmartCache implements SmartCacheContract
     /**
      * Remove multiple items from the cache.
      *
-     * @param array $keys
+     * @param iterable $keys
      * @return bool
      */
-    public function deleteMultiple(array $keys): bool
+    public function deleteMultiple($keys): bool
     {
         $success = true;
 

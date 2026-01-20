@@ -63,17 +63,12 @@ class ClearCommandTest extends TestCase
             ->twice() // Called once for display, once in clearOrphanedKeys
             ->andReturn([]);
 
-        // Mock the store to return a cache repository that will simulate an unsupported driver
-        $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        // Mock getStore to return a store that will simulate an unsupported driver
         $mockStore = Mockery::mock(\stdClass::class); // Use stdClass to simulate unsupported driver
-        
-        $mockRepository->shouldReceive('getStore')
+
+        $this->mockSmartCache->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
-            
-        $this->mockSmartCache->shouldReceive('store')
-            ->once()
-            ->andReturn($mockRepository);
 
         // Inject the mock into the command
         $this->command->setLaravel($this->app);
@@ -302,17 +297,17 @@ class ClearCommandTest extends TestCase
             ->once()
             ->with($existingKey)
             ->andReturn(true);
-            
-        // Mock the store() method to return a cache repository
-        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
-        $mockStore->shouldReceive('forget')
+
+        // Mock the store() method to return a SmartCache instance for non-managed key clearing
+        $mockStoreInstance = Mockery::mock(SmartCache::class);
+        $mockStoreInstance->shouldReceive('forget')
             ->once()
             ->with($existingKey)
             ->andReturn(true);
-            
+
         $this->mockSmartCache->shouldReceive('store')
             ->once()
-            ->andReturn($mockStore);
+            ->andReturn($mockStoreInstance);
 
         // Inject the mock into the command
         $this->command->setLaravel($this->app);
