@@ -301,18 +301,18 @@ class StatusCommandTest extends TestCase
             ->once()
             ->andReturn($this->getDefaultSmartCacheConfig());
         
-        // Mock the store() method to return a cache repository
+        // Mock the repository() method to return a cache repository
         $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
         $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
-        
+
         $mockRepository->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
-            
-        $this->mockSmartCache->shouldReceive('store')
+
+        $this->mockSmartCache->shouldReceive('repository')
             ->once()
             ->andReturn($mockRepository);
-        
+
         // Mock has() calls to check if managed keys exist
         $this->mockSmartCache->shouldReceive('has')
             ->with('key1')
@@ -355,18 +355,18 @@ class StatusCommandTest extends TestCase
             ->once()
             ->andReturn($this->getDefaultSmartCacheConfig());
         
-        // Mock the store() method to return a cache repository
+        // Mock the repository() method to return a cache repository
         $mockRepository = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
         $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
-        
+
         $mockRepository->shouldReceive('getStore')
             ->once()
             ->andReturn($mockStore);
-            
-        $this->mockSmartCache->shouldReceive('store')
+
+        $this->mockSmartCache->shouldReceive('repository')
             ->once()
             ->andReturn($mockRepository);
-        
+
         // Mock has() calls - one key exists, two are missing
         $this->mockSmartCache->shouldReceive('has')
             ->with('existing-key')

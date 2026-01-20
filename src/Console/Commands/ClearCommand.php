@@ -50,7 +50,7 @@ class ClearCommand extends Command
             $success = $cache->forget($key);
         } else {
             $this->info("Clearing cache item with key '{$key}' (not managed by SmartCache)...");
-            $success = $cache->store()->forget($key);
+            $success = $cache->repository()->forget($key);
         }
 
         if ($success) {
@@ -112,7 +112,7 @@ class ClearCommand extends Command
 
     protected function clearOrphanedKeys(SmartCache $cache): int
     {
-        $repository = $cache->store();
+        $repository = $cache->repository();
         $store = $repository->getStore();
         $cleared = 0;
         $managedKeys = $cache->getManagedKeys();
