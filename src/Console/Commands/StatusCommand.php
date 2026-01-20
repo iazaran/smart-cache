@@ -123,8 +123,7 @@ class StatusCommand extends Command
 
     protected function findAllNonManagedKeys(SmartCache $cache): array
     {
-        $repository = $cache->repository();
-        $store = $repository->getStore();
+        $store = $cache->getStore();
         $managedKeys = $cache->getManagedKeys();
         $nonManagedKeys = [];
 
