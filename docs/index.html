@@ -763,6 +763,31 @@ SmartCache::forget('users');
 // Clear all cache
 SmartCache::flush();</code></pre>
 
+                    <h2>Using Different Cache Drivers</h2>
+                    <p>Use different cache drivers while maintaining all SmartCache optimizations:</p>
+
+                        <pre><code class="language-php">// Use Redis with all SmartCache optimizations (compression, chunking, etc.)
+SmartCache::store('redis')->put('key', $value, 3600);
+SmartCache::store('redis')->get('key');
+
+// Use Memcached with optimizations
+SmartCache::store('memcached')->remember('users', 3600, fn() => User::all());
+
+// Use file cache with optimizations
+SmartCache::store('file')->put('config', $config, 86400);
+
+// Chain multiple operations on a specific store
+$redisCache = SmartCache::store('redis');
+$redisCache->put('users', $users, 3600);
+$redisCache->put('products', $products, 3600);
+
+// For raw access to Laravel's cache (bypasses SmartCache optimizations)
+SmartCache::repository('redis')->put('key', $value, 3600);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Note:</strong> The <code>store()</code> method returns a SmartCache instance, so all optimization strategies (compression, chunking, encryption, etc.) continue to work. Use <code>repository()</code> if you need direct access to Laravel's cache without SmartCache optimizations.
+                    </div>
+
                     <h2>Automatic Optimization</h2>
                     <p>SmartCache automatically optimizes your data when beneficial:</p>
 
@@ -1709,6 +1734,55 @@ SmartCache::put('config', $config, now()->addHours(2));</code></pre>
                         <div class="example">
                             <strong>Example:</strong>
                             <pre><code class="language-php">SmartCache::forget('users');</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::store() <span class="badge badge-success">Enhanced!</span></div>
+                        <div class="method-signature">SmartCache::store(string|null $name = null): static</div>
+                        <p>Get a SmartCache instance for a specific cache driver. All SmartCache optimizations (compression, chunking, encryption, etc.) are preserved.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$name</span> <span class="parameter-type">(string|null)</span> - The cache store name (redis, file, memcached, etc.)
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> static - SmartCache instance configured for the specified store
+                        </div>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-php">// Use Redis with all SmartCache optimizations
+SmartCache::store('redis')->put('key', $value, 3600);
+SmartCache::store('redis')->get('key');
+
+// Use Memcached with optimizations
+SmartCache::store('memcached')->remember('users', 3600, fn() => User::all());
+
+// Chain operations on a specific store
+$redisCache = SmartCache::store('redis');
+$redisCache->put('users', $users, 3600);
+$redisCache->put('products', $products, 3600);</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::repository() <span class="badge badge-success">New!</span></div>
+                        <div class="method-signature">SmartCache::repository(string|null $name = null): \Illuminate\Contracts\Cache\Repository</div>
+                        <p>Get direct access to Laravel's underlying cache repository. This bypasses all SmartCache optimizations.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$name</span> <span class="parameter-type">(string|null)</span> - The cache store name (redis, file, memcached, etc.)
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> Repository - Laravel's native cache repository
+                        </div>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-php">// Direct access to Redis cache (no SmartCache optimizations)
+SmartCache::repository('redis')->put('key', $value, 3600);
+
+// Direct access to default cache store
+SmartCache::repository()->get('key');</code></pre>
+                        </div>
+                        <div class="alert alert-warning" style="margin-top: 10px;">
+                            <strong>Note:</strong> Use <code>repository()</code> only when you need to bypass SmartCache optimizations. For normal usage, prefer <code>store()</code> to maintain all optimization benefits.
                         </div>
                     </div>
 
