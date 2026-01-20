@@ -629,6 +629,190 @@ class SmartCacheTest extends TestCase
         $this->assertNull($this->smartCache->get($metaKey));
     }
 
+    // ========================================
+    // Repository Interface Compliance Tests
+    // ========================================
+
+    public function test_smart_cache_implements_repository_interface()
+    {
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Repository::class, $this->smartCache);
+    }
+
+    public function test_pull_retrieves_and_deletes_item()
+    {
+        $key = 'pull-test-key';
+        $value = 'pull-test-value';
+
+        $this->smartCache->put($key, $value);
+        $this->assertTrue($this->smartCache->has($key));
+
+        $pulled = $this->smartCache->pull($key);
+        $this->assertEquals($value, $pulled);
+        $this->assertFalse($this->smartCache->has($key));
+    }
+
+    public function test_pull_returns_default_when_key_missing()
+    {
+        $default = 'default-value';
+        $pulled = $this->smartCache->pull('non-existent-key', $default);
+        $this->assertEquals($default, $pulled);
+    }
+
+    public function test_add_stores_item_only_if_not_exists()
+    {
+        $key = 'add-test-key';
+
+        // Add should succeed when key doesn't exist
+        $result = $this->smartCache->add($key, 'first-value');
+        $this->assertTrue($result);
+        $this->assertEquals('first-value', $this->smartCache->get($key));
+
+        // Add should fail when key already exists
+        $result = $this->smartCache->add($key, 'second-value');
+        $this->assertFalse($result);
+        $this->assertEquals('first-value', $this->smartCache->get($key)); // Still first value
+    }
+
+    public function test_increment_increases_value()
+    {
+        $key = 'increment-test-key';
+        $this->getCacheStore()->put($key, 5);
+
+        $result = $this->smartCache->increment($key);
+        $this->assertEquals(6, $result);
+
+        $result = $this->smartCache->increment($key, 3);
+        $this->assertEquals(9, $result);
+    }
+
+    public function test_decrement_decreases_value()
+    {
+        $key = 'decrement-test-key';
+        $this->getCacheStore()->put($key, 10);
+
+        $result = $this->smartCache->decrement($key);
+        $this->assertEquals(9, $result);
+
+        $result = $this->smartCache->decrement($key, 4);
+        $this->assertEquals(5, $result);
+    }
+
+    public function test_sear_is_alias_for_remember_forever()
+    {
+        $key = 'sear-test-key';
+        $callCount = 0;
+
+        $callback = function () use (&$callCount) {
+            $callCount++;
+            return 'seared-value';
+        };
+
+        // First call should execute callback
+        $value = $this->smartCache->sear($key, $callback);
+        $this->assertEquals('seared-value', $value);
+        $this->assertEquals(1, $callCount);
+
+        // Second call should return cached value without executing callback
+        $value = $this->smartCache->sear($key, $callback);
+        $this->assertEquals('seared-value', $value);
+        $this->assertEquals(1, $callCount); // Callback should not be called again
+    }
+
+    public function test_set_is_alias_for_put()
+    {
+        $key = 'set-test-key';
+        $value = 'set-test-value';
+
+        $result = $this->smartCache->set($key, $value);
+        $this->assertTrue($result);
+        $this->assertEquals($value, $this->smartCache->get($key));
+    }
+
+    public function test_delete_is_alias_for_forget()
+    {
+        $key = 'delete-test-key';
+        $value = 'delete-test-value';
+
+        $this->smartCache->put($key, $value);
+        $this->assertTrue($this->smartCache->has($key));
+
+        $result = $this->smartCache->delete($key);
+        $this->assertTrue($result);
+        $this->assertFalse($this->smartCache->has($key));
+    }
+
+    public function test_get_store_returns_underlying_store()
+    {
+        $store = $this->smartCache->getStore();
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Store::class, $store);
+    }
+
+    public function test_get_multiple_retrieves_multiple_items()
+    {
+        $this->smartCache->put('multi1', 'value1');
+        $this->smartCache->put('multi2', 'value2');
+        $this->smartCache->put('multi3', 'value3');
+
+        $results = $this->smartCache->getMultiple(['multi1', 'multi2', 'multi3']);
+
+        $this->assertIsIterable($results);
+        $this->assertEquals('value1', $results['multi1']);
+        $this->assertEquals('value2', $results['multi2']);
+        $this->assertEquals('value3', $results['multi3']);
+    }
+
+    public function test_get_multiple_returns_default_for_missing_keys()
+    {
+        $this->smartCache->put('existing', 'exists');
+
+        $results = $this->smartCache->getMultiple(['existing', 'missing'], 'default');
+
+        $this->assertEquals('exists', $results['existing']);
+        $this->assertEquals('default', $results['missing']);
+    }
+
+    public function test_set_multiple_stores_multiple_items()
+    {
+        $values = [
+            'setmulti1' => 'val1',
+            'setmulti2' => 'val2',
+            'setmulti3' => 'val3',
+        ];
+
+        $result = $this->smartCache->setMultiple($values);
+        $this->assertTrue($result);
+
+        $this->assertEquals('val1', $this->smartCache->get('setmulti1'));
+        $this->assertEquals('val2', $this->smartCache->get('setmulti2'));
+        $this->assertEquals('val3', $this->smartCache->get('setmulti3'));
+    }
+
+    public function test_delete_multiple_removes_multiple_items()
+    {
+        $this->smartCache->put('del1', 'value1');
+        $this->smartCache->put('del2', 'value2');
+        $this->smartCache->put('del3', 'value3');
+
+        $result = $this->smartCache->deleteMultiple(['del1', 'del2']);
+        $this->assertTrue($result);
+
+        $this->assertFalse($this->smartCache->has('del1'));
+        $this->assertFalse($this->smartCache->has('del2'));
+        $this->assertTrue($this->smartCache->has('del3')); // This one was not deleted
+    }
+
+    public function test_store_returns_repository_compatible_instance()
+    {
+        $storeInstance = $this->smartCache->store('array');
+
+        // Should be both SmartCache and Repository
+        $this->assertInstanceOf(\SmartCache\SmartCache::class, $storeInstance);
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Repository::class, $storeInstance);
+
+        // Should have getStore() method working
+        $this->assertInstanceOf(\Illuminate\Contracts\Cache\Store::class, $storeInstance->getStore());
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();
