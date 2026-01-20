@@ -788,6 +788,10 @@ SmartCache::repository('redis')->put('key', $value, 3600);</code></pre>
                         <strong>Note:</strong> The <code>store()</code> method returns a SmartCache instance, so all optimization strategies (compression, chunking, encryption, etc.) continue to work. Use <code>repository()</code> if you need direct access to Laravel's cache without SmartCache optimizations.
                     </div>
 
+                    <div class="alert alert-success">
+                        <strong>Full Laravel Compatibility:</strong> SmartCache implements Laravel's <code>Illuminate\Contracts\Cache\Repository</code> interface, so it works seamlessly with any code that type-hints <code>Repository</code>. The <code>store()</code> method returns a SmartCache instance that is also a valid Repository, ensuring zero breaking changes when migrating from Laravel's Cache facade.
+                    </div>
+
                     <h2>Automatic Optimization</h2>
                     <p>SmartCache automatically optimizes your data when beneficial:</p>
 
@@ -1740,12 +1744,12 @@ SmartCache::put('config', $config, now()->addHours(2));</code></pre>
                     <div class="method">
                         <div class="method-name">SmartCache::store() <span class="badge badge-success">Enhanced!</span></div>
                         <div class="method-signature">SmartCache::store(string|null $name = null): static</div>
-                        <p>Get a SmartCache instance for a specific cache driver. All SmartCache optimizations (compression, chunking, encryption, etc.) are preserved.</p>
+                        <p>Get a SmartCache instance for a specific cache driver. All SmartCache optimizations (compression, chunking, encryption, etc.) are preserved. The returned instance also implements <code>Illuminate\Contracts\Cache\Repository</code> for full Laravel compatibility.</p>
                         <div class="parameter">
                             <span class="parameter-name">$name</span> <span class="parameter-type">(string|null)</span> - The cache store name (redis, file, memcached, etc.)
                         </div>
                         <div class="parameter">
-                            <span class="return-type">Returns:</span> static - SmartCache instance configured for the specified store
+                            <span class="return-type">Returns:</span> static - SmartCache instance configured for the specified store (also implements Repository)
                         </div>
                         <div class="example">
                             <strong>Examples:</strong>
@@ -1759,7 +1763,13 @@ SmartCache::store('memcached')->remember('users', 3600, fn() => User::all());
 // Chain operations on a specific store
 $redisCache = SmartCache::store('redis');
 $redisCache->put('users', $users, 3600);
-$redisCache->put('products', $products, 3600);</code></pre>
+$redisCache->put('products', $products, 3600);
+
+// Works with Repository type hints
+function cacheData(\Illuminate\Contracts\Cache\Repository $cache) {
+    $cache->put('key', 'value', 3600);
+}
+cacheData(SmartCache::store('redis')); // ✅ Works!</code></pre>
                         </div>
                     </div>
 

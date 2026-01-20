@@ -80,6 +80,8 @@ SmartCache::store('file')->put('config', $config, 86400);
 SmartCache::repository('redis')->put('key', $value, 3600);
 ```
 
+> **Full Laravel Compatibility:** SmartCache implements Laravel's `Repository` interface, so it works seamlessly with any code that type-hints `Illuminate\Contracts\Cache\Repository`. The `store()` method returns a SmartCache instance that is also a valid Repository.
+
 ## 💡 Core Features (Automatic Optimization)
 
 ### 1. Intelligent Compression
