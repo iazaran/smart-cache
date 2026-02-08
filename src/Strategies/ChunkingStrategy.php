@@ -80,8 +80,8 @@ class ChunkingStrategy implements OptimizationStrategy
     public function shouldApply(mixed $value, array $context = []): bool
     {
         // Check if driver supports chunking
-        if (isset($context['driver']) && 
-            isset($context['config']['drivers'][$context['driver']]['chunking']) && 
+        if (isset($context['driver']) &&
+            isset($context['config']['drivers'][$context['driver']]['chunking']) &&
             $context['config']['drivers'][$context['driver']]['chunking'] === false) {
             return false;
         }
@@ -96,10 +96,27 @@ class ChunkingStrategy implements OptimizationStrategy
             $value = $value->all();
         }
 
-        $serialized = \serialize($value);
+        // Quick count check first - must have enough items to chunk
+        if (!\is_array($value) || \count($value) <= $this->chunkSize) {
+            return false;
+        }
 
-        // Check if size exceeds threshold and the array is large enough to benefit from chunking
-        return \strlen($serialized) > $this->threshold && (\is_array($value) && \count($value) > $this->chunkSize);
+        // Estimate size without full serialization: count * avg item size
+        $count = \count($value);
+        $estimate = $count * 50; // rough estimate per item
+
+        // If clearly below threshold, skip serialization
+        if ($estimate < $this->threshold / 2) {
+            return false;
+        }
+
+        // If clearly above threshold, apply
+        if ($estimate > $this->threshold * 2) {
+            return true;
+        }
+
+        // For borderline cases, serialize to get exact size
+        return \strlen(\serialize($value)) > $this->threshold;
     }
 
     /**

@@ -48,9 +48,29 @@ class SmartSerializationStrategy implements OptimizationStrategy
      */
     public function shouldApply(mixed $value, array $context = []): bool
     {
-        // Only apply to values above the size threshold
-        $serialized = serialize($value);
-        return \strlen($serialized) >= $this->sizeThreshold;
+        // Quick type check: primitives and short strings are always below threshold
+        if (\is_int($value) || \is_float($value) || \is_bool($value) || $value === null) {
+            return false;
+        }
+
+        if (\is_string($value)) {
+            return \strlen($value) >= $this->sizeThreshold;
+        }
+
+        // For arrays, estimate size before serializing
+        if (\is_array($value)) {
+            $count = \count($value);
+            $estimate = $count * 50;
+            if ($estimate < $this->sizeThreshold / 2) {
+                return false;
+            }
+            if ($estimate > $this->sizeThreshold * 2) {
+                return true;
+            }
+        }
+
+        // Fall back to serialize for borderline cases and objects
+        return \strlen(\serialize($value)) >= $this->sizeThreshold;
     }
 
     /**
