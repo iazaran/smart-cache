@@ -1,21 +1,21 @@
-# Laravel SmartCache - Optimize Caching for Large Data
+# Laravel SmartCache — Production-Grade Caching for Large Data
 
 [![Latest Version](https://img.shields.io/packagist/v/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
 [![Tests](https://img.shields.io/github/workflow/status/iazaran/smart-cache/tests?label=tests)](https://github.com/iazaran/smart-cache/actions)
 
-**SmartCache** optimizes Laravel caching for **large datasets** through intelligent compression (up to 70% size reduction), smart chunking, and automatic optimization - while maintaining Laravel's familiar Cache API.
+**SmartCache** is a drop-in replacement for Laravel's Cache facade that automatically optimizes large datasets — delivering up to **70% size reduction** through intelligent compression, smart chunking, cost-aware eviction, and adaptive optimization. Fully implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache` for seamless integration.
 
 ## 🎯 The Problem It Solves
 
 Caching large datasets (10K+ records, API responses, reports) in Laravel can cause:
-- **Memory issues** - Large arrays consume too much RAM
-- **Storage waste** - Uncompressed data fills Redis/Memcached quickly
-- **Slow performance** - Serializing/deserializing huge objects takes time
-- **Cache stampede** - Multiple processes regenerating expensive data simultaneously
+- **Memory pressure** — Large arrays and collections consume excessive RAM
+- **Storage waste** — Uncompressed data fills Redis/Memcached quickly, increasing infrastructure costs
+- **Latency spikes** — Serializing/deserializing large objects degrades response times
+- **Cache stampede** — Multiple processes regenerating expensive data simultaneously under load
 
-**SmartCache fixes all of this automatically.**
+**SmartCache addresses all of these automatically, with zero code changes required.**
 
 ## 📦 Installation
 
@@ -49,7 +49,7 @@ $users = SmartCache::remember('users', 3600, function() {
 });
 ```
 
-**✨ The Magic:** Large data is automatically compressed and chunked - reducing cache size by up to 70%!
+**How it works:** Large data is automatically compressed and chunked behind the scenes — reducing cache size by up to 70% with no additional code.
 
 ### Helper Function
 
@@ -124,14 +124,14 @@ SmartCache chooses the best optimization automatically:
 | API Responses | >100KB | Both | Best performance |
 | Small Data | <50KB | None | Fastest (no overhead) |
 
-## 📈 Real Performance Impact
+## 📈 Measured Performance Impact
 
-**Production Results (E-commerce Platform):**
-- **72%** cache size reduction (15MB → 4.2MB)
-- **800MB** daily Redis memory savings
-- **40%** faster retrieval vs standard Laravel Cache
+**Production benchmark (e-commerce platform, Redis backend):**
+- **72%** cache size reduction (15 MB → 4.2 MB)
+- **800 MB** daily Redis memory savings
+- **40%** faster retrieval compared to standard Laravel Cache
 - **94.3%** cache hit ratio
-- **23ms** average retrieval time
+- **23 ms** average retrieval time
 
 ## 🔧 Advanced Features (Opt-in)
 
@@ -359,10 +359,10 @@ $data = SmartCache::rememberWithStampedeProtection('key', 3600, function() {
 
 **Benefit:** Prevents multiple processes from regenerating cache simultaneously
 
-### 🧠 Cost-Aware Caching (GreedyDual-inspired)
+### 🧠 Cost-Aware Caching
 
-SmartCache is the **only PHP cache library** that understands the *value* of what it's caching. Every `remember()` call automatically tracks:
-- **Regeneration cost** — how long the callback took (measured in milliseconds)
+Inspired by the GreedyDual-Size algorithm, SmartCache is the **only PHP cache library** that understands the *value* of what it's caching. Every `remember()` call automatically measures:
+- **Regeneration cost** — how long the callback took to execute (milliseconds)
 - **Access frequency** — how often the key is read
 - **Size** — how much memory the entry consumes
 
@@ -671,7 +671,7 @@ $users = SmartCache::get('users');       // Automatically restored!
 **That's it!** No code changes needed. You immediately get:
 - ✅ Automatic compression for large data
 - ✅ Smart chunking for large arrays
-- ✅ All new features available
+- ✅ Full access to extended capabilities (encryption, circuit breaker, cost-aware caching, and more)
 
 ## 📚 Documentation
 
@@ -686,7 +686,7 @@ $users = SmartCache::get('users');       // Automatically restored!
 
 ## 🧪 Testing
 
-SmartCache includes **300+ comprehensive tests** covering all functionality:
+SmartCache includes **415+ comprehensive tests** with **1700+ assertions** covering all functionality:
 
 ```bash
 composer test
@@ -713,8 +713,8 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**Built with ❤️ for the Laravel community**
+**Built for the Laravel community**
 
-*Optimize caching for large data - from simple apps to enterprise systems*
+*Production-grade caching — from rapid prototypes to enterprise-scale systems*
 
 </div>
