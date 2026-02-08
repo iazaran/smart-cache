@@ -359,6 +359,55 @@ $data = SmartCache::rememberWithStampedeProtection('key', 3600, function() {
 
 **Benefit:** Prevents multiple processes from regenerating cache simultaneously
 
+### 🧠 Cost-Aware Caching (GreedyDual-inspired)
+
+SmartCache is the **only PHP cache library** that understands the *value* of what it's caching. Every `remember()` call automatically tracks:
+- **Regeneration cost** — how long the callback took (measured in milliseconds)
+- **Access frequency** — how often the key is read
+- **Size** — how much memory the entry consumes
+
+```php
+// Automatic — just use remember() as usual
+$report = SmartCache::remember('analytics', 3600, function () {
+    return AnalyticsService::generateReport(); // 800ms
+});
+
+$users = SmartCache::remember('users', 3600, function () {
+    return User::all(); // 5ms
+});
+
+// See which cache entries are most valuable
+$report = SmartCache::getCacheValueReport();
+// [
+//   ['key' => 'analytics', 'cost_ms' => 800, 'access_count' => 47, 'score' => 92.4],
+//   ['key' => 'users',     'cost_ms' => 5,   'access_count' => 120, 'score' => 14.1],
+// ]
+
+// Get value score for a specific key
+$meta = SmartCache::cacheValue('analytics');
+// ['cost_ms' => 800, 'access_count' => 47, 'size_bytes' => 4096, 'score' => 92.4]
+
+// When you need to free space, find the least valuable entries
+$evictable = SmartCache::suggestEvictions(5);
+// Returns the 5 lowest-score keys — safe to remove first
+```
+
+**How scoring works:**
+`score = (cost × ln(1 + access_count) × decay) / size`
+Expensive, frequently accessed, small entries score highest. Cheap, rarely used, large entries score lowest.
+
+**Configuration:**
+```php
+// config/smart-cache.php
+'cost_aware' => [
+    'enabled' => true,           // Toggle on/off
+    'max_tracked_keys' => 1000,  // Limit metadata memory
+    'metadata_ttl' => 86400,     // Metadata persistence (1 day)
+],
+```
+
+**Benefit:** Data-driven cache optimization. Know exactly which keys matter and which waste space.
+
 ### 🔥 Cache Warming
 
 Pre-warm cache with artisan command:
