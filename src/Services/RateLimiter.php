@@ -32,6 +32,17 @@ class RateLimiter
         $window = $window ?? $this->window;
 
         $rateLimitKey = "_sc_rate:{$key}";
+
+        // Use atomic increment when supported by the store
+        $store = $this->cache->getStore();
+        if (\method_exists($store, 'increment')) {
+            // Initialize the key if it doesn't exist
+            $this->cache->add($rateLimitKey, 0, $window);
+            $current = (int) $store->increment($rateLimitKey);
+            return $current <= $maxAttempts;
+        }
+
+        // Fallback for stores without atomic increment
         $current = (int) $this->cache->get($rateLimitKey, 0);
 
         if ($current >= $maxAttempts) {
