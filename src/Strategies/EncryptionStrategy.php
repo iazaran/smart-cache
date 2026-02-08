@@ -3,6 +3,7 @@
 namespace SmartCache\Strategies;
 
 use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 
 /**
@@ -76,7 +77,11 @@ class EncryptionStrategy implements OptimizationStrategy
         try {
             $decrypted = $this->encrypter->decrypt($value['data']);
             return \unserialize($decrypted);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            Log::warning('SmartCache: Failed to decrypt cached value', [
+                'key' => $context['key'] ?? 'unknown',
+                'error' => $e->getMessage(),
+            ]);
             return null;
         }
     }
