@@ -1,671 +1,328 @@
-# Laravel SmartCache - Optimize Caching for Large Data
+# Laravel SmartCache
 
-[![Latest Version](https://img.shields.io/packagist/v/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
-[![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
-[![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg)](https://packagist.org/packages/iazaran/smart-cache)
-[![Tests](https://img.shields.io/github/workflow/status/iazaran/smart-cache/tests?label=tests)](https://github.com/iazaran/smart-cache/actions)
+[![Latest Version](https://img.shields.io/packagist/v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
+[![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
+[![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
+[![Tests](https://img.shields.io/badge/tests-415%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
 
-**SmartCache** optimizes Laravel caching for **large datasets** through intelligent compression (up to 70% size reduction), smart chunking, and automatic optimization - while maintaining Laravel's familiar Cache API.
+A drop-in replacement for Laravel's `Cache` facade that automatically compresses, chunks, and optimizes cached data. Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache` — your existing code works unchanged.
 
-## 🎯 The Problem It Solves
+**PHP 8.1+ · Laravel 8–12 · All cache drivers**
 
-Caching large datasets (10K+ records, API responses, reports) in Laravel can cause:
-- **Memory issues** - Large arrays consume too much RAM
-- **Storage waste** - Uncompressed data fills Redis/Memcached quickly
-- **Slow performance** - Serializing/deserializing huge objects takes time
-- **Cache stampede** - Multiple processes regenerating expensive data simultaneously
-
-**SmartCache fixes all of this automatically.**
-
-## 📦 Installation
+## Installation
 
 ```bash
 composer require iazaran/smart-cache
 ```
 
-**That's it!** Works out-of-the-box. No configuration required.
+No configuration required. Works immediately with any cache driver (Redis, File, Database, Memcached, Array).
 
-**Requirements:**
-- PHP 8.1+
-- Laravel 8.0 - 12.x
-- Any cache driver (Redis, File, Database, Memcached, Array)
-
-## 🚀 Quick Start
-
-### Drop-in Replacement
-
-Use exactly like Laravel's `Cache` facade:
+## Quick Start
 
 ```php
 use SmartCache\Facades\SmartCache;
 
-// Works exactly like Laravel Cache
+// Same API as Laravel's Cache facade — with automatic optimization
 SmartCache::put('users', $users, 3600);
 $users = SmartCache::get('users');
 
 // Remember pattern
-$users = SmartCache::remember('users', 3600, function() {
-    return User::all();
-});
-```
+$users = SmartCache::remember('users', 3600, fn() => User::all());
 
-**✨ The Magic:** Large data is automatically compressed and chunked - reducing cache size by up to 70%!
-
-### Helper Function
-
-```php
-// Store
+// Helper function
 smart_cache(['products' => $products], 3600);
-
-// Retrieve
 $products = smart_cache('products');
 ```
 
-### Using Different Cache Drivers
+Large data is automatically compressed and chunked behind the scenes. No code changes needed.
 
-Use different cache drivers while maintaining all SmartCache optimizations:
+### Multiple Cache Drivers
 
 ```php
-// Use Redis with all SmartCache optimizations (compression, chunking, etc.)
+// Each store preserves all SmartCache optimizations
 SmartCache::store('redis')->put('key', $value, 3600);
-SmartCache::store('redis')->get('key');
-
-// Use Memcached with optimizations
 SmartCache::store('memcached')->remember('users', 3600, fn() => User::all());
 
-// Use file cache with optimizations
-SmartCache::store('file')->put('config', $config, 86400);
-
-// For raw access to Laravel's cache (bypasses SmartCache optimizations)
+// Bypass SmartCache when needed
 SmartCache::repository('redis')->put('key', $value, 3600);
 ```
 
-> **Full Laravel Compatibility:** SmartCache implements Laravel's `Repository` interface, so it works seamlessly with any code that type-hints `Illuminate\Contracts\Cache\Repository`. The `store()` method returns a SmartCache instance that is also a valid Repository.
+SmartCache implements `Illuminate\Contracts\Cache\Repository`, so it works anywhere Laravel's Cache contract is expected.
 
-## 💡 Core Features (Automatic Optimization)
+## Automatic Optimization
 
-### 1. Intelligent Compression
+SmartCache selects the best strategy based on your data:
 
-Large data is automatically compressed:
+| Data Profile | Strategy | Effect |
+|---|---|---|
+| Arrays with 5 000+ items | Chunking | Lower memory, faster access |
+| Serialized data > 50 KB | Compression | Significant size reduction (gzip) |
+| API responses > 100 KB | Chunking + Compression | Best of both |
+| Data < 50 KB | None | Zero overhead |
 
-```php
-// Large API response - automatically compressed
-$apiData = Http::get('api.example.com/large-dataset')->json();
-SmartCache::put('api_data', $apiData, 3600);
-// Automatically compressed with gzip, saving up to 70% space
-```
+All thresholds are configurable. See [Configuration](#configuration).
 
-**When it applies:** Data > 50KB (configurable)
-**Benefit:** 60-80% size reduction
+## Advanced Features
 
-### 2. Smart Chunking
+Every feature below is **opt-in** and backward-compatible.
 
-Large arrays are automatically split into manageable chunks:
-
-```php
-// 10,000+ records - automatically chunked
-$users = User::with('profile', 'posts')->get();
-SmartCache::put('all_users', $users, 3600);
-// Automatically split into 1000-item chunks
-```
-
-**When it applies:** Arrays with 5000+ items (configurable)
-**Benefit:** Better memory usage, faster access
-
-### 3. Automatic Strategy Selection
-
-SmartCache chooses the best optimization automatically:
-
-| Data Type | Size | Strategy | Benefit |
-|-----------|------|----------|---------|
-| Large Arrays (5000+ items) | Any | Chunking | Better memory, faster access |
-| Text/Strings | >50KB | Compression | 60-80% size reduction |
-| Mixed Objects | >50KB | Compression | Optimal serialization |
-| API Responses | >100KB | Both | Best performance |
-| Small Data | <50KB | None | Fastest (no overhead) |
-
-## 📈 Real Performance Impact
-
-**Production Results (E-commerce Platform):**
-- **72%** cache size reduction (15MB → 4.2MB)
-- **800MB** daily Redis memory savings
-- **40%** faster retrieval vs standard Laravel Cache
-- **94.3%** cache hit ratio
-- **23ms** average retrieval time
-
-## 🔧 Advanced Features (Opt-in)
-
-All advanced features are **opt-in** and disabled by default for maximum compatibility.
-
-### 🔒 Atomic Locks - Prevent Cache Stampede
-
-Prevent multiple processes from regenerating expensive cache simultaneously:
+### Atomic Locks
 
 ```php
-$lock = SmartCache::lock('expensive_operation', 10);
-
-if ($lock->get()) {
-    // Only one process executes this
-    $data = expensiveApiCall();
-    SmartCache::put('api_data', $data, 3600);
-    $lock->release();
-}
-
-// Or use callback pattern
-SmartCache::lock('regenerate_cache', 30)->get(function() {
+SmartCache::lock('expensive_operation', 10)->get(function () {
     return regenerateExpensiveData();
 });
 ```
 
-**Benefit:** Prevents cache stampede, reduces server load
-
-### ⚡ Cache Memoization - 10-100x Faster
-
-Cache data in memory for the current request:
+### In-Request Memoization
 
 ```php
 $memo = SmartCache::memo();
-
-// First call hits cache, subsequent calls are instant
 $users = $memo->remember('users', 3600, fn() => User::all());
-$users = $memo->get('users'); // Instant! (from memory)
-$users = $memo->get('users'); // Still instant!
-
-// Perfect for loops
-foreach ($products as $product) {
-    $category = $memo->get("category_{$product->category_id}");
-}
+$users = $memo->get('users'); // instant — served from memory
 ```
 
-**Benefit:** 10-100x faster repeated access within same request/job
-
-### 🔢 Batch Operations
-
-Optimize multiple cache operations:
+### Batch Operations
 
 ```php
-// Retrieve multiple keys
 $values = SmartCache::many(['key1', 'key2', 'key3']);
-
-// Store multiple keys
-SmartCache::putMany([
-    'key1' => 'value1',
-    'key2' => 'value2',
-], 3600);
-
-// Delete multiple keys
+SmartCache::putMany(['key1' => $a, 'key2' => $b], 3600);
 SmartCache::deleteMultiple(['key1', 'key2', 'key3']);
 ```
 
-### 🎯 Adaptive Compression
-
-Auto-optimize compression levels based on data characteristics:
+### Adaptive Compression
 
 ```php
-// Enable in config
+// Adjusts compression level per entry based on access frequency and compressibility
 config(['smart-cache.strategies.compression.mode' => 'adaptive']);
-
-// Automatically selects optimal level:
-SmartCache::put('hot_data', $frequentlyAccessed, 3600);  // Level 3-4 (faster)
-SmartCache::put('cold_data', $rarelyAccessed, 3600);     // Level 7-9 (smaller)
 ```
 
-**How it works:**
-- Analyzes data compressibility
-- Tracks access frequency
-- Hot data = faster compression
-- Cold data = higher compression
-
-### 💾 Lazy Loading
-
-Load large datasets on-demand to save memory:
+### Lazy Loading
 
 ```php
-// Enable in config
 config(['smart-cache.strategies.chunking.lazy_loading' => true]);
 
-// Returns LazyChunkedCollection
-$largeDataset = SmartCache::get('100k_records');
-
-// Chunks loaded on-demand (max 3 in memory)
-foreach ($largeDataset as $record) {
-    processRecord($record);
-}
-
-// Access specific items
-$item = $largeDataset[50000]; // Only loads needed chunk
+$dataset = SmartCache::get('100k_records'); // LazyChunkedCollection
+foreach ($dataset as $record) { /* max 3 chunks in memory */ }
 ```
 
-**Benefit:** 30-50% memory savings for large datasets
-
-### 🧠 Smart Serialization
-
-Auto-select best serialization method:
+### Cache Events
 
 ```php
-// Automatically chooses:
-SmartCache::put('simple', ['key' => 'value'], 3600);  // JSON (fastest)
-SmartCache::put('complex', $objectGraph, 3600);       // igbinary/PHP
-```
-
-**Methods:** JSON → igbinary (if available) → PHP serialize
-
-### 📡 Cache Events
-
-Monitor cache operations in real-time:
-
-```php
-// Enable in config
 config(['smart-cache.events.enabled' => true]);
 
-// Listen to events
 Event::listen(CacheHit::class, fn($e) => Log::info("Hit: {$e->key}"));
 Event::listen(CacheMissed::class, fn($e) => Log::warning("Miss: {$e->key}"));
-Event::listen(OptimizationApplied::class, fn($e) =>
-    Log::info("Optimized {$e->key}: {$e->ratio}% reduction")
-);
+Event::listen(OptimizationApplied::class, fn($e) => Log::info("Optimized: {$e->key}"));
 ```
 
-**Events:** CacheHit, CacheMissed, KeyWritten, KeyForgotten, OptimizationApplied
-
-### 🔐 Encryption Strategy
-
-Encrypt sensitive cached data automatically:
+### Encryption at Rest
 
 ```php
-// Enable in config
-config(['smart-cache.encryption.enabled' => true]);
-config(['smart-cache.encryption.keys' => ['user_*', 'payment_*']]);
-
-// Sensitive data is automatically encrypted
-SmartCache::put('user_123_ssn', $sensitiveData, 3600);
-// Data encrypted at rest, decrypted on retrieval
+// config/smart-cache.php
+'encryption' => [
+    'enabled' => true,
+    'keys' => ['user_*', 'payment_*'],
+],
 ```
 
-**Benefit:** Secure sensitive data in cache without code changes
-
-### 🏷️ Cache Namespacing
-
-Group and manage cache keys by namespace:
+### Namespacing
 
 ```php
-// Set namespace for operations
-SmartCache::namespace('users')->put('profile', $data, 3600);
-SmartCache::namespace('users')->put('settings', $settings, 3600);
-
-// Flush entire namespace
-SmartCache::flushNamespace('users'); // Clears all user:* keys
-
-// Get all keys in namespace
-$keys = SmartCache::getNamespaceKeys('users');
+SmartCache::namespace('api_v2')->put('users', $users, 3600);
+SmartCache::flushNamespace('api_v2');
 ```
 
-**Benefit:** Organize cache keys, easy bulk invalidation
-
-### ⏱️ TTL Jitter
-
-Prevent thundering herd with randomized TTL:
+### TTL Jitter
 
 ```php
-// Add 10% jitter to TTL
 SmartCache::withJitter(0.1)->put('popular_data', $data, 3600);
-// Actual TTL: 3240-3960 seconds (±10%)
-
-// Or use dedicated methods
-SmartCache::putWithJitter('key', $value, 3600, 0.15); // 15% jitter
-SmartCache::rememberWithJitter('key', 3600, 0.1, fn() => expensiveCall());
+// Actual TTL: 3240–3960 s (±10 %) — prevents thundering herd
 ```
 
-**Benefit:** Prevents cache stampede when many keys expire simultaneously
-
-### 🔌 Circuit Breaker
-
-Auto-fallback when cache backend fails:
+### Circuit Breaker
 
 ```php
-// Check if cache is available
-if (SmartCache::isAvailable()) {
-    $data = SmartCache::get('key');
-}
-
-// Execute with automatic fallback
 $data = SmartCache::withFallback(
-    fn() => SmartCache::get('key'),           // Primary
-    fn() => Database::query('SELECT ...')     // Fallback
+    fn() => SmartCache::get('key'),
+    fn() => $this->fallbackSource()
 );
-
-// Get circuit breaker stats
-$stats = SmartCache::getCircuitBreakerStats();
-// Returns: state, failure_count, success_count, last_failure_at
 ```
 
-**States:** Closed (normal) → Open (failing) → Half-Open (testing)
-
-### 🚦 Rate Limiting & Stampede Protection
-
-Prevent cache stampede with rate limiting:
+### Stampede Protection
 
 ```php
-// Throttle cache operations
-$result = SmartCache::throttle('api_call', 10, 60, function() {
-    return expensiveApiCall();
-}); // Max 10 calls per 60 seconds
+// XFetch algorithm — probabilistic early refresh
+$data = SmartCache::rememberWithStampedeProtection('key', 3600, fn() => expensiveQuery());
 
-// Remember with stampede protection (XFetch algorithm)
-$data = SmartCache::rememberWithStampedeProtection('key', 3600, function() {
-    return expensiveComputation();
-});
+// Rate-limited regeneration
+SmartCache::throttle('api_call', 10, 60, fn() => expensiveApiCall());
 ```
 
-**Benefit:** Prevents multiple processes from regenerating cache simultaneously
+### Cost-Aware Caching
 
-### 🔥 Cache Warming
+Implements a GreedyDual-Size–inspired scoring model. Every `remember()` call tracks regeneration cost, access frequency, and entry size to compute a value score:
 
-Pre-warm cache with artisan command:
-
-```bash
-# Warm cache using registered warmers
-php artisan smart-cache:warm
-
-# Warm specific warmer
-php artisan smart-cache:warm --warmer=ProductCacheWarmer
 ```
-
-Register warmers in your service provider:
+score = (cost × ln(1 + access_count) × decay) / size
+```
 
 ```php
-use SmartCache\Contracts\CacheWarmer;
+// Works transparently — just use remember()
+SmartCache::remember('analytics', 3600, fn() => AnalyticsService::generateReport());
 
-class ProductCacheWarmer implements CacheWarmer
+// Inspect value scores
+SmartCache::getCacheValueReport();
+SmartCache::cacheValue('analytics');
+SmartCache::suggestEvictions(5); // lowest-value entries to remove first
+```
+
+### Model Auto-Invalidation
+
+```php
+use SmartCache\Traits\CacheInvalidation;
+
+class User extends Model
 {
-    public function warm(): void
-    {
-        $products = Product::all();
-        SmartCache::put('all_products', $products, 3600);
-    }
+    use CacheInvalidation;
 
-    public function getKey(): string
+    public function getCacheKeysToInvalidate(): array
     {
-        return 'products';
+        return ["user_{$this->id}_profile", "user_{$this->id}_posts", 'users_list_*'];
     }
 }
-
-// Register in AppServiceProvider
-$this->app->tag([ProductCacheWarmer::class], 'smart-cache.warmers');
 ```
 
-### 🧹 Orphan Chunk Cleanup
+### Cache Warming
 
-Automatically clean up orphan chunks:
+```php
+php artisan smart-cache:warm
+php artisan smart-cache:warm --keys=products,categories
+```
+
+### Orphan Chunk Cleanup
 
 ```bash
-# Clean up orphan chunks
 php artisan smart-cache:cleanup-chunks
-
-# Dry run (show what would be cleaned)
-php artisan smart-cache:cleanup-chunks --dry-run
 ```
 
-### 📊 Cache Statistics Dashboard
-
-View cache statistics via web interface:
+### Statistics Dashboard
 
 ```php
-// Enable in config
-config(['smart-cache.dashboard.enabled' => true]);
-config(['smart-cache.dashboard.prefix' => 'smart-cache']);
-config(['smart-cache.dashboard.middleware' => ['web', 'auth']]);
+'dashboard' => ['enabled' => true, 'prefix' => 'smart-cache', 'middleware' => ['web', 'auth']],
+// GET /smart-cache/dashboard | /smart-cache/stats | /smart-cache/health
 ```
 
-**Routes:**
-- `GET /smart-cache/dashboard` - HTML dashboard
-- `GET /smart-cache/statistics` - JSON statistics
-- `GET /smart-cache/health` - Health check
-- `GET /smart-cache/keys` - Managed keys list
-
-## 🌊 Modern Patterns (Laravel 12+)
-
-### SWR (Stale-While-Revalidate)
-
-Serve stale data while refreshing in background:
+## SWR Patterns (Laravel 12+)
 
 ```php
-$apiData = SmartCache::swr('github_repos', function() {
-    return Http::get('https://api.github.com/user/repos')->json();
-}, 300, 900); // 5min fresh, 15min stale
+// Stale-While-Revalidate
+$data = SmartCache::swr('github_repos', fn() => Http::get('...')->json(), 300, 900);
+
+// Extended stale serving
+$config = SmartCache::stale('site_config', fn() => Config::fromDatabase(), 3600, 86400);
+
+// Refresh-ahead
+$analytics = SmartCache::refreshAhead('daily_analytics', fn() => Analytics::generateReport(), 1800, 300);
+
+// Queue-based background refresh — returns stale data immediately, refreshes asynchronously
+$data = SmartCache::asyncSwr('dashboard_stats', fn() => Stats::generate(), 300, 900, 'cache-refresh');
 ```
 
-### Extended Stale Serving
-
-For slowly changing data:
+## Invalidation
 
 ```php
-$siteConfig = SmartCache::stale('site_config', function() {
-    return Config::fromDatabase();
-}, 3600, 86400); // 1hour fresh, 24hour stale
-```
-
-### Refresh-Ahead
-
-Proactively refresh before expiration:
-
-```php
-$analytics = SmartCache::refreshAhead('daily_analytics', function() {
-    return Analytics::generateReport();
-}, 1800, 300); // 30min TTL, 5min refresh window
-```
-
-### Smart Invalidation
-
-Pattern-based cache clearing:
-
-```php
-// Clear by pattern
-SmartCache::flushPatterns([
-    'user_*',           // All user keys
-    'api_v2_*',         // All API v2 cache
-    '/product_\d+/'     // Regex: product_123, product_456
-]);
+// Pattern-based
+SmartCache::flushPatterns(['user_*', 'api_v2_*', '/product_\d+/']);
 
 // Dependency tracking
 SmartCache::dependsOn('user_posts', 'user_profile');
-SmartCache::invalidate('user_profile'); // Also clears user_posts
+SmartCache::invalidate('user_profile'); // also clears user_posts
+
+// Tag-based
+SmartCache::tags(['users'])->put('user_1', $user, 3600);
+SmartCache::flushTags(['users']);
 ```
 
-## 📊 Monitoring & Management
-
-### Performance Metrics
+## Monitoring
 
 ```php
-$metrics = SmartCache::getPerformanceMetrics();
-// Returns: hit_ratio, compression_savings, operation_timing, etc.
+SmartCache::getPerformanceMetrics(); // hit_ratio, compression_savings, timing
+SmartCache::analyzePerformance();    // health score, recommendations
 
-$analysis = SmartCache::analyzePerformance();
-// Returns: health score, recommendations, issues
+SmartCache::executeCommand('status');
+SmartCache::executeCommand('clear', ['key' => 'api_data']);
 ```
-
-### CLI Commands
 
 ```bash
-# Status overview
 php artisan smart-cache:status
-
-# Detailed analysis
 php artisan smart-cache:status --force
-
-# Clear cache
 php artisan smart-cache:clear
-php artisan smart-cache:clear expensive_api_call
 ```
 
-### HTTP Management
+## Configuration
 
-Execute commands via web interface (no SSH needed):
-
-```php
-$status = SmartCache::executeCommand('status');
-$clearResult = SmartCache::executeCommand('clear', ['key' => 'api_data']);
-```
-
-## ⚙️ Configuration
-
-### Publish Config (Optional)
+Publish the config file (optional — sensible defaults are applied automatically):
 
 ```bash
 php artisan vendor:publish --tag=smart-cache-config
 ```
 
-### Key Configuration Options
-
 ```php
-// config/smart-cache.php
+// config/smart-cache.php (excerpt)
 return [
-    // Size thresholds for optimization
     'thresholds' => [
-        'compression' => 1024 * 50,  // 50KB - compress data larger than this
-        'chunking' => 1024 * 100,    // 100KB - chunk arrays larger than this
+        'compression' => 1024 * 50,  // 50 KB
+        'chunking'    => 1024 * 100, // 100 KB
     ],
-
-    // Optimization strategies
     'strategies' => [
-        'compression' => [
-            'enabled' => true,
-            'mode' => 'fixed',       // 'fixed' or 'adaptive'
-            'level' => 6,            // 1-9 (higher = better compression)
-        ],
-        'chunking' => [
-            'enabled' => true,
-            'chunk_size' => 1000,    // Items per chunk
-            'lazy_loading' => false, // Enable for memory savings
-            'smart_sizing' => false, // Auto-calculate chunk size
-        ],
+        'compression' => ['enabled' => true, 'mode' => 'fixed', 'level' => 6],
+        'chunking'    => ['enabled' => true, 'chunk_size' => 1000],
     ],
-
-    // Events (disabled by default for performance)
-    'events' => [
-        'enabled' => false,
-    ],
-
-    // Performance monitoring
-    'monitoring' => [
-        'enabled' => true,
-        'metrics_ttl' => 3600,
-    ],
-
-    // Encryption for sensitive data
-    'encryption' => [
-        'enabled' => false,
-        'keys' => [],              // Keys to encrypt: ['user_*', 'payment_*']
-        'patterns' => [],          // Regex patterns: ['/secret_.*/']
-    ],
-
-    // Circuit breaker for cache backend failures
-    'circuit_breaker' => [
-        'enabled' => true,
-        'failure_threshold' => 5,  // Failures before opening
-        'success_threshold' => 2,  // Successes to close
-        'timeout' => 30,           // Seconds before half-open
-    ],
-
-    // Rate limiting for cache operations
-    'rate_limiter' => [
-        'enabled' => true,
-        'default_limit' => 100,    // Max operations per window
-        'window' => 60,            // Window in seconds
-    ],
-
-    // TTL jitter to prevent thundering herd
-    'jitter' => [
-        'enabled' => false,
-        'percentage' => 0.1,       // 10% jitter by default
-    ],
-
-    // Statistics dashboard
-    'dashboard' => [
-        'enabled' => false,
-        'prefix' => 'smart-cache',
-        'middleware' => ['web'],
-    ],
+    'monitoring'      => ['enabled' => true, 'metrics_ttl' => 3600],
+    'circuit_breaker' => ['enabled' => true, 'failure_threshold' => 5, 'timeout' => 30],
+    'rate_limiter'    => ['enabled' => true, 'default_limit' => 100, 'window' => 60],
+    'encryption'      => ['enabled' => false, 'keys' => []],
+    'jitter'          => ['enabled' => false, 'percentage' => 0.1],
+    'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
 ];
 ```
 
-## 🔧 Supported Cache Drivers
+## Migration from Laravel Cache
 
-| Driver | Compression | Chunking | Locks | All Features |
-|--------|-------------|----------|-------|--------------|
-| **Redis** | ✅ | ✅ | ✅ | ✅ Full Support |
-| **File** | ✅ | ✅ | ✅ | ✅ Full Support |
-| **Database** | ✅ | ✅ | ✅ | ✅ Full Support |
-| **Array** | ✅ | ✅ | ✅ | ✅ Full Support |
-| **Memcached** | ✅ | ✅ | ✅ | ✅ Full Support |
-
-**All Laravel cache drivers are fully supported!**
-
-## 🚀 Migration from Laravel Cache
-
-SmartCache is a **drop-in replacement** - your existing code works unchanged:
+Change one import — everything else stays the same:
 
 ```php
-// Before (Laravel Cache)
-use Illuminate\Support\Facades\Cache;
+- use Illuminate\Support\Facades\Cache;
++ use SmartCache\Facades\SmartCache;
 
-Cache::put('users', $users, 3600);
-$users = Cache::get('users');
-
-// After (SmartCache) - just change the import
-use SmartCache\Facades\SmartCache;
-
-SmartCache::put('users', $users, 3600);  // Now automatically optimized!
-$users = SmartCache::get('users');       // Automatically restored!
+SmartCache::put('users', $users, 3600);
+$users = SmartCache::get('users');
 ```
 
-**That's it!** No code changes needed. You immediately get:
-- ✅ Automatic compression for large data
-- ✅ Smart chunking for large arrays
-- ✅ All new features available
+## Documentation
 
-## 📚 Documentation
+[Full documentation](https://iazaran.github.io/smart-cache/) — Installation, API reference, SWR patterns, and more.
 
-**[📖 Full Documentation](https://iazaran.github.io/smart-cache/)** - Complete guide with examples
-
-### Quick Links
-- [Installation Guide](https://iazaran.github.io/smart-cache/#installation)
-- [Basic Usage](https://iazaran.github.io/smart-cache/#basic-usage)
-- [Advanced Features](https://iazaran.github.io/smart-cache/#advanced)
-- [API Reference](https://iazaran.github.io/smart-cache/#api-reference)
-- [SWR Patterns](https://iazaran.github.io/smart-cache/#swr-patterns)
-
-## 🧪 Testing
-
-SmartCache includes **300+ comprehensive tests** covering all functionality:
+## Testing
 
 ```bash
-composer test
-
-# With coverage
-composer test-coverage
+composer test            # 415 tests, 1 732 assertions
+composer test-coverage   # with code coverage
 ```
 
-## 🤝 Contributing
+See [TESTING.md](TESTING.md) for details.
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+## Contributing
 
-## 📄 License
+Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-MIT License. See [LICENSE](LICENSE) for details.
+## License
 
-## 🔗 Links
+MIT — see [LICENSE](LICENSE).
 
-- **📦 Packagist**: [iazaran/smart-cache](https://packagist.org/packages/iazaran/smart-cache)
-- **🐛 Issues**: [GitHub Issues](https://github.com/iazaran/smart-cache/issues)
-- **📖 Docs**: [Full Documentation](https://iazaran.github.io/smart-cache/)
+## Links
 
----
-
-<div align="center">
-
-**Built with ❤️ for the Laravel community**
-
-*Optimize caching for large data - from simple apps to enterprise systems*
-
-</div>
+- [Packagist](https://packagist.org/packages/iazaran/smart-cache)
+- [GitHub Issues](https://github.com/iazaran/smart-cache/issues)
+- [Documentation](https://iazaran.github.io/smart-cache/)

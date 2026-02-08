@@ -152,10 +152,10 @@ class CacheInvalidationService
             ],
         ];
 
-        // Analyze optimization usage
+        // Analyze optimization usage (use getRaw to see optimization markers)
         foreach ($managedKeys as $key) {
-            $value = $this->smartCache->get($key);
-            if (is_array($value)) {
+            $value = $this->smartCache->getRaw($key);
+            if (\is_array($value)) {
                 if (isset($value['_sc_compressed'])) {
                     $stats['optimization_stats']['compressed']++;
                 } elseif (isset($value['_sc_chunked'])) {
@@ -192,10 +192,10 @@ class CacheInvalidationService
         // Clean up expired managed keys first
         $results['expired_keys_cleaned'] = $this->smartCache->cleanupExpiredManagedKeys();
 
-        // Check for orphaned chunks
+        // Check for orphaned chunks (use getRaw to see optimization markers)
         foreach ($managedKeys as $key) {
-            $value = $this->smartCache->get($key);
-            if (is_array($value) && isset($value['_sc_chunked'])) {
+            $value = $this->smartCache->getRaw($key);
+            if (\is_array($value) && isset($value['_sc_chunked'])) {
                 $missingChunks = 0;
                 foreach ($value['chunk_keys'] as $chunkKey) {
                     if (!$this->smartCache->has($chunkKey)) {

@@ -112,6 +112,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Cost-Aware Caching
+    |--------------------------------------------------------------------------
+    |
+    | Enable cost-aware caching to track the "value" of each cached key based on
+    | regeneration cost, access frequency, and size. This allows SmartCache to
+    | provide intelligent eviction suggestions and value-based scoring.
+    |
+    */
+    'cost_aware' => [
+        'enabled' => true,
+        'max_tracked_keys' => 1000, // Maximum number of keys to track metadata for
+        'metadata_ttl' => 86400, // How long to keep cost metadata (seconds)
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Performance Monitoring
     |--------------------------------------------------------------------------
     |

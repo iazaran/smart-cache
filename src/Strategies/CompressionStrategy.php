@@ -34,8 +34,8 @@ class CompressionStrategy implements OptimizationStrategy
     public function shouldApply(mixed $value, array $context = []): bool
     {
         // Check if driver supports compression
-        if (isset($context['driver']) && 
-            isset($context['config']['drivers'][$context['driver']]['compression']) && 
+        if (isset($context['driver']) &&
+            isset($context['config']['drivers'][$context['driver']]['compression']) &&
             $context['config']['drivers'][$context['driver']]['compression'] === false) {
             return false;
         }
@@ -45,10 +45,29 @@ class CompressionStrategy implements OptimizationStrategy
             return false;
         }
 
-        // Convert to string to measure size
-        $serialized = is_string($value) ? $value : serialize($value);
-        
-        return strlen($serialized) > $this->threshold;
+        // For strings, use strlen directly (no serialization needed)
+        if (is_string($value)) {
+            return strlen($value) > $this->threshold;
+        }
+
+        // For arrays, use a quick estimate: count * average-item-size
+        // Only serialize if the estimate is close to the threshold
+        if (is_array($value)) {
+            $count = count($value);
+            // Rough estimate: each item ~50 bytes on average
+            $estimate = $count * 50;
+            // If clearly below threshold, skip
+            if ($estimate < $this->threshold / 2) {
+                return false;
+            }
+            // If clearly above threshold, apply
+            if ($estimate > $this->threshold * 2) {
+                return true;
+            }
+        }
+
+        // Fall back to serialize for borderline cases and objects
+        return strlen(serialize($value)) > $this->threshold;
     }
 
     /**

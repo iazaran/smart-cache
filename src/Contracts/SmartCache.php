@@ -58,6 +58,51 @@ interface SmartCache extends Repository
     public function hasFeature(string $feature): bool;
 
     /**
+     * Get raw (unrestored) value from cache.
+     *
+     * Returns the value as stored in cache without applying optimization restoration
+     * (e.g., decompression, dechunking). Useful for statistics and diagnostics.
+     *
+     * @param string $key
+     * @return mixed
+     */
+    public function getRaw(string $key): mixed;
+
+    /**
+     * Flush the entire cache store (clears ALL keys, not just managed ones).
+     *
+     * @return bool
+     */
+    public function flush(): bool;
+
+    /**
+     * Get the value score for a cache key (cost-aware caching).
+     *
+     * Returns metadata about how valuable a cache key is based on regeneration cost,
+     * access frequency, size, and time decay. Returns null if cost-aware caching is
+     * disabled or if no metadata exists for the key.
+     *
+     * @param string $key
+     * @return array|null
+     */
+    public function cacheValue(string $key): ?array;
+
+    /**
+     * Get a report of all tracked cache keys sorted by value score (highest first).
+     *
+     * @return array
+     */
+    public function getCacheValueReport(): array;
+
+    /**
+     * Get suggestions for which cache keys to evict based on lowest value.
+     *
+     * @param int $count Number of eviction suggestions
+     * @return array
+     */
+    public function suggestEvictions(int $count = 10): array;
+
+    /**
      * Tag cache entries for organized invalidation.
      *
      * @param string|array $tags
