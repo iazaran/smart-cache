@@ -4,6 +4,7 @@ namespace SmartCache\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
+use SmartCache\Services\CostAwareCacheManager;
 use SmartCache\SmartCache;
 use SmartCache\Strategies\CompressionStrategy;
 use SmartCache\Strategies\AdaptiveCompressionStrategy;
@@ -76,7 +77,17 @@ class SmartCacheServiceProvider extends ServiceProvider
                 );
             }
 
-            return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies);
+            // Create cost-aware manager if enabled
+            $costAwareManager = null;
+            if ($config->get('smart-cache.cost_aware.enabled', true)) {
+                $costAwareManager = new CostAwareCacheManager(
+                    $cacheManager->store(),
+                    $config->get('smart-cache.cost_aware.max_tracked_keys', 1000),
+                    $config->get('smart-cache.cost_aware.metadata_ttl', 86400)
+                );
+            }
+
+            return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies, $costAwareManager);
         });
 
         // Register alias for facade
