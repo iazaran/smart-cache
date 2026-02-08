@@ -92,6 +92,11 @@ abstract class TestCase extends OrchestraTestCase
                 'enabled' => true,
                 'log_errors' => false, // Disable logging in tests
             ],
+            'cost_aware' => [
+                'enabled' => true,
+                'max_tracked_keys' => 100,
+                'metadata_ttl' => 3600,
+            ],
         ]);
     }
 

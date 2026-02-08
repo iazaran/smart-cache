@@ -813,6 +813,193 @@ class SmartCacheTest extends TestCase
         $this->assertInstanceOf(\Illuminate\Contracts\Cache\Store::class, $storeInstance->getStore());
     }
 
+    // ====================================================================
+    // Null value support (sentinel pattern)
+    // ====================================================================
+
+    public function test_get_returns_null_as_valid_cached_value()
+    {
+        $this->smartCache->put('null-key', null);
+        $this->assertTrue($this->smartCache->has('null-key'));
+        $this->assertNull($this->smartCache->get('null-key'));
+    }
+
+    public function test_get_returns_default_for_missing_key_not_for_null_value()
+    {
+        $this->smartCache->put('null-key', null);
+        // Should return null (the cached value), not the default
+        $this->assertNull($this->smartCache->get('null-key', 'default'));
+    }
+
+    public function test_get_returns_default_only_when_key_truly_missing()
+    {
+        $this->assertEquals('default', $this->smartCache->get('missing-key', 'default'));
+    }
+
+    public function test_remember_caches_null_value()
+    {
+        $callCount = 0;
+        $result = $this->smartCache->remember('null-remember', 3600, function () use (&$callCount) {
+            $callCount++;
+            return null;
+        });
+
+        $this->assertNull($result);
+        $this->assertEquals(1, $callCount);
+
+        // Second call should return cached null without re-executing callback
+        $result2 = $this->smartCache->remember('null-remember', 3600, function () use (&$callCount) {
+            $callCount++;
+            return 'should not be called';
+        });
+
+        $this->assertNull($result2);
+        $this->assertEquals(1, $callCount);
+    }
+
+    public function test_remember_forever_caches_null_value()
+    {
+        $callCount = 0;
+        $result = $this->smartCache->rememberForever('null-forever', function () use (&$callCount) {
+            $callCount++;
+            return null;
+        });
+
+        $this->assertNull($result);
+        $this->assertEquals(1, $callCount);
+
+        // Second call should return cached null
+        $result2 = $this->smartCache->rememberForever('null-forever', function () use (&$callCount) {
+            $callCount++;
+            return 'should not be called';
+        });
+
+        $this->assertNull($result2);
+        $this->assertEquals(1, $callCount);
+    }
+
+    // ====================================================================
+    // flush() method
+    // ====================================================================
+
+    public function test_flush_clears_entire_store()
+    {
+        $this->smartCache->put('flush-key1', 'value1');
+        $this->smartCache->put('flush-key2', 'value2');
+
+        $result = $this->smartCache->flush();
+        $this->assertTrue($result);
+
+        $this->assertFalse($this->smartCache->has('flush-key1'));
+        $this->assertFalse($this->smartCache->has('flush-key2'));
+    }
+
+    // ====================================================================
+    // getRaw() method
+    // ====================================================================
+
+    public function test_get_raw_returns_unrestored_value()
+    {
+        $this->smartCache->put('raw-key', 'simple-value');
+        $rawValue = $this->smartCache->getRaw('raw-key');
+        $this->assertEquals('simple-value', $rawValue);
+    }
+
+    public function test_get_raw_returns_null_for_missing_key()
+    {
+        $this->assertNull($this->smartCache->getRaw('non-existent-raw'));
+    }
+
+    // ====================================================================
+    // Cost-Aware Caching
+    // ====================================================================
+
+    public function test_cost_aware_manager_is_available()
+    {
+        $manager = $this->smartCache->getCostAwareManager();
+        $this->assertNotNull($manager);
+        $this->assertInstanceOf(\SmartCache\Services\CostAwareCacheManager::class, $manager);
+    }
+
+    public function test_remember_records_cost_for_new_values()
+    {
+        $this->smartCache->remember('cost-test', 3600, function () {
+            usleep(10000); // 10ms delay to ensure measurable cost
+            return 'expensive-value';
+        });
+
+        $metadata = $this->smartCache->cacheValue('cost-test');
+        $this->assertNotNull($metadata);
+        $this->assertGreaterThan(0, $metadata['cost_ms']);
+        $this->assertGreaterThan(0, $metadata['size_bytes']);
+        $this->assertEquals(1, $metadata['access_count']);
+        $this->assertGreaterThan(0, $metadata['score']);
+    }
+
+    public function test_remember_records_access_on_cache_hit()
+    {
+        // First call: records cost
+        $this->smartCache->remember('access-test', 3600, fn() => 'value');
+        $meta1 = $this->smartCache->cacheValue('access-test');
+        $this->assertEquals(1, $meta1['access_count']);
+
+        // Second call: records access (cache hit)
+        $this->smartCache->remember('access-test', 3600, fn() => 'new-value');
+        $meta2 = $this->smartCache->cacheValue('access-test');
+        $this->assertEquals(2, $meta2['access_count']);
+    }
+
+    public function test_cache_value_returns_null_for_untracked_key()
+    {
+        $this->assertNull($this->smartCache->cacheValue('untracked-key'));
+    }
+
+    public function test_get_cache_value_report_returns_sorted_results()
+    {
+        // Create entries with different costs
+        $this->smartCache->remember('cheap-key', 3600, fn() => 'cheap');
+        $this->smartCache->remember('expensive-key', 3600, function () {
+            usleep(20000); // 20ms
+            return 'expensive';
+        });
+
+        $report = $this->smartCache->getCacheValueReport();
+        $this->assertNotEmpty($report);
+        $this->assertCount(2, $report);
+
+        // Should be sorted by score (highest first)
+        $this->assertGreaterThanOrEqual($report[1]['score'], $report[0]['score']);
+    }
+
+    public function test_suggest_evictions_returns_lowest_value_keys()
+    {
+        $this->smartCache->remember('keep-me', 3600, function () {
+            usleep(20000);
+            return 'expensive';
+        });
+        $this->smartCache->remember('evict-me', 3600, fn() => 'cheap');
+
+        $suggestions = $this->smartCache->suggestEvictions(1);
+        $this->assertCount(1, $suggestions);
+        // The cheap key should be suggested for eviction
+        $this->assertEquals('evict-me', $suggestions[0]['key']);
+    }
+
+    public function test_cost_aware_caching_disabled_returns_empty()
+    {
+        // Override config to disable cost-aware caching
+        $this->app['config']->set('smart-cache.cost_aware.enabled', false);
+
+        // Rebuild SmartCache instance
+        $this->app->forgetInstance(\SmartCache\Contracts\SmartCache::class);
+        $smartCache = $this->app->make(\SmartCache\Contracts\SmartCache::class);
+
+        $this->assertNull($smartCache->getCostAwareManager());
+        $this->assertNull($smartCache->cacheValue('any-key'));
+        $this->assertEmpty($smartCache->getCacheValueReport());
+        $this->assertEmpty($smartCache->suggestEvictions());
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();
