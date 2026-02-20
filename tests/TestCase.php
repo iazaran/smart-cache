@@ -97,6 +97,12 @@ abstract class TestCase extends OrchestraTestCase
                 'max_tracked_keys' => 100,
                 'metadata_ttl' => 3600,
             ],
+            'deduplication' => [
+                'enabled' => false,
+            ],
+            'self_healing' => [
+                'enabled' => false,
+            ],
         ]);
     }
 

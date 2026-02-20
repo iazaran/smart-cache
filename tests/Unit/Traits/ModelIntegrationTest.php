@@ -211,28 +211,30 @@ class ModelIntegrationTest extends TestCase
     {
         $user = new TestUser();
         $keys = $user->getCacheKeysToInvalidate();
-        
-        $this->assertContains('user_{id}_profile', $keys);
-        $this->assertContains('user_{id}_stats', $keys);
-        $this->assertContains('users_list_*', $keys);
-        
-        // Should also contain resolved placeholders
+
+        // Resolved placeholders should be present (raw templates are NOT returned)
         $this->assertContains('user_123_profile', $keys);
         $this->assertContains('user_123_stats', $keys);
+        // Keys without placeholders are returned as-is
+        $this->assertContains('users_list_*', $keys);
+        // Raw templates should NOT appear — they would cause double-invalidation
+        $this->assertNotContains('user_{id}_profile', $keys);
+        $this->assertNotContains('user_{id}_stats', $keys);
     }
 
     public function test_get_cache_tags_to_flush_with_placeholders()
     {
         $user = new TestUser();
         $tags = $user->getCacheTagsToFlush();
-        
+
+        // Tags without placeholders are returned as-is
         $this->assertContains('users', $tags);
-        $this->assertContains('user_{id}', $tags);
-        $this->assertContains('team_{team_id}', $tags);
-        
-        // Should also contain resolved placeholders
+        // Resolved placeholders should be present
         $this->assertContains('user_123', $tags);
         $this->assertContains('team_5', $tags);
+        // Raw templates should NOT appear — they would cause double-flush
+        $this->assertNotContains('user_{id}', $tags);
+        $this->assertNotContains('team_{team_id}', $tags);
     }
 
     public function test_perform_cache_invalidation_basic()
