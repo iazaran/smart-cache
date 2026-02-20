@@ -419,4 +419,19 @@ interface SmartCache extends Repository
      * @return mixed
      */
     public function rememberWithStampedeProtection(string $key, int $ttl, \Closure $callback, float $beta = 1.0): mixed;
+
+    /**
+     * Cache a value only when a condition is satisfied.
+     *
+     * The callback is always executed, but the result is stored in cache
+     * only if $condition($value) returns true.  This keeps invalid or
+     * empty data out of cache while still returning the value to the caller.
+     *
+     * @param string $key
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @param \Closure $callback   Value generator
+     * @param callable $condition  Receives generated value; return true to cache
+     * @return mixed
+     */
+    public function rememberIf(string $key, mixed $ttl, \Closure $callback, callable $condition): mixed;
 }
