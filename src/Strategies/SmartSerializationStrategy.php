@@ -139,36 +139,25 @@ class SmartSerializationStrategy implements OptimizationStrategy
     /**
      * Check if a value can be safely serialized with JSON.
      *
+     * Uses a single json_encode call which natively detects all unsupported types
+     * (resources, closures, non-stdClass objects with private state, etc.).
+     *
      * @param mixed $value
      * @return bool
      */
     protected function isJsonSafe(mixed $value): bool
     {
-        // JSON can't handle objects (except stdClass), resources, or closures
-        if (is_object($value) && !($value instanceof \stdClass)) {
+        // Quick rejection for types that json_encode cannot handle
+        if (\is_resource($value) || $value instanceof \Closure) {
             return false;
         }
-        
-        if (is_resource($value) || $value instanceof \Closure) {
+
+        if (\is_object($value) && !($value instanceof \stdClass)) {
             return false;
         }
-        
-        // For arrays, check recursively
-        if (is_array($value)) {
-            foreach ($value as $item) {
-                if (!$this->isJsonSafe($item)) {
-                    return false;
-                }
-            }
-        }
-        
-        // Try encoding to verify
-        $encoded = json_encode($value);
-        if ($encoded === false || json_last_error() !== JSON_ERROR_NONE) {
-            return false;
-        }
-        
-        return true;
+
+        // Single encode attempt — catches nested issues too
+        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !== false;
     }
 
     /**

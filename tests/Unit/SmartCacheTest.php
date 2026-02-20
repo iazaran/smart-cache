@@ -1000,6 +1000,258 @@ class SmartCacheTest extends TestCase
         $this->assertEmpty($smartCache->suggestEvictions());
     }
 
+    // ---------------------------------------------------------------
+    // Cache DNA (Write Deduplication) tests
+    // ---------------------------------------------------------------
+
+    public function test_cache_dna_skips_redundant_write()
+    {
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-test-key';
+        $value = 'hello world';
+
+        // First write — should go through
+        $this->assertTrue($smartCache->put($key, $value, 3600));
+
+        // Write same value again — should be skipped (dedup)
+        $this->assertTrue($smartCache->put($key, $value, 3600));
+
+        // Value should still be retrievable
+        $this->assertEquals($value, $smartCache->get($key));
+    }
+
+    public function test_cache_dna_writes_when_value_changes()
+    {
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-change-key';
+
+        $smartCache->put($key, 'original', 3600);
+        $this->assertEquals('original', $smartCache->get($key));
+
+        // Different value — should write
+        $smartCache->put($key, 'changed', 3600);
+        $this->assertEquals('changed', $smartCache->get($key));
+    }
+
+    public function test_cache_dna_hash_cleaned_up_on_forget()
+    {
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-forget-key';
+        $smartCache->put($key, 'data', 3600);
+
+        // Verify the DNA hash exists in the underlying store
+        $nsKey = $key; // no namespace by default
+        $this->assertNotNull($this->getCacheStore()->get("_sc_dna:{$nsKey}"));
+
+        $smartCache->forget($key);
+
+        // DNA hash should be cleaned up
+        $this->assertNull($this->getCacheStore()->get("_sc_dna:{$nsKey}"));
+    }
+
+    public function test_cache_dna_disabled_always_writes()
+    {
+        // Deduplication disabled by default in test config
+        $key = 'dna-disabled-key';
+
+        $this->smartCache->put($key, 'value', 3600);
+
+        // No DNA hash should be stored
+        $this->assertNull($this->getCacheStore()->get("_sc_dna:{$key}"));
+    }
+
+    // ---------------------------------------------------------------
+    // rememberIf (Conditional Caching) tests
+    // ---------------------------------------------------------------
+
+    public function test_remember_if_caches_when_condition_true()
+    {
+        $key = 'remember-if-true';
+        $callCount = 0;
+
+        $value = $this->smartCache->rememberIf(
+            $key,
+            3600,
+            function () use (&$callCount) {
+                $callCount++;
+                return ['status' => 'ok', 'data' => [1, 2, 3]];
+            },
+            fn ($v) => !empty($v['data'])
+        );
+
+        $this->assertEquals(['status' => 'ok', 'data' => [1, 2, 3]], $value);
+        $this->assertEquals(1, $callCount);
+
+        // Should be cached — callback should NOT be called again
+        $value2 = $this->smartCache->rememberIf(
+            $key,
+            3600,
+            function () use (&$callCount) {
+                $callCount++;
+                return ['status' => 'different'];
+            },
+            fn ($v) => true
+        );
+
+        $this->assertEquals(['status' => 'ok', 'data' => [1, 2, 3]], $value2);
+        $this->assertEquals(1, $callCount);
+    }
+
+    public function test_remember_if_does_not_cache_when_condition_false()
+    {
+        $key = 'remember-if-false';
+        $callCount = 0;
+
+        $value = $this->smartCache->rememberIf(
+            $key,
+            3600,
+            function () use (&$callCount) {
+                $callCount++;
+                return [];
+            },
+            fn ($v) => !empty($v) // empty array → false
+        );
+
+        $this->assertEquals([], $value);
+        $this->assertEquals(1, $callCount);
+
+        // Not cached — callback runs again
+        $value2 = $this->smartCache->rememberIf(
+            $key,
+            3600,
+            function () use (&$callCount) {
+                $callCount++;
+                return ['filled'];
+            },
+            fn ($v) => !empty($v)
+        );
+
+        $this->assertEquals(['filled'], $value2);
+        $this->assertEquals(2, $callCount);
+    }
+
+    public function test_remember_if_returns_value_even_when_not_cached()
+    {
+        $key = 'remember-if-return';
+
+        $value = $this->smartCache->rememberIf(
+            $key,
+            3600,
+            fn () => 'uncacheable',
+            fn () => false // never cache
+        );
+
+        $this->assertEquals('uncacheable', $value);
+        $this->assertNull($this->smartCache->get($key));
+    }
+
+    // ---------------------------------------------------------------
+    // Self-Healing Cache tests
+    // ---------------------------------------------------------------
+
+    public function test_self_healing_evicts_corrupted_entry()
+    {
+        $this->app['config']->set('smart-cache.self_healing.enabled', true);
+
+        // Create a failing restoration strategy
+        $failingStrategy = Mockery::mock(OptimizationStrategy::class);
+        $failingStrategy->shouldReceive('getIdentifier')->andReturn('failing');
+        $failingStrategy->shouldReceive('restore')->andThrow(new \Exception('Corrupted data'));
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [$failingStrategy]
+        );
+
+        // Put a value directly in the store to simulate corruption
+        $key = 'corrupted-key';
+        $this->getCacheStore()->put($key, 'corrupted-payload', 3600);
+
+        // Self-healing should evict and return null
+        $result = $smartCache->get($key);
+        $this->assertNull($result);
+
+        // Entry should be evicted
+        $this->assertNull($this->getCacheStore()->get($key));
+    }
+
+    public function test_self_healing_disabled_returns_fallback()
+    {
+        // self_healing is not enabled in default test config
+
+        $failingStrategy = Mockery::mock(OptimizationStrategy::class);
+        $failingStrategy->shouldReceive('getIdentifier')->andReturn('failing');
+        $failingStrategy->shouldReceive('restore')->andThrow(new \Exception('Corrupted data'));
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [$failingStrategy]
+        );
+
+        $key = 'corrupted-key-no-heal';
+        $this->getCacheStore()->put($key, 'bad-payload', 3600);
+
+        // Without self-healing, fallback returns original value
+        $result = $smartCache->get($key);
+        $this->assertEquals('bad-payload', $result);
+
+        // Entry should still exist
+        $this->assertNotNull($this->getCacheStore()->get($key));
+    }
+
+    public function test_self_healing_also_cleans_dna_hash()
+    {
+        $this->app['config']->set('smart-cache.self_healing.enabled', true);
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $failingStrategy = Mockery::mock(OptimizationStrategy::class);
+        $failingStrategy->shouldReceive('getIdentifier')->andReturn('failing');
+        $failingStrategy->shouldReceive('restore')->andThrow(new \Exception('Corrupted'));
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [$failingStrategy]
+        );
+
+        $key = 'dna-heal-key';
+        $this->getCacheStore()->put($key, 'bad', 3600);
+        $this->getCacheStore()->put("_sc_dna:{$key}", 'stale-hash', 3600);
+
+        $result = $smartCache->get($key);
+        $this->assertNull($result);
+
+        // Both entry and DNA hash should be evicted
+        $this->assertNull($this->getCacheStore()->get($key));
+        $this->assertNull($this->getCacheStore()->get("_sc_dna:{$key}"));
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();

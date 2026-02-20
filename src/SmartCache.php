@@ -45,20 +45,34 @@ class SmartCache implements SmartCacheContract, Repository
      *
      * Laravel's Repository treats null returns from the store as cache misses,
      * so we wrap null values in a marker array before storing.
+     * Uses a unique two-key marker to avoid collision with user data.
      */
     protected static function wrapNullValue(mixed $value): mixed
     {
-        return $value === null ? ['_sc_null' => true] : $value;
+        return $value === null ? ['__smartcache_null__' => true, '__sc_v' => 2] : $value;
     }
 
     /**
      * Unwrap a null marker back to an actual null value.
+     * Supports both legacy (_sc_null) and current (__smartcache_null__) markers.
      */
     protected static function unwrapNullValue(mixed $value): mixed
     {
-        if (\is_array($value) && \array_key_exists('_sc_null', $value) && $value['_sc_null'] === true && \count($value) === 1) {
+        if (!\is_array($value)) {
+            return $value;
+        }
+
+        // Current marker format (v2)
+        if (\array_key_exists('__smartcache_null__', $value) && $value['__smartcache_null__'] === true
+            && \array_key_exists('__sc_v', $value) && \count($value) === 2) {
             return null;
         }
+
+        // Legacy marker format (v1) — backwards compatibility
+        if (\array_key_exists('_sc_null', $value) && $value['_sc_null'] === true && \count($value) === 1) {
+            return null;
+        }
+
         return $value;
     }
 
@@ -188,6 +202,16 @@ class SmartCache implements SmartCacheContract, Repository
     protected ?CostAwareCacheManager $costAwareManager = null;
 
     /**
+     * @var bool Whether write deduplication (Cache DNA) is enabled
+     */
+    protected bool $deduplicationEnabled = false;
+
+    /**
+     * @var bool Whether self-healing cache is enabled
+     */
+    protected bool $selfHealingEnabled = false;
+
+    /**
      * SmartCache constructor.
      *
      * @param Repository $cache
@@ -217,6 +241,12 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Initialize performance monitoring flag (no cache read needed)
         $this->enablePerformanceMonitoring = $config->get('smart-cache.monitoring.enabled', true);
+
+        // Initialize write deduplication (Cache DNA)
+        $this->deduplicationEnabled = (bool) $config->get('smart-cache.deduplication.enabled', true);
+
+        // Initialize self-healing cache
+        $this->selfHealingEnabled = (bool) $config->get('smart-cache.self_healing.enabled', true);
 
         // Managed keys, dependencies, and performance metrics are lazy-loaded on first access
     }
@@ -296,6 +326,20 @@ class SmartCache implements SmartCacheContract, Repository
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
 
+        // Cache DNA — skip write when content is identical
+        $newHash = null;
+        if ($this->deduplicationEnabled) {
+            $newHash = $this->contentHash($optimizedValue);
+            $storedHash = $this->cache->get("_sc_dna:{$key}");
+            if ($storedHash === $newHash) {
+                // Content unchanged — record a deduplicated write metric and return early
+                if ($this->enablePerformanceMonitoring) {
+                    $this->recordPerformanceMetric('cache_write_dedup', $key, $startTime);
+                }
+                return true;
+            }
+        }
+
         // Track all keys for pattern matching and invalidation
         $this->trackKey($key);
 
@@ -305,6 +349,12 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         $result = $this->cache->put($key, $optimizedValue, $ttl);
+
+        // Persist content hash for future deduplication
+        if ($this->deduplicationEnabled && $result) {
+            $hashTtl = \is_int($ttl) && $ttl > 0 ? $ttl : 86400;
+            $this->cache->put("_sc_dna:{$key}", $newHash, $hashTtl);
+        }
 
         if ($this->enablePerformanceMonitoring) {
             $this->recordPerformanceMetric('cache_write', $key, $startTime, [
@@ -371,6 +421,11 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Clean up SWR/stampede metadata (consistent format)
         $this->cache->forget("_sc_meta:{$key}");
+
+        // Clean up Cache DNA hash
+        if ($this->deduplicationEnabled) {
+            $this->cache->forget("_sc_dna:{$key}");
+        }
 
         // Remove from tracked keys
         $this->untrackKey($key);
@@ -771,6 +826,72 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
+     * Persist cost-aware metadata to cache.
+     * Called by terminating callback to ensure data is saved reliably.
+     *
+     * @return void
+     */
+    public function persistCostMetadata(): void
+    {
+        if ($this->costAwareManager !== null) {
+            $this->costAwareManager->persist();
+        }
+    }
+
+    /**
+     * Compute a fast content hash for write deduplication (Cache DNA).
+     *
+     * @param mixed $value
+     * @return string
+     */
+    protected function contentHash(mixed $value): string
+    {
+        return \md5(\serialize($value));
+    }
+
+    /**
+     * Cache a value only when the condition is met.
+     *
+     * If the condition callable returns false the value is still returned
+     * but is NOT stored in cache, keeping stale or invalid data out of the
+     * store.  Useful for business-rule filtering (e.g. don't cache empty
+     * API responses or error payloads).
+     *
+     * @param string $key
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @param \Closure $callback   Value generator
+     * @param callable $condition  Receives the generated value; return true to cache
+     * @return mixed The generated value (cached or not)
+     */
+    public function rememberIf(string $key, mixed $ttl, \Closure $callback, callable $condition): mixed
+    {
+        $sentinel = static::sentinel();
+        $value = $this->get($key, $sentinel);
+
+        if ($value !== $sentinel) {
+            if ($this->costAwareManager !== null) {
+                $this->costAwareManager->recordAccess($this->applyNamespace($key));
+            }
+            return $value;
+        }
+
+        $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
+        $value = $callback();
+
+        if ($condition($value)) {
+            $this->put($key, $value, $ttl);
+
+            if ($this->costAwareManager !== null && $startTime !== null) {
+                $costMs = (\microtime(true) - $startTime) * 1000;
+                $size = $this->calculateDataSize($value);
+                $this->costAwareManager->recordCost($this->applyNamespace($key), $costMs, $size);
+            }
+        }
+
+        return $value;
+    }
+
+    /**
      * Apply optimization strategies if applicable.
      *
      * @param mixed $value
@@ -842,12 +963,25 @@ class SmartCache implements SmartCacheContract, Repository
                 if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                     Log::warning("SmartCache restoration failed for {$key}: " . $e->getMessage());
                 }
-                
+
+                // Self-Healing: evict the corrupted entry so the next remember()
+                // call transparently regenerates the data instead of serving garbage.
+                if ($this->selfHealingEnabled) {
+                    try {
+                        $this->cache->forget($key);
+                        $this->cache->forget("_sc_dna:{$key}");
+                        Log::info("SmartCache self-healing: evicted corrupted key [{$key}]");
+                    } catch (\Throwable $evictError) {
+                        // Best-effort eviction
+                    }
+                    return null;
+                }
+
                 if ($this->config->get('smart-cache.fallback.enabled', true)) {
                     // Return the original value as fallback
                     return $value;
                 }
-                
+
                 throw $e;
             }
         }

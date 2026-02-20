@@ -128,6 +128,36 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Write Deduplication (Cache DNA)
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, SmartCache hashes every value before writing and skips
+    | the write when the stored content is identical.  This eliminates
+    | redundant I/O for frequently refreshed but rarely changing data
+    | (e.g., configuration, feature flags, rate-limit counters).
+    |
+    */
+    'deduplication' => [
+        'enabled' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Self-Healing Cache
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, corrupted or unrestorable cache entries are automatically
+    | evicted instead of propagating an exception.  Combined with a
+    | `remember()` or `rememberIf()` callback, the entry is transparently
+    | regenerated on the next read.
+    |
+    */
+    'self_healing' => [
+        'enabled' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Performance Monitoring
     |--------------------------------------------------------------------------
     |

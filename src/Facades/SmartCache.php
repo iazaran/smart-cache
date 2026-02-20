@@ -36,6 +36,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array analyzePerformance()
  * @method static int cleanupExpiredManagedKeys()
  * @method static bool hasFeature(string $feature)
+ * @method static mixed rememberIf(string $key, mixed $ttl, \Closure $callback, callable $condition)
  *
  * @see \SmartCache\SmartCache
  */

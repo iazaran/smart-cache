@@ -94,19 +94,18 @@ trait CacheInvalidation
     public function getCacheKeysToInvalidate(): array
     {
         $keys = $this->cacheInvalidation['keys'];
-        
-        // Add dynamic keys based on model attributes
-        $dynamicKeys = [];
+
+        // Resolve dynamic keys based on model attributes
+        $resolvedKeys = [];
         foreach ($keys as $key) {
             // Replace placeholders like {id}, {slug}, etc.
-            $dynamicKey = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
+            $resolvedKeys[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
                 $attribute = $matches[1];
                 return $this->getAttribute($attribute) ?? $matches[0];
             }, $key);
-            $dynamicKeys[] = $dynamicKey;
         }
-        
-        return array_merge($keys, $dynamicKeys);
+
+        return array_unique($resolvedKeys);
     }
 
     /**
@@ -118,19 +117,18 @@ trait CacheInvalidation
     public function getCacheTagsToFlush(): array
     {
         $tags = $this->cacheInvalidation['tags'];
-        
-        // Add dynamic tags based on model attributes
-        $dynamicTags = [];
+
+        // Resolve dynamic tags based on model attributes
+        $resolvedTags = [];
         foreach ($tags as $tag) {
             // Replace placeholders like {id}, {category_id}, etc.
-            $dynamicTag = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
+            $resolvedTags[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
                 $attribute = $matches[1];
                 return $this->getAttribute($attribute) ?? $matches[0];
             }, $tag);
-            $dynamicTags[] = $dynamicTag;
         }
-        
-        return array_merge($tags, $dynamicTags);
+
+        return array_unique($resolvedTags);
     }
 
     /**
