@@ -1,13 +1,27 @@
 # Laravel SmartCache
 
 [![Latest Version](https://img.shields.io/packagist/v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
+[![Total Downloads](https://img.shields.io/packagist/dt/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
+[![GitHub Stars](https://img.shields.io/github/stars/iazaran/smart-cache?style=flat-square)](https://github.com/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
-[![Tests](https://img.shields.io/badge/tests-415%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
+[![Tests](https://img.shields.io/badge/tests-425%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
 
-A drop-in replacement for Laravel's `Cache` facade that automatically compresses, chunks, and optimizes cached data. Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache` — your existing code works unchanged.
+A drop-in replacement for Laravel's `Cache` facade that automatically compresses, chunks, and optimizes cached data — with write deduplication, self-healing recovery, and cost-aware eviction built in. Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache`; your existing code works unchanged.
 
 **PHP 8.1+ · Laravel 8–12 · All cache drivers**
+
+## Why SmartCache?
+
+| Concern | Without SmartCache | With SmartCache |
+|---|---|---|
+| Large payloads (100 KB+) | Stored as-is, slow reads | Auto-compressed & chunked |
+| Redundant writes | Every `put()` hits the store | Skipped when content is unchanged (write deduplication) |
+| Corrupted entries | Exception propagates to users | Auto-evicted and regenerated (self-healing) |
+| Eviction strategy | LRU / random | Cost-aware scoring — keeps high-value keys |
+| Cache stampede | Thundering herd on expiry | XFetch, jitter, and rate limiting |
+| Conditional caching | Manual `if` checks around `put()` | `rememberIf()` — one-liner |
+| Monitoring | DIY logging | Built-in dashboard, metrics, and health checks |
 
 ## Installation
 
@@ -177,6 +191,49 @@ SmartCache::cacheValue('analytics');
 SmartCache::suggestEvictions(5); // lowest-value entries to remove first
 ```
 
+### Write Deduplication (Cache DNA)
+
+SmartCache hashes every value before writing. When the stored content is identical, the write is skipped entirely — eliminating redundant I/O for frequently refreshed but rarely changing data (configuration, feature flags, rate-limit counters).
+
+```php
+// Frequent cron refreshes? Only the first write hits the store.
+SmartCache::put('app_config', Config::all(), 3600);
+// Second call with the same data → no I/O, returns true immediately
+SmartCache::put('app_config', Config::all(), 3600);
+```
+
+Enabled by default. Disable per-environment:
+
+```php
+'deduplication' => ['enabled' => false],
+```
+
+### Conditional Caching (`rememberIf`)
+
+Cache values only when a condition is met. The callback always executes, but the result is stored only if the condition returns `true` — useful for filtering out empty or invalid API responses.
+
+```php
+$data = SmartCache::rememberIf('external_api', 3600,
+    fn() => Http::get('https://api.example.com/data')->json(),
+    fn($value) => !empty($value) && isset($value['status'])
+);
+```
+
+### Self-Healing Cache
+
+Corrupted or unrestorable cache entries are automatically evicted instead of propagating an exception. Combined with `remember()` or `rememberIf()`, the entry is transparently regenerated on the next read — zero downtime, zero manual intervention.
+
+```php
+// If 'report' is corrupted, SmartCache evicts it and the callback runs again
+$report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
+```
+
+Enabled by default. Disable per-environment:
+
+```php
+'self_healing' => ['enabled' => false],
+```
+
 ### Model Auto-Invalidation
 
 ```php
@@ -284,6 +341,8 @@ return [
     'rate_limiter'    => ['enabled' => true, 'default_limit' => 100, 'window' => 60],
     'encryption'      => ['enabled' => false, 'keys' => []],
     'jitter'          => ['enabled' => false, 'percentage' => 0.1],
+    'deduplication'   => ['enabled' => true],   // Write deduplication (Cache DNA)
+    'self_healing'    => ['enabled' => true],   // Auto-evict corrupted entries
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
 ];
 ```
@@ -307,7 +366,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 415 tests, 1 732 assertions
+composer test            # 425 tests, 1 780+ assertions
 composer test-coverage   # with code coverage
 ```
 

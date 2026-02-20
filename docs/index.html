@@ -3,11 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Laravel SmartCache — Intelligent caching with automatic compression, cost-aware eviction, and full Laravel API compatibility. Drop-in replacement for Cache facade.">
-    <meta name="keywords" content="Laravel, caching, PHP, performance, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16">
+    <meta name="description" content="Laravel SmartCache — Intelligent caching with automatic compression, chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Laravel Cache API compatibility. A drop-in replacement for the Cache facade supporting PHP 8.1+ and Laravel 8–12.">
+    <meta name="keywords" content="Laravel, caching, PHP, performance, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16, write deduplication, self-healing cache, conditional caching, Memcached, file cache, chunking">
     <meta name="author" content="Ismael Azaran">
-    <title>Laravel SmartCache Documentation</title>
-    
+    <link rel="canonical" href="https://iazaran.github.io/smart-cache/">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Laravel SmartCache — Intelligent Caching for PHP Applications">
+    <meta property="og:description" content="Drop-in replacement for Laravel's Cache facade with automatic compression, chunking, cost-aware eviction, self-healing recovery, and write deduplication. PHP 8.1+ · Laravel 8–12 · All drivers.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://iazaran.github.io/smart-cache/">
+    <meta property="og:site_name" content="Laravel SmartCache">
+    <meta property="og:locale" content="en_US">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Laravel SmartCache — Intelligent Caching for PHP">
+    <meta name="twitter:description" content="Automatic compression, cost-aware eviction, self-healing recovery, and write deduplication. Drop-in replacement for Laravel Cache. PHP 8.1+ · Laravel 8–12.">
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "Laravel SmartCache",
+        "description": "Intelligent caching package for Laravel with automatic compression, chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Cache API compatibility.",
+        "codeRepository": "https://github.com/iazaran/smart-cache",
+        "programmingLanguage": "PHP",
+        "runtimePlatform": "Laravel 8–12",
+        "license": "https://opensource.org/licenses/MIT",
+        "author": {
+            "@type": "Person",
+            "name": "Ismael Azaran",
+            "url": "https://github.com/iazaran"
+        }
+    }
+    </script>
+
+    <title>Laravel SmartCache — Intelligent Caching with Compression, Cost-Aware Eviction &amp; Self-Healing</title>
+
     <!-- Prism.js for syntax highlighting -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
@@ -541,6 +575,18 @@
                         <div class="feature-card">
                             <h4>🔄 Zero Breaking Changes</h4>
                             <p>Use exactly like Laravel's Cache facade with automatic optimizations.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🧬 Write Deduplication</h4>
+                            <p>Skips redundant writes when content is unchanged — saves I/O for frequently refreshed data.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🩹 Self-Healing Cache</h4>
+                            <p>Corrupted entries are auto-evicted and transparently regenerated on the next read.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🎯 Conditional Caching</h4>
+                            <p>Cache only when a condition is met — filter out empty or invalid responses with <code>rememberIf()</code>.</p>
                         </div>
                         <div class="feature-card">
                             <h4>🔐 Encryption</h4>
@@ -1402,7 +1448,7 @@ SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
                     <h1>✨ Extended Features</h1>
 
                     <div class="alert alert-info">
-                        All extended features are opt-in and backwards-compatible: Cost-Aware Caching, Encryption at Rest, Namespacing, TTL Jitter, Circuit Breaker, Rate Limiting, Cache Warming, and more.
+                        All extended features are opt-in and backwards-compatible: Write Deduplication, Self-Healing Cache, Conditional Caching, Cost-Aware Caching, Encryption at Rest, Namespacing, TTL Jitter, Circuit Breaker, Rate Limiting, Cache Warming, and more.
                     </div>
 
                     <h2>🔐 Encryption Strategy</h2>
@@ -1625,6 +1671,72 @@ $evictable = SmartCache::suggestEvictions(5);
                         Useful for production monitoring, capacity planning, and intelligent eviction policies — know exactly which keys matter and which waste space.
                     </div>
 
+                    <h2>🧬 Write Deduplication (Cache DNA)</h2>
+                    <p>SmartCache hashes every value before writing. When the stored content is identical to what is already cached, the write is skipped entirely — eliminating redundant I/O for frequently refreshed but rarely changing data such as configuration, feature flags, and rate-limit counters.</p>
+
+                    <pre><code class="language-php">// Frequent cron refreshes? Only the first write hits the store.
+SmartCache::put('app_config', Config::all(), 3600);
+
+// Second call with the same data — no I/O, returns true immediately
+SmartCache::put('app_config', Config::all(), 3600);
+
+// When data actually changes, the write proceeds normally
+SmartCache::put('app_config', $updatedConfig, 3600); // written</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>How it works:</strong> An MD5 hash of the serialized value is stored alongside each entry as <code>_sc_dna:{key}</code>. On subsequent writes, SmartCache compares the hash — if identical, the write is skipped. Hashes share the same TTL as the data and are cleaned up on <code>forget()</code>.
+                    </div>
+
+                    <pre><code class="language-php">// Enable/disable in config/smart-cache.php
+'deduplication' => [
+    'enabled' => true,   // enabled by default
+],</code></pre>
+
+                    <h2>🎯 Conditional Caching (<code>rememberIf</code>)</h2>
+                    <p>Cache values only when a condition is met. The callback always executes, but the result is stored only if the condition returns <code>true</code>. This is useful for filtering out empty, error, or invalid responses from external APIs.</p>
+
+                    <pre><code class="language-php">// Only cache non-empty API responses
+$data = SmartCache::rememberIf('external_api', 3600,
+    fn() => Http::get('https://api.example.com/data')->json(),
+    fn($value) => !empty($value) && isset($value['status'])
+);
+
+// Only cache results above a minimum size
+$report = SmartCache::rememberIf('analytics_report', 7200,
+    fn() => AnalyticsService::generate(),
+    fn($result) => count($result) > 0
+);
+
+// Combined with cost-aware caching — generation cost is still tracked
+$users = SmartCache::rememberIf('active_users', 1800,
+    fn() => User::where('active', true)->get(),
+    fn($users) => $users->isNotEmpty()
+);</code></pre>
+
+                    <div class="alert alert-success">
+                        Unlike wrapping <code>remember()</code> with an <code>if</code> check, <code>rememberIf()</code> integrates with cost tracking and deduplication out of the box.
+                    </div>
+
+                    <h2>🩹 Self-Healing Cache</h2>
+                    <p>Corrupted or unrestorable cache entries are automatically evicted instead of propagating an exception to the application. Combined with <code>remember()</code> or <code>rememberIf()</code>, the entry is transparently regenerated on the next read — zero downtime, zero manual intervention.</p>
+
+                    <pre><code class="language-php">// If 'report' is corrupted, SmartCache evicts it silently
+// and the callback regenerates it on the next call
+$report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
+
+// Self-healing also cleans up associated DNA hashes
+// and logs the eviction for observability:
+// "SmartCache self-healing: evicted corrupted key [report]"</code></pre>
+
+                    <pre><code class="language-php">// Enable/disable in config/smart-cache.php
+'self_healing' => [
+    'enabled' => true,   // enabled by default
+],</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Enterprise use case:</strong> In high-availability environments, a single corrupted cache entry can cascade into repeated exceptions. Self-healing ensures the application degrades gracefully, evicts the bad entry, and recovers automatically.
+                    </div>
+
                     <h2>Configuration Reference</h2>
                     <pre><code class="language-php">// config/smart-cache.php
 return [
@@ -1658,6 +1770,14 @@ return [
         'enabled' => true,              // Toggle cost tracking on/off
         'max_tracked_keys' => 1000,     // Limit metadata memory
         'metadata_ttl' => 86400,        // Metadata persistence (1 day)
+    ],
+
+    'deduplication' => [
+        'enabled' => true,              // Write deduplication (Cache DNA)
+    ],
+
+    'self_healing' => [
+        'enabled' => true,              // Auto-evict corrupted entries
     ],
 
     'dashboard' => [
@@ -1742,6 +1862,34 @@ SmartCache::put('config', $config, now()->addHours(2));</code></pre>
                             <pre><code class="language-php">$users = SmartCache::remember('users', 3600, function() {
     return User::with('profile')->get();
 });</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::rememberIf()</div>
+                        <div class="method-signature">SmartCache::rememberIf(string $key, mixed $ttl, Closure $callback, callable $condition): mixed</div>
+                        <p>Get an item from the cache, or execute the callback and store the result <strong>only if the condition is met</strong>. The callback always runs on a cache miss, but the value is persisted only when <code>$condition($value)</code> returns <code>true</code>.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$key</span> <span class="parameter-type">(string)</span> - The cache key
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$ttl</span> <span class="parameter-type">(DateTimeInterface|DateInterval|int|null)</span> - Time to live
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$callback</span> <span class="parameter-type">(Closure)</span> - Function to generate fresh data
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$condition</span> <span class="parameter-type">(callable)</span> - Receives the callback result; return <code>true</code> to cache
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> mixed - Cached or fresh data (always returns the value, even when not cached)
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$data = SmartCache::rememberIf('api_data', 3600,
+    fn() => Http::get('https://api.example.com/data')->json(),
+    fn($value) => !empty($value) && isset($value['status'])
+);</code></pre>
                         </div>
                     </div>
 
