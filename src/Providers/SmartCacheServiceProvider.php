@@ -49,7 +49,7 @@ class SmartCacheServiceProvider extends ServiceProvider
                 $compressionMode = $config->get('smart-cache.strategies.compression.mode', 'fixed');
 
                 if ($compressionMode === 'adaptive') {
-                    $strategies[] = new AdaptiveCompressionStrategy(
+                    $adaptiveStrategy = new AdaptiveCompressionStrategy(
                         $config->get('smart-cache.thresholds.compression', 51200),
                         $config->get('smart-cache.strategies.compression.level', 6),
                         $config->get('smart-cache.strategies.compression.adaptive.sample_size', 1024),
@@ -57,6 +57,8 @@ class SmartCacheServiceProvider extends ServiceProvider
                         $config->get('smart-cache.strategies.compression.adaptive.low_compression_threshold', 0.7),
                         $config->get('smart-cache.strategies.compression.adaptive.frequency_threshold', 100)
                     );
+                    $adaptiveStrategy->setCacheRepository($cacheManager->store());
+                    $strategies[] = $adaptiveStrategy;
                 } else {
                     $strategies[] = new CompressionStrategy(
                         $config->get('smart-cache.thresholds.compression', 51200),
@@ -116,6 +118,18 @@ class SmartCacheServiceProvider extends ServiceProvider
 
         // Register dashboard routes if enabled
         $this->registerDashboardRoutes();
+
+        // Register terminating callback to persist cost-aware metadata reliably
+        $this->app->terminating(function () {
+            try {
+                $smartCache = $this->app->make(SmartCacheContract::class);
+                if (\method_exists($smartCache, 'persistCostMetadata')) {
+                    $smartCache->persistCostMetadata();
+                }
+            } catch (\Throwable $e) {
+                // Silently fail — don't break the response
+            }
+        });
 
         // Register command metadata for HTTP context
         $this->app->singleton('smart-cache.commands', fn () => [

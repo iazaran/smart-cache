@@ -3,7 +3,7 @@
 namespace SmartCache\Strategies;
 
 use SmartCache\Contracts\OptimizationStrategy;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Contracts\Cache\Repository;
 
 /**
  * Adaptive Compression Strategy
@@ -46,6 +46,28 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
     protected int $frequencyThreshold;
 
     /**
+     * In-memory access frequency counters for the current request.
+     *
+     * @var array<string, int>
+     */
+    protected array $accessFrequency = [];
+
+    /**
+     * Whether frequency data has been loaded from cache.
+     */
+    protected bool $frequencyLoaded = false;
+
+    /**
+     * Whether frequency data has been modified and needs persisting.
+     */
+    protected bool $frequencyDirty = false;
+
+    /**
+     * Optional cache repository for persisting frequency data.
+     */
+    protected ?Repository $cache = null;
+
+    /**
      * AdaptiveCompressionStrategy constructor.
      *
      * @param int $threshold Size in bytes that triggers compression
@@ -69,6 +91,18 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
         $this->highCompressionThreshold = $highCompressionThreshold;
         $this->lowCompressionThreshold = $lowCompressionThreshold;
         $this->frequencyThreshold = $frequencyThreshold;
+    }
+
+    /**
+     * Set the cache repository for persisting frequency data.
+     *
+     * @param Repository $cache
+     * @return static
+     */
+    public function setCacheRepository(Repository $cache): static
+    {
+        $this->cache = $cache;
+        return $this;
     }
 
     /**
@@ -209,14 +243,10 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
         if (!$key) {
             return 0;
         }
-        
-        $frequencyKey = "_sc_access_freq_{$key}";
-        
-        try {
-            return (int) Cache::get($frequencyKey, 0);
-        } catch (\Exception $e) {
-            return 0;
-        }
+
+        $this->ensureFrequencyLoaded();
+
+        return $this->accessFrequency[$key] ?? 0;
     }
 
     /**
@@ -227,18 +257,66 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
      */
     public function trackAccess(string $key): void
     {
-        $frequencyKey = "_sc_access_freq_{$key}";
-        
+        $this->ensureFrequencyLoaded();
+
+        $this->accessFrequency[$key] = ($this->accessFrequency[$key] ?? 0) + 1;
+        $this->frequencyDirty = true;
+
+        // Trim if tracking too many keys (keep top 500 by frequency)
+        if (\count($this->accessFrequency) > 500) {
+            \arsort($this->accessFrequency);
+            $this->accessFrequency = \array_slice($this->accessFrequency, 0, 400, true);
+        }
+    }
+
+    /**
+     * Load persisted frequency data from cache.
+     */
+    protected function ensureFrequencyLoaded(): void
+    {
+        if ($this->frequencyLoaded) {
+            return;
+        }
+
+        $this->frequencyLoaded = true;
+
+        if ($this->cache === null) {
+            return;
+        }
+
         try {
-            Cache::increment($frequencyKey);
-            
-            // Set TTL if not already set (24 hours)
-            if (!Cache::has($frequencyKey . '_ttl')) {
-                Cache::put($frequencyKey . '_ttl', true, 86400);
+            $persisted = $this->cache->get('_sc_adaptive_freq', []);
+            if (\is_array($persisted)) {
+                $this->accessFrequency = $persisted;
             }
         } catch (\Exception $e) {
-            // Silently fail if cache doesn't support increment
+            // Silently fail — in-memory tracking still works
         }
+    }
+
+    /**
+     * Persist frequency data to cache.
+     */
+    public function persistFrequency(): void
+    {
+        if (!$this->frequencyDirty || $this->cache === null) {
+            return;
+        }
+
+        try {
+            $this->cache->put('_sc_adaptive_freq', $this->accessFrequency, 86400);
+            $this->frequencyDirty = false;
+        } catch (\Exception $e) {
+            // Silently fail
+        }
+    }
+
+    /**
+     * Persist frequency data on shutdown.
+     */
+    public function __destruct()
+    {
+        $this->persistFrequency();
     }
 
     /**
