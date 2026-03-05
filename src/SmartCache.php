@@ -248,6 +248,13 @@ class SmartCache implements SmartCacheContract, Repository
         // Initialize self-healing cache
         $this->selfHealingEnabled = (bool) $config->get('smart-cache.self_healing.enabled', true);
 
+        // Initialize circuit breaker from config
+        $this->circuitBreakerEnabled = (bool) $config->get('smart-cache.circuit_breaker.enabled', false);
+
+        // Initialize TTL jitter from config
+        $this->jitterEnabled = (bool) $config->get('smart-cache.jitter.enabled', false);
+        $this->jitterPercentage = (float) $config->get('smart-cache.jitter.percentage', 0.1);
+
         // Managed keys, dependencies, and performance metrics are lazy-loaded on first access
     }
 
@@ -261,6 +268,16 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $this->strategies[$strategy->getIdentifier()] = $strategy;
         return $this;
+    }
+
+    /**
+     * Get all registered optimization strategies.
+     *
+     * @return array<string, OptimizationStrategy>
+     */
+    public function getStrategies(): array
+    {
+        return $this->strategies;
     }
 
     /**

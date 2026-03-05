@@ -53,7 +53,7 @@ class OptimizationApplied
         $this->strategy = $strategy;
         $this->originalSize = $originalSize;
         $this->optimizedSize = $optimizedSize;
-        $this->ratio = $optimizedSize > 0 ? $optimizedSize / $originalSize : 0;
+        $this->ratio = $originalSize > 0 ? $optimizedSize / $originalSize : 0;
     }
 }
 

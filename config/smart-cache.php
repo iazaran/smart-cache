@@ -55,6 +55,12 @@ return [
             'patterns' => [], // Regex patterns for keys to encrypt (e.g., '/^user_token_/')
             'encrypt_all' => false, // Encrypt all cached values
         ],
+        'serialization' => [
+            'enabled' => false, // Disabled by default
+            'preferred_method' => 'auto', // auto, json, igbinary, php
+            'auto_detect' => true, // Auto-detect best method per value
+            'size_threshold' => 1024, // Minimum size in bytes to apply optimization
+        ],
     ],
 
     /*
@@ -66,6 +72,7 @@ return [
     |
     */
     'circuit_breaker' => [
+        'enabled' => false, // Disabled by default — enable with withCircuitBreaker()
         'failure_threshold' => 5, // Number of failures before opening circuit
         'recovery_timeout' => 30, // Seconds to wait before trying again
         'success_threshold' => 3, // Successful calls needed to close circuit
@@ -80,6 +87,7 @@ return [
     |
     */
     'rate_limiter' => [
+        'enabled' => true, // Enable rate limiting for stampede protection
         'window' => 60, // Window in seconds
         'max_attempts' => 10, // Maximum attempts per window
     ],
@@ -238,5 +246,23 @@ return [
         'enabled' => false, // Disabled by default for security
         'prefix' => 'smart-cache', // URL prefix for dashboard routes
         'middleware' => ['web'], // Middleware to apply to dashboard routes
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cache Warmers
+    |--------------------------------------------------------------------------
+    |
+    | Register cache warmer classes to pre-warm the cache on demand via
+    | the `smart-cache:warm` Artisan command. Each warmer must implement
+    | a `warm(): array` method returning ['keys' => int].
+    |
+    | Example:
+    |   'users' => App\CacheWarmers\UserCacheWarmer::class,
+    |
+    */
+    'warmers' => [
+        // 'users'    => App\CacheWarmers\UserCacheWarmer::class,
+        // 'products' => App\CacheWarmers\ProductCacheWarmer::class,
     ],
 ];

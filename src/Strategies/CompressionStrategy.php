@@ -33,6 +33,11 @@ class CompressionStrategy implements OptimizationStrategy
      */
     public function shouldApply(mixed $value, array $context = []): bool
     {
+        // Guard: zlib extension is required for gzencode/gzdecode
+        if (!function_exists('gzencode')) {
+            return false;
+        }
+
         // Check if driver supports compression
         if (isset($context['driver']) &&
             isset($context['config']['drivers'][$context['driver']]['compression']) &&
