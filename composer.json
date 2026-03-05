@@ -17,7 +17,15 @@
         "cache serialization",
         "cache strategies",
         "php caching",
-        "laravel optimization"
+        "laravel optimization",
+        "stale-while-revalidate",
+        "swr",
+        "cache stampede prevention",
+        "cost-aware eviction",
+        "self-healing cache",
+        "write deduplication",
+        "psr-16",
+        "laravel cache replacement"
     ],
     "homepage": "https://github.com/iazaran/smart-cache",
     "type": "library",
