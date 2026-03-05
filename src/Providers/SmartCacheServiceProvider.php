@@ -10,6 +10,7 @@ use SmartCache\Strategies\CompressionStrategy;
 use SmartCache\Strategies\AdaptiveCompressionStrategy;
 use SmartCache\Strategies\ChunkingStrategy;
 use SmartCache\Strategies\EncryptionStrategy;
+use SmartCache\Strategies\SmartSerializationStrategy;
 use SmartCache\Console\Commands\ClearCommand;
 use SmartCache\Console\Commands\CleanupChunksCommand;
 use SmartCache\Console\Commands\StatusCommand;
@@ -79,6 +80,15 @@ class SmartCacheServiceProvider extends ServiceProvider
                 );
             }
 
+            // Add smart serialization strategy if enabled
+            if ($config->get('smart-cache.strategies.serialization.enabled', false)) {
+                $strategies[] = new SmartSerializationStrategy(
+                    $config->get('smart-cache.strategies.serialization.preferred_method', 'auto'),
+                    $config->get('smart-cache.strategies.serialization.auto_detect', true),
+                    $config->get('smart-cache.strategies.serialization.size_threshold', 1024)
+                );
+            }
+
             // Create cost-aware manager if enabled
             $costAwareManager = null;
             if ($config->get('smart-cache.cost_aware.enabled', true)) {
@@ -125,6 +135,23 @@ class SmartCacheServiceProvider extends ServiceProvider
                 $smartCache = $this->app->make(SmartCacheContract::class);
                 if (\method_exists($smartCache, 'persistCostMetadata')) {
                     $smartCache->persistCostMetadata();
+                }
+            } catch (\Throwable $e) {
+                // Silently fail — don't break the response
+            }
+        });
+
+        // Register terminating callback to persist adaptive compression frequency data
+        $this->app->terminating(function () {
+            try {
+                $smartCache = $this->app->make(SmartCacheContract::class);
+                // Access the strategies to find the AdaptiveCompressionStrategy
+                if (\method_exists($smartCache, 'getStrategies')) {
+                    foreach ($smartCache->getStrategies() as $strategy) {
+                        if ($strategy instanceof AdaptiveCompressionStrategy) {
+                            $strategy->persistFrequency();
+                        }
+                    }
                 }
             } catch (\Throwable $e) {
                 // Silently fail — don't break the response
