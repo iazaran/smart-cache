@@ -30,9 +30,14 @@ class MemoizedCacheDriver implements Repository
     protected array $memoizedMissing = [];
 
     /**
-     * @var array LRU tracking - keys in order of last access
+     * @var array<string, int> LRU tracking - maps key to access counter value
      */
     protected array $accessOrder = [];
+
+    /**
+     * @var int Monotonically increasing counter for O(1) LRU tracking
+     */
+    protected int $accessCounter = 0;
 
     /**
      * @var int Maximum number of items to keep in memory
@@ -65,39 +70,39 @@ class MemoizedCacheDriver implements Repository
 
     /**
      * Touch a key to mark it as recently used.
+     * O(1) — assigns a monotonically increasing counter value to the key.
      *
      * @param string $key
      * @return void
      */
     protected function touchKey(string $key): void
     {
-        // Remove from current position
-        $index = array_search($key, $this->accessOrder, true);
-        if ($index !== false) {
-            unset($this->accessOrder[$index]);
-        }
-        // Add to end (most recently used)
-        $this->accessOrder[] = $key;
+        $this->accessOrder[$key] = ++$this->accessCounter;
     }
 
     /**
      * Evict least recently used items if over capacity.
+     * Sorts by counter value and removes the lowest (oldest) entries.
      *
      * @return void
      */
     protected function evictIfNeeded(): void
     {
-        while (count($this->memoized) > $this->maxSize) {
-            // Re-index array to ensure we get the first element
-            $this->accessOrder = array_values($this->accessOrder);
+        if (count($this->memoized) <= $this->maxSize) {
+            return;
+        }
 
+        // Sort by access counter ascending — lowest values are least recently used
+        asort($this->accessOrder);
+
+        while (count($this->memoized) > $this->maxSize) {
             if (empty($this->accessOrder)) {
                 break;
             }
 
-            // Remove the least recently used (first in array)
-            $lruKey = array_shift($this->accessOrder);
-            unset($this->memoized[$lruKey]);
+            // Remove the least recently used (lowest counter value)
+            $lruKey = array_key_first($this->accessOrder);
+            unset($this->accessOrder[$lruKey], $this->memoized[$lruKey]);
         }
     }
 
@@ -343,11 +348,7 @@ class MemoizedCacheDriver implements Repository
      */
     public function forget($key): bool
     {
-        $index = array_search($key, $this->accessOrder, true);
-        if ($index !== false) {
-            unset($this->accessOrder[$index]);
-        }
-        unset($this->memoized[$key], $this->memoizedMissing[$key]);
+        unset($this->accessOrder[$key], $this->memoized[$key], $this->memoizedMissing[$key]);
         return $this->repository->forget($key);
     }
 
@@ -361,6 +362,7 @@ class MemoizedCacheDriver implements Repository
         $this->memoized = [];
         $this->memoizedMissing = [];
         $this->accessOrder = [];
+        $this->accessCounter = 0;
         return $this->repository->flush();
     }
 
@@ -404,6 +406,7 @@ class MemoizedCacheDriver implements Repository
         $this->memoized = [];
         $this->memoizedMissing = [];
         $this->accessOrder = [];
+        $this->accessCounter = 0;
     }
 
     /**
