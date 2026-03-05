@@ -392,11 +392,11 @@ interface SmartCache extends Repository
     /**
      * Execute with fallback on circuit breaker open.
      *
-     * @param callable $primary
-     * @param callable $fallback
+     * @param callable $callback
+     * @param mixed $fallback
      * @return mixed
      */
-    public function withFallback(callable $primary, callable $fallback): mixed;
+    public function withFallback(callable $callback, mixed $fallback = null): mixed;
 
     /**
      * Throttle cache operations.
