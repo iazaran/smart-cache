@@ -6,6 +6,7 @@
     <meta name="description" content="Laravel SmartCache — Intelligent caching with automatic compression, chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Laravel Cache API compatibility. A drop-in replacement for the Cache facade supporting PHP 8.1+ and Laravel 8–12.">
     <meta name="keywords" content="Laravel, caching, PHP, performance, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16, write deduplication, self-healing cache, conditional caching, Memcached, file cache, chunking">
     <meta name="author" content="Ismael Azaran">
+    <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://iazaran.github.io/smart-cache/">
 
     <!-- Open Graph -->
@@ -954,34 +955,6 @@ SmartCache::put('all_users', $users, 3600);
                         </tbody>
                     </table>
 
-                    <h2>🎯 Adaptive Compression</h2>
-                    <p>Auto-optimize compression levels based on data characteristics:</p>
-
-                    <pre><code class="language-php">// Enable adaptive compression
-config(['smart-cache.strategies.compression.mode' => 'adaptive']);
-
-// Automatically selects optimal compression level:
-// - Hot data (frequently accessed) = level 3-4 (faster)
-// - Cold data (rarely accessed) = level 7-9 (smaller)
-// - Based on compressibility analysis
-
-SmartCache::put('hot_data', $frequentlyAccessed, 3600);
-SmartCache::put('cold_data', $rarelyAccessed, 3600);</code></pre>
-
-                    <h2>💾 Lazy Loading</h2>
-                    <p>Load large datasets on-demand, keeping only the active chunk in memory:</p>
-
-                    <pre><code class="language-php">// Enable lazy loading
-config(['smart-cache.strategies.chunking.lazy_loading' => true]);
-
-// Returns LazyChunkedCollection - loads chunks on-demand
-$largeDataset = SmartCache::get('100k_records');
-
-foreach ($largeDataset as $record) {
-    processRecord($record);
-    // Only 3 chunks in memory at once
-}</code></pre>
-
                     <h2>🧠 Smart Serialization</h2>
                     <p>Auto-select best serialization method:</p>
 
@@ -1454,11 +1427,11 @@ SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
                     <h2>🔐 Encryption Strategy</h2>
                     <p>Encrypt sensitive cached data automatically:</p>
 
-                    <pre><code class="language-php">// Configure encryption in config/smart-cache.php
+                    <pre><code class="language-php">// Configure encryption in config/smart-cache.php → strategies.encryption
 'encryption' => [
     'enabled' => true,
-    'keys' => ['user_*', 'payment_*'],     // Keys to encrypt
-    'patterns' => ['/secret_.*/'],          // Regex patterns
+    'keys' => ['user_token_abc123'],              // Exact cache-key match
+    'patterns' => ['/^user_/', '/^payment_/'],    // Regex patterns
 ],
 
 // Data matching patterns is automatically encrypted
@@ -1516,8 +1489,8 @@ SmartCache::rememberWithJitter('key', 3600, fn() => $value, 0.1);</code></pre>
 'circuit_breaker' => [
     'enabled' => true,
     'failure_threshold' => 5,   // Open after 5 failures
-    'success_threshold' => 2,   // Close after 2 successes
-    'timeout' => 30,            // Try again after 30 seconds
+    'recovery_timeout' => 30,   // Try again after 30 seconds
+    'success_threshold' => 3,   // Close after 3 successes
 ],
 
 // Check if cache is available
@@ -1556,8 +1529,8 @@ $data = SmartCache::rememberWithStampedeProtection(
 // Configure rate limiter
 'rate_limiter' => [
     'enabled' => true,
-    'default_limit' => 100,
     'window' => 60,
+    'max_attempts' => 10,
 ],</code></pre>
 
                     <h2>🔥 Cache Warming</h2>
@@ -1568,26 +1541,35 @@ use SmartCache\Contracts\CacheWarmer;
 
 class ProductCacheWarmer implements CacheWarmer
 {
-    public function warm(): void
+    public function warm(): array
     {
         $products = Product::with('images')->get();
         SmartCache::put('all_products', $products, 3600);
+
+        return ['keys' => 1];
     }
 
-    public function getKeys(): array
+    public function getName(): string
     {
-        return ['all_products'];
+        return 'products';
+    }
+
+    public function getDescription(): string
+    {
+        return 'Warms the product cache';
     }
 }
 
-// Register in service provider
-$this->app->tag([ProductCacheWarmer::class], 'cache.warmers');
+// Register in config/smart-cache.php
+'warmers' => [
+    'products' => App\CacheWarmers\ProductCacheWarmer::class,
+],
 
 // Run cache warming command
 php artisan smart-cache:warm
 
-// Or warm specific keys
-php artisan smart-cache:warm --keys=all_products,categories</code></pre>
+// Or warm specific warmers
+php artisan smart-cache:warm --warmer=products</code></pre>
 
                     <h2>🧹 Orphan Chunk Cleanup</h2>
                     <p>Automatically clean up orphaned chunks from expired data:</p>
@@ -1742,23 +1724,27 @@ $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
 return [
     // ... existing options ...
 
-    'encryption' => [
-        'enabled' => false,
-        'keys' => [],
-        'patterns' => [],
+    'strategies' => [
+        // ... compression, chunking ...
+        'encryption' => [
+            'enabled' => false,
+            'keys' => [],
+            'patterns' => [],
+            'encrypt_all' => false,
+        ],
     ],
 
     'circuit_breaker' => [
-        'enabled' => true,
+        'enabled' => false,
         'failure_threshold' => 5,
-        'success_threshold' => 2,
-        'timeout' => 30,
+        'recovery_timeout' => 30,
+        'success_threshold' => 3,
     ],
 
     'rate_limiter' => [
         'enabled' => true,
-        'default_limit' => 100,
         'window' => 60,
+        'max_attempts' => 10,
     ],
 
     'jitter' => [
@@ -1784,6 +1770,10 @@ return [
         'enabled' => false,
         'prefix' => 'smart-cache',
         'middleware' => ['web'],
+    ],
+
+    'warmers' => [
+        // 'products' => App\CacheWarmers\ProductCacheWarmer::class,
     ],
 ];</code></pre>
                 </div>
@@ -2448,13 +2438,13 @@ $stats = SmartCache::getSerializationStats($optimized);
 
                     <div class="method">
                         <div class="method-name">SmartCache::withFallback()</div>
-                        <div class="method-signature">SmartCache::withFallback(callable $operation, callable $fallback): mixed</div>
+                        <div class="method-signature">SmartCache::withFallback(callable $callback, mixed $fallback = null): mixed</div>
                         <p>Execute cache operation with automatic fallback on failure.</p>
                         <div class="parameter">
-                            <span class="parameter-name">$operation</span> <span class="parameter-type">(callable)</span> - Primary cache operation
+                            <span class="parameter-name">$callback</span> <span class="parameter-type">(callable)</span> - Primary cache operation
                         </div>
                         <div class="parameter">
-                            <span class="parameter-name">$fallback</span> <span class="parameter-type">(callable)</span> - Fallback if cache fails
+                            <span class="parameter-name">$fallback</span> <span class="parameter-type">(mixed)</span> - Fallback value or callable if cache fails (default: null)
                         </div>
                         <div class="parameter">
                             <span class="return-type">Returns:</span> mixed - Result from operation or fallback
@@ -2744,18 +2734,24 @@ php artisan smart-cache:clear --force</code></pre>
 
                     <div class="method">
                         <div class="method-name">smart-cache:warm</div>
-                        <div class="method-signature">php artisan smart-cache:warm [--keys=]</div>
+                        <div class="method-signature">php artisan smart-cache:warm [--warmer=*] [--list]</div>
                         <p>Pre-populate cache with frequently accessed data using registered warmers.</p>
                         <div class="parameter">
-                            <span class="parameter-name">--keys</span> <span class="parameter-type">(optional)</span> - Comma-separated list of specific keys to warm
+                            <span class="parameter-name">--warmer</span> <span class="parameter-type">(optional, repeatable)</span> - Specific warmer(s) to run
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">--list</span> <span class="parameter-type">(optional)</span> - List available warmers
                         </div>
                         <div class="example">
                             <strong>Examples:</strong>
                             <pre><code class="language-bash"># Warm all registered cache warmers
 php artisan smart-cache:warm
 
-# Warm specific keys only
-php artisan smart-cache:warm --keys=products,categories</code></pre>
+# Warm specific warmers only
+php artisan smart-cache:warm --warmer=products --warmer=categories
+
+# List available warmers
+php artisan smart-cache:warm --list</code></pre>
                         </div>
                     </div>
 
