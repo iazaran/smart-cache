@@ -27,7 +27,10 @@ class StatusCommandTest extends TestCase
         
         // Set up command tester using Symfony Console Application instead
         $application = new Application();
-        $application->add($this->command);
+        // Symfony Console 8.x renamed add() to addCommand()
+        method_exists($application, 'addCommand')
+            ? $application->addCommand($this->command)
+            : $application->add($this->command);
         $this->commandTester = new CommandTester($this->command);
     }
 

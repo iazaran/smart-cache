@@ -21,10 +21,20 @@ trait CacheInvalidation
 
     /**
      * Boot the cache invalidation trait.
+     *
+     * Registers model event listeners directly on the dispatcher instead of
+     * using observe() or static event methods, to avoid the recursive
+     * bootIfNotBooted() call that Laravel 13+ forbids during trait booting.
      */
     protected static function bootCacheInvalidation(): void
     {
-        static::observe(CacheInvalidationObserver::class);
+        $observer = new CacheInvalidationObserver();
+
+        foreach (['created', 'updated', 'deleted', 'restored'] as $event) {
+            static::registerModelEvent($event, function ($model) use ($observer, $event) {
+                $observer->{$event}($model);
+            });
+        }
     }
 
     /**

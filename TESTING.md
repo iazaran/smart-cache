@@ -77,6 +77,7 @@ If you have multiple PHP versions installed:
 php8.1 vendor/bin/phpunit
 php8.2 vendor/bin/phpunit
 php8.3 vendor/bin/phpunit
+php8.4 vendor/bin/phpunit
 ```
 
 ## Key Testing Features
