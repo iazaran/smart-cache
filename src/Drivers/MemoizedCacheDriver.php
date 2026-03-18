@@ -387,6 +387,30 @@ class MemoizedCacheDriver implements Repository
     }
 
     /**
+     * Set the expiration of a cached item without changing its value.
+     *
+     * @param  string  $key
+     * @param  \DateTimeInterface|\DateInterval|int  $ttl
+     * @return bool
+     */
+    public function touch($key, $ttl): bool
+    {
+        // Delegate to the underlying repository's touch() if available (Laravel 13+)
+        if (\method_exists($this->repository, 'touch')) {
+            return $this->repository->touch($key, $ttl);
+        }
+
+        // Fallback for older Laravel versions: read the value and re-store it
+        $value = $this->repository->get($key);
+
+        if ($value === null) {
+            return false;
+        }
+
+        return $this->repository->put($key, $value, $ttl);
+    }
+
+    /**
      * Get the underlying cache repository.
      *
      * @return Repository

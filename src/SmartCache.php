@@ -607,6 +607,36 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
+     * Set the expiration of a cached item without changing its value.
+     *
+     * Falls back to get-then-put on Laravel versions where the underlying
+     * store does not support touch() natively.
+     *
+     * @param  string  $key
+     * @param  \DateTimeInterface|\DateInterval|int  $ttl
+     * @return bool
+     */
+    public function touch($key, $ttl): bool
+    {
+        $key = $this->applyNamespace((string) $key);
+
+        // Delegate to the underlying cache's touch() if available (Laravel 13+)
+        if (\method_exists($this->cache, 'touch')) {
+            return $this->cache->touch($key, $ttl);
+        }
+
+        // Fallback for older Laravel versions: read the raw value and re-store it
+        $sentinel = static::sentinel();
+        $value = $this->cache->get($key, $sentinel);
+
+        if ($value === $sentinel) {
+            return false;
+        }
+
+        return $this->cache->put($key, $value, $ttl);
+    }
+
+    /**
      * Retrieve an item from the cache and delete it.
      *
      * @param array|string $key
