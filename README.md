@@ -11,7 +11,7 @@
 
 Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache`. Your existing code works unchanged.
 
-**PHP 8.1+ · Laravel 8–12 · Redis, File, Database, Memcached, Array**
+**PHP 8.1+ · Laravel 8–13 · Redis, File, Database, Memcached, Array**
 
 ---
 
