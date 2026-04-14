@@ -17,11 +17,13 @@ Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache`. You
 
 ## Installation
 
+**Prerequisites:** PHP extensions `ext-zlib` (for data compression) and `ext-json` (for optimal object serialization) are strongly recommended to enable all performance optimization strategies.
+
 ```bash
 composer require iazaran/smart-cache
 ```
 
-That's it. No configuration required — works immediately with your existing cache driver.
+That's it. No further configuration is required — works immediately with your existing cache driver.
 
 ## Quick Start
 
@@ -264,7 +266,7 @@ SmartCache::analyzePerformance();    // health score + recommendations
 ```php
 // Enable web dashboard
 'dashboard' => ['enabled' => true, 'prefix' => 'smart-cache', 'middleware' => ['web', 'auth']],
-// GET /smart-cache/dashboard | /smart-cache/stats | /smart-cache/health
+// GET /smart-cache/dashboard | /smart-cache/statistics | /smart-cache/health
 ```
 
 ```bash
@@ -273,6 +275,13 @@ php artisan smart-cache:clear
 php artisan smart-cache:warm --warmer=products --warmer=categories
 php artisan smart-cache:cleanup-chunks
 ```
+
+## Best Practices & Troubleshooting
+
+- **Binary Data:** If caching already compressed objects like images, video, or encrypted data, disable `compression` for those specific cache keys as they waste CPU cycles without yielding size reductions.
+- **Memory Limits with Chunking:** Large multi-megabyte datasets automatically trigger the 'chunking' strategy. For arrays over 100,000 items, verify `memory_limit` in `php.ini` or enable `lazy_loading` via config to avoid server crashes.
+- **Provider Not Found:** Laravel aggressively caches service providers and aliases. Always run `php artisan optimize:clear` after upgrading or installing this package if encountering *"Class 'SmartCache' not found"*.
+- **IDE Autocomplete:** Modern IDEs (PhpStorm, VSCode) completely resolve `SmartCache::` magical methods automatically via our included Facade PHPDocs without needing `ide-helper` generated files.
 
 ## Configuration
 

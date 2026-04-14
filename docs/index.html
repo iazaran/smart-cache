@@ -643,9 +643,10 @@ $users = SmartCache::get('users');</code></pre>
                     
                     <h2>Requirements</h2>
                     <ul>
-                        <li>PHP 8.1 or higher</li>
-                        <li>Laravel 8.0 - 13.x (fully tested on Laravel 8, 9, 10, 11, 12, and 13)</li>
-                        <li>Any Laravel-supported cache driver (Redis, File, Database, Array, Memcached)</li>
+                        <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> PHP 8.1 or higher</li>
+                        <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> Laravel 8.0 - 13.x (fully tested on Laravel 8, 9, 10, 11, 12, and 13)</li>
+                        <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> Any Laravel-supported cache driver (Redis, File, Database, Array, Memcached)</li>
+                        <li><span style="display:inline-block; width:15px; text-align:center; color:#27ae60;">💡</span> <strong>Recommended:</strong> PHP extensions <code>ext-zlib</code> and <code>ext-json</code> for advanced performance strategies</li>
                     </ul>
 
                     <div class="alert alert-success">
@@ -657,7 +658,10 @@ $users = SmartCache::get('users');</code></pre>
                     <div class="step">
                         <span class="step-number">1</span>
                         <strong>Install via Composer:</strong>
-                        <pre><code class="language-bash">composer require iazaran/smart-cache</code></pre>
+                        <pre><code class="language-bash">composer require iazaran/smart-cache
+
+# Clear application configuration cache to register the provider
+php artisan optimize:clear</code></pre>
                     </div>
 
 
@@ -1414,6 +1418,14 @@ class JsonCompressionStrategy implements OptimizationStrategy
 // Register your custom strategy
 SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
 
+                    <h2>🛡️ Best Practices & Troubleshooting</h2>
+                    <ul>
+                        <li><strong>Binary Data:</strong> If caching already compressed objects like images, video, or encrypted data, disable <code>compression</code> for those specific cache keys as they waste CPU cycles without yielding size reductions.</li>
+                        <li><strong>Memory Limits with Chunking:</strong> Large multi-megabyte datasets automatically trigger the 'chunking' strategy. For arrays over 100,000 items, verify <code>memory_limit</code> in <code>php.ini</code> or enable <code>lazy_loading</code> via config to avoid server crashes.</li>
+                        <li><strong>Provider Not Found:</strong> Laravel aggressively caches service providers and aliases. Always run <code>php artisan optimize:clear</code> after upgrading or installing this package if encountering <em>"Class 'SmartCache' not found"</em>.</li>
+                        <li><strong>IDE Autocomplete:</strong> Modern IDEs (PhpStorm, VSCode) completely resolve <code>SmartCache::</code> magical methods automatically via our included Facade PHPDocs without needing <code>ide-helper</code> generated files.</li>
+                    </ul>
+
                 </div>
 
                 <!-- Extended Features Tab -->
@@ -1599,7 +1611,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();
 // GET /smart-cache/dashboard
 
 // JSON API endpoints:
-// GET /smart-cache/stats     - Performance metrics
+// GET /smart-cache/statistics - Performance metrics
 // GET /smart-cache/health    - Health check
 // GET /smart-cache/keys      - Managed keys list</code></pre>
 

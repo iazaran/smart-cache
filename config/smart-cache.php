@@ -30,6 +30,10 @@ return [
     |
     | Configure which optimization strategies are enabled and their options.
     |
+    | Note on Adaptive Compression: Adaptive mode will sample chunks of
+    | your data to determine if they are compressible. It uses more CPU
+    | but saves time if data is incompressible (like pre-compressed images).
+    |
     */
     'strategies' => [
         'compression' => [
@@ -69,6 +73,10 @@ return [
     |--------------------------------------------------------------------------
     |
     | Configure the circuit breaker for cache backend failures.
+    | This is especially useful for distributed caches (like Redis) that
+    | may go offline temporarily. If the threshold is reached, SmartCache
+    | will immediately run closures without hitting the broken cache
+    | and gracefully recover later.
     |
     */
     'circuit_breaker' => [

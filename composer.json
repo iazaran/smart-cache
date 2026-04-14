@@ -53,6 +53,12 @@
         "mockery/mockery": "^1.5",
         "symfony/var-dumper": "^5.4|^6.0|^7.0|^8.0"
     },
+    "suggest": {
+        "ext-zlib": "Required for compressing cached data using gzip (strongly recommended)",
+        "ext-json": "Required for optimal auto-serialization of complex arrays",
+        "ext-redis": "Recommended when utilizing the Redis cache driver for better performance",
+        "ext-memcached": "Recommended when using the Memcached cache driver for distributed caching"
+    },
     "autoload": {
         "psr-4": {
             "SmartCache\\": "src/"
