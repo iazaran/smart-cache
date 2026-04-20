@@ -381,6 +381,39 @@ class SmartCacheTest extends TestCase
         }
     }
 
+    public function test_missing_chunk_is_treated_as_cache_miss_for_remember()
+    {
+        $this->app['config']->set('smart-cache.strategies.compression.enabled', false);
+        $this->app['config']->set('smart-cache.self_healing.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [new ChunkingStrategy(2048, 100)]
+        );
+
+        $key = 'chunked-self-heal-key';
+        $originalValue = $this->createChunkableData();
+        $replacementValue = $this->createLargeTestData(1300);
+
+        $smartCache->put($key, $originalValue, 3600);
+
+        $cached = $this->getCacheStore()->get($key);
+        $this->assertValueIsChunked($cached);
+        $this->getCacheStore()->forget($cached['chunk_keys'][0]);
+
+        $callCount = 0;
+        $result = $smartCache->remember($key, 3600, function () use (&$callCount, $replacementValue) {
+            $callCount++;
+            return $replacementValue;
+        });
+
+        $this->assertEquals(1, $callCount);
+        $this->assertEquals($replacementValue, $result);
+        $this->assertEquals($replacementValue, $smartCache->get($key));
+    }
+
     public function test_optimization_fallback_on_strategy_failure()
     {
         // Create a SmartCache instance with a failing strategy

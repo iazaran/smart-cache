@@ -211,11 +211,12 @@ class ChunkingStrategy implements OptimizationStrategy
         foreach ($value['chunk_keys'] as $chunkKey) {
             $chunk = $cache->get($chunkKey);
             if ($chunk === null) {
-                // If any chunk is missing, return null indicating cache miss
-                return null;
+                throw new \RuntimeException("Missing cache chunk [{$chunkKey}] while restoring chunked value");
             }
 
-            $result = array_merge($result, $chunk);
+            foreach ($chunk as $itemKey => $itemValue) {
+                $result[$itemKey] = $itemValue;
+            }
         }
 
         // Convert back to collection if needed

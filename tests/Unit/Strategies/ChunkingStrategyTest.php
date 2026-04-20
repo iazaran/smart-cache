@@ -204,7 +204,7 @@ class ChunkingStrategyTest extends TestCase
         $this->assertEquals($originalArray, $restored->all());
     }
 
-    public function test_restore_returns_null_when_chunk_missing()
+    public function test_restore_throws_when_chunk_missing()
     {
         $chunkedMetadata = [
             '_sc_chunked' => true,
@@ -220,10 +220,11 @@ class ChunkingStrategyTest extends TestCase
             ->with('chunk_2')->andReturn(null);
 
         $context = ['cache' => $this->mockCache];
-        
-        $restored = $this->strategy->restore($chunkedMetadata, $context);
-        
-        $this->assertNull($restored);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Missing cache chunk [chunk_2]');
+
+        $this->strategy->restore($chunkedMetadata, $context);
     }
 
     public function test_restore_throws_exception_without_cache()
@@ -302,6 +303,37 @@ class ChunkingStrategyTest extends TestCase
         $this->assertArrayHasKey('first', $restored);
         $this->assertArrayHasKey('second', $restored);
         $this->assertArrayHasKey('third', $restored);
+    }
+
+    public function test_chunking_preserves_sparse_numeric_array_keys()
+    {
+        $originalArray = [];
+
+        for ($i = 0; $i < 220; $i++) {
+            $originalArray[$i * 10] = "value_$i";
+        }
+
+        $this->mockCache->shouldReceive('put')->atLeast(1);
+
+        $chunks = array_chunk($originalArray, 100, true);
+        foreach ($chunks as $index => $chunk) {
+            $this->mockCache->shouldReceive('get')
+                ->with("_sc_chunk_sparse-key_$index")
+                ->andReturn($chunk);
+        }
+
+        $context = [
+            'cache' => $this->mockCache,
+            'key' => 'sparse-key',
+            'ttl' => 3600
+        ];
+
+        $optimized = $this->strategy->optimize($originalArray, $context);
+        $restored = $this->strategy->restore($optimized, $context);
+
+        $this->assertSame($originalArray, $restored);
+        $this->assertArrayHasKey(0, $restored);
+        $this->assertArrayHasKey(2190, $restored);
     }
 
     protected function tearDown(): void

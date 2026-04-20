@@ -5,7 +5,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/iazaran/smart-cache?style=flat-square)](https://github.com/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
-[![Tests](https://img.shields.io/badge/tests-425%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
+[![Tests](https://img.shields.io/badge/tests-435%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
 
 **Drop-in replacement for Laravel's `Cache` facade** that automatically compresses, chunks, and optimizes cached data — with write deduplication, self-healing recovery, and cost-aware eviction built in.
 
@@ -50,7 +50,7 @@ Large data is automatically compressed and chunked behind the scenes. No code ch
 |---|---|---|
 | Large payloads (100 KB+) | Stored as-is, slow reads | Auto-compressed & chunked |
 | Redundant writes | Every `put()` hits the store | Skipped when unchanged (write deduplication) |
-| Corrupted entries | Exception crashes the request | Auto-evicted and regenerated (self-healing) |
+| Corrupted entries | Exception crashes the request | Auto-evicted and regenerated, including broken chunk sets |
 | Eviction decisions | LRU / random | Cost-aware scoring — keeps high-value keys |
 | Cache stampede | Thundering herd on expiry | XFetch, jitter, and rate limiting |
 | Conditional caching | Manual `if` around `put()` | `rememberIf()` — one-liner |
@@ -69,6 +69,15 @@ SmartCache selects the best strategy based on your data — zero configuration:
 | Data < 50 KB | None | Zero overhead |
 
 All thresholds are [configurable](#configuration).
+
+### Production Safety for Large Data
+
+SmartCache is built for the painful cases that appear after an application grows: large Eloquent result sets, API payloads, reports, dashboards, and Redis/Memcached entries that get too big to manage safely.
+
+- **Data shape is preserved.** Chunked payloads keep associative keys and sparse numeric keys intact, so ID-keyed arrays do not come back reindexed.
+- **Partial chunk loss is recoverable.** If a chunk is missing or corrupted, SmartCache treats the entry as a cache miss, evicts the broken metadata, and lets `remember()` regenerate a clean value.
+- **Null remains a valid cached value.** Stored `null` is distinguished from a miss, preserving Laravel cache semantics while still enabling self-healing.
+- **Raw repository access is still available.** Use `SmartCache::repository()` when a package or one-off operation needs the underlying Laravel cache store directly.
 
 ## Features
 
@@ -126,7 +135,7 @@ SmartCache::put('app_config', Config::all(), 3600); // no I/O — data unchanged
 
 ### Self-Healing Cache
 
-Corrupted entries are auto-evicted and regenerated on next read — zero downtime.
+Corrupted entries are auto-evicted and regenerated on next read — zero downtime. This includes missing chunks from large chunked payloads.
 
 ```php
 $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
@@ -271,10 +280,34 @@ SmartCache::analyzePerformance();    // health score + recommendations
 
 ```bash
 php artisan smart-cache:status
+php artisan smart-cache:audit --driver=redis
+php artisan smart-cache:bench --driver=redis --iterations=5
 php artisan smart-cache:clear
 php artisan smart-cache:warm --warmer=products --warmer=categories
 php artisan smart-cache:cleanup-chunks
 ```
+
+### Cache Audit & Benchmarks
+
+Use the audit command before production changes or after a cache incident:
+
+```bash
+php artisan smart-cache:audit
+php artisan smart-cache:audit --format=json
+php artisan smart-cache:audit --driver=redis --limit=50
+```
+
+It reports managed keys, missing tracked keys, broken chunked entries, orphan chunks, large unoptimized values, and cost-aware eviction suggestions without mutating the cache.
+
+Use the benchmark command to measure your own driver and payload behavior:
+
+```bash
+php artisan smart-cache:bench
+php artisan smart-cache:bench --profile=api-json --driver=redis --iterations=10
+php artisan smart-cache:bench --format=json --output=storage/smart-cache-bench.json
+```
+
+A generated Redis report is included at [`docs/benchmark-report-redis.json`](docs/benchmark-report-redis.json). On the included PHP 8.4 / Laravel 13 / Redis run, the `api-json` profile compressed from 323,811 bytes to 7,829 bytes (97.58% smaller). Each profile includes a `goal`, `success_metric`, `goal_passed`, and `result_summary` field so compression is judged by byte reduction, chunking is judged by driver-safe splitting and key preservation, and small payloads are judged by avoiding unnecessary optimization.
 
 ## Best Practices & Troubleshooting
 
@@ -333,7 +366,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 425 tests, 1 780+ assertions
+composer test            # 435 tests, 1,821 assertions
 composer test-coverage   # with code coverage
 ```
 

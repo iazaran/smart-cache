@@ -5,6 +5,19 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-04-20
+### Added
+- Added `smart-cache:audit` for read-only diagnostics of managed keys, missing tracked keys, broken chunked entries, orphan chunks, large unoptimized values, and cost-aware eviction suggestions.
+- Added `smart-cache:bench` for benchmarking raw Laravel cache operations against SmartCache optimization profiles, with table output, JSON output, driver selection, profile selection, iteration control, report-file export, and per-profile goal/result summaries.
+- Added `docs/benchmark-report-redis.json`, generated from the package itself with PHP 8.4, Laravel 13, Redis, and ten iterations.
+- Added console tests for audit and benchmark commands, including JSON report validation, benchmark file export, broken chunk detection, data integrity, and key-shape preservation.
+### Changed
+- Updated `README.md`, `docs/index.html`, and `TESTING.md` with audit and benchmark workflows, local benchmark guidance, and the expanded test count.
+- Registered audit and benchmark command metadata so package consumers can discover them through `SmartCache::getAvailableCommands()`.
+### Fixed
+- Preserved sparse numeric keys when restoring eager chunked arrays.
+- Treated missing chunks as corrupted cache entries so self-healing can evict them and `remember()` can regenerate clean data instead of returning a cached `null`.
+
 ## [1.9.3] - 2026-04-14
 ### Added
 - Added `SECURITY.md` for standardized enterprise vulnerability disclosures.
@@ -132,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.10.0]: https://github.com/iazaran/smart-cache/compare/1.9.3...1.10.0
 [1.9.3]: https://github.com/iazaran/smart-cache/compare/1.9.2...1.9.3
 [1.9.2]: https://github.com/iazaran/smart-cache/compare/1.9.1...1.9.2
 [1.9.1]: https://github.com/iazaran/smart-cache/compare/1.9.0...1.9.1

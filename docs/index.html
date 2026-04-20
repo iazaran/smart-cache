@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Laravel SmartCache — Intelligent caching with automatic compression, chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Laravel Cache API compatibility. A drop-in replacement for the Cache facade supporting PHP 8.1+ and Laravel 8–13.">
-    <meta name="keywords" content="Laravel, caching, PHP, performance, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16, write deduplication, self-healing cache, conditional caching, Memcached, file cache, chunking">
+    <meta name="description" content="Laravel SmartCache — a drop-in Cache facade replacement for large Laravel data. Automatic compression, key-preserving chunking, self-healing recovery, write deduplication, cost-aware eviction, and full Laravel Cache API compatibility. PHP 8.1+ and Laravel 8–13.">
+    <meta name="keywords" content="Laravel, caching, PHP, performance, large data cache, Laravel large data, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16, write deduplication, self-healing cache, conditional caching, Memcached, file cache, chunking">
     <meta name="author" content="Ismael Azaran">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://iazaran.github.io/smart-cache/">
 
     <!-- Open Graph -->
     <meta property="og:title" content="Laravel SmartCache — Intelligent Caching for PHP Applications">
-    <meta property="og:description" content="Drop-in replacement for Laravel's Cache facade with automatic compression, chunking, cost-aware eviction, self-healing recovery, and write deduplication. PHP 8.1+ · Laravel 8–13 · All drivers.">
+    <meta property="og:description" content="Drop-in replacement for Laravel's Cache facade with automatic compression, key-preserving chunking, self-healing recovery, cost-aware eviction, and write deduplication. PHP 8.1+ · Laravel 8–13 · All drivers.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://iazaran.github.io/smart-cache/">
     <meta property="og:site_name" content="Laravel SmartCache">
@@ -20,7 +20,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Laravel SmartCache — Intelligent Caching for PHP">
-    <meta name="twitter:description" content="Automatic compression, cost-aware eviction, self-healing recovery, and write deduplication. Drop-in replacement for Laravel Cache. PHP 8.1+ · Laravel 8–13.">
+    <meta name="twitter:description" content="Automatic compression, key-preserving chunking, self-healing recovery, and write deduplication for large Laravel cache payloads. PHP 8.1+ · Laravel 8–13.">
 
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
@@ -28,7 +28,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareSourceCode",
         "name": "Laravel SmartCache",
-        "description": "Intelligent caching package for Laravel with automatic compression, chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Cache API compatibility.",
+        "description": "Intelligent caching package for Laravel with automatic compression, key-preserving chunking, cost-aware eviction, self-healing recovery, write deduplication, and full Cache API compatibility.",
         "codeRepository": "https://github.com/iazaran/smart-cache",
         "programmingLanguage": "PHP",
         "runtimePlatform": "Laravel 8–13",
@@ -551,7 +551,7 @@
                         </div>
                         <div class="feature-card">
                             <h4>🧩 Smart Chunking</h4>
-                            <p>Breaks large arrays/objects into manageable pieces for better performance.</p>
+                            <p>Breaks large arrays/objects into manageable pieces while preserving associative and sparse numeric keys.</p>
                         </div>
                         <div class="feature-card">
                             <h4>🔒 Atomic Locks</h4>
@@ -604,6 +604,24 @@
                         <div class="feature-card">
                             <h4>🔌 Circuit Breaker</h4>
                             <p>Protect your app from cache backend failures with automatic fallbacks.</p>
+                        </div>
+                    </div>
+
+                    <h2>Production Safety for Large Data</h2>
+                    <p>SmartCache is designed for the failure modes that appear when cache entries become too large to treat as ordinary values: huge Eloquent result sets, API responses, reports, dashboards, and Redis or Memcached payloads that need to stay fast without becoming fragile.</p>
+
+                    <div class="feature-grid">
+                        <div class="feature-card">
+                            <h4>🔑 Key-Preserving Restore</h4>
+                            <p>Chunked payloads keep associative keys and sparse numeric keys intact, so ID-keyed arrays do not come back reindexed.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>🩹 Partial Chunk Recovery</h4>
+                            <p>If a chunk is missing, SmartCache treats the entry as a miss, evicts the broken metadata, and lets <code>remember()</code> regenerate clean data.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>⭕ Valid Null Caching</h4>
+                            <p>Stored <code>null</code> values remain valid cached values and are not confused with cache misses.</p>
                         </div>
                     </div>
 
@@ -1172,6 +1190,12 @@ $specificClear = SmartCache::executeCommand('clear', [
                     <pre><code class="language-bash"># Quick status overview
 php artisan smart-cache:status
 
+# Read-only production audit
+php artisan smart-cache:audit --driver=redis
+
+# Benchmark your real cache driver and payload shapes
+php artisan smart-cache:bench --driver=redis --iterations=5
+
 # Detailed analysis with recommendations
 php artisan smart-cache:status --force
 
@@ -1712,13 +1736,14 @@ $users = SmartCache::rememberIf('active_users', 1800,
                     </div>
 
                     <h2>🩹 Self-Healing Cache</h2>
-                    <p>Corrupted or unrestorable cache entries are automatically evicted instead of propagating an exception to the application. Combined with <code>remember()</code> or <code>rememberIf()</code>, the entry is transparently regenerated on the next read — zero downtime, zero manual intervention.</p>
+                    <p>Corrupted or unrestorable cache entries are automatically evicted instead of propagating an exception to the application. Combined with <code>remember()</code> or <code>rememberIf()</code>, the entry is transparently regenerated on the next read — zero downtime, zero manual intervention. This also covers partial chunk loss in very large cached arrays.</p>
 
                     <pre><code class="language-php">// If 'report' is corrupted, SmartCache evicts it silently
 // and the callback regenerates it on the next call
 $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
 
 // Self-healing also cleans up associated DNA hashes
+// and broken chunk metadata from large entries
 // and logs the eviction for observability:
 // "SmartCache self-healing: evicted corrupted key [report]"</code></pre>
 
@@ -2705,6 +2730,52 @@ smart_cache('users', $users, 3600);</code></pre>
                     <h2 id="cli-api">💻 CLI Commands</h2>
 
                     <div class="method">
+                        <div class="method-name">smart-cache:audit</div>
+                        <div class="method-signature">php artisan smart-cache:audit [--driver=] [--format=table|json] [--limit=20]</div>
+                        <p>Run a read-only audit of SmartCache managed keys, chunk health, large unoptimized values, orphan chunks, and cost-aware eviction suggestions.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">--driver</span> <span class="parameter-type">(optional)</span> - Cache store to audit, defaults to <code>cache.default</code>
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">--format</span> <span class="parameter-type">(optional)</span> - Use <code>table</code> for humans or <code>json</code> for CI/reporting
+                        </div>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-bash"># Human-readable audit
+php artisan smart-cache:audit
+
+# JSON report for CI or dashboards
+php artisan smart-cache:audit --driver=redis --format=json --limit=50</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">smart-cache:bench</div>
+                        <div class="method-signature">php artisan smart-cache:bench [--profile=all] [--driver=] [--iterations=3] [--format=table|json] [--output=]</div>
+                        <p>Benchmark raw Laravel cache operations against SmartCache optimization using controlled payload profiles for medium values, API JSON, large arrays, and sparse arrays.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">--profile</span> <span class="parameter-type">(optional)</span> - One of <code>all</code>, <code>medium</code>, <code>api-json</code>, <code>large-array</code>, or <code>sparse-array</code>
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">--output</span> <span class="parameter-type">(optional)</span> - Write the JSON benchmark report to a file
+                        </div>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-bash"># Benchmark the default cache store
+php artisan smart-cache:bench
+
+# Benchmark Redis with more samples
+php artisan smart-cache:bench --driver=redis --iterations=10
+
+# Save a JSON report
+php artisan smart-cache:bench --format=json --output=storage/smart-cache-bench.json</code></pre>
+                        </div>
+                        <div class="alert alert-info" style="margin-top: 10px;">
+                            The included <code>docs/benchmark-report-redis.json</code> was generated locally with PHP 8.4, Laravel 13, and Redis. Each profile includes a goal and result summary, so compression is judged by byte reduction while chunking is judged by safe splitting and key preservation. Use it as a reproducible example, not a universal performance promise.
+                        </div>
+                    </div>
+
+                    <div class="method">
                         <div class="method-name">smart-cache:status</div>
                         <div class="method-signature">php artisan smart-cache:status [--force]</div>
                         <p>Display comprehensive information about SmartCache usage, configuration, and performance.</p>
@@ -2792,6 +2863,19 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     
                     <div class="alert alert-info">
                         A sample test controller you can drop into your application to validate SmartCache features end-to-end.
+                    </div>
+
+                    <h2>Package Test Suite</h2>
+                    <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
+
+                    <pre><code class="language-bash">composer test
+# 435 tests, 1,821 assertions
+
+vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
+vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>
+
+                    <div class="alert alert-success">
+                        The suite includes key-preservation checks for chunked arrays and self-healing checks that confirm missing chunks are treated as cache misses, allowing <code>remember()</code> to regenerate a clean value.
                     </div>
 
                     <h2>Test Controller</h2>

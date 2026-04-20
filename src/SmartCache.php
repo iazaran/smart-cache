@@ -298,6 +298,12 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         $restoredValue = $this->maybeRestoreValue($value, $key);
+        if ($restoredValue === $sentinel) {
+            $this->recordPerformanceMetric('cache_miss', $key, $startTime);
+            $this->dispatchCacheMissed($key);
+            return $default;
+        }
+
         $this->recordPerformanceMetric('cache_hit', $key, $startTime);
         $this->dispatchCacheHit($key, $restoredValue);
 
@@ -1021,7 +1027,7 @@ class SmartCache implements SmartCacheContract, Repository
                     } catch (\Throwable $evictError) {
                         // Best-effort eviction
                     }
-                    return null;
+                    return static::sentinel();
                 }
 
                 if ($this->config->get('smart-cache.fallback.enabled', true)) {
@@ -1269,13 +1275,21 @@ class SmartCache implements SmartCacheContract, Repository
 
             // If data is fresh, return it
             if ($age <= $freshTtl) {
-                return $this->maybeRestoreValue($cachedValue, $namespacedKey);
+                $restoredValue = $this->maybeRestoreValue($cachedValue, $namespacedKey);
+
+                if ($restoredValue !== $sentinel) {
+                    return $restoredValue;
+                }
             }
 
             // If data is stale but within stale period, return stale and refresh in background
             if ($age <= $totalTtl) {
                 // Return stale data immediately
                 $staleValue = $this->maybeRestoreValue($cachedValue, $namespacedKey);
+
+                if ($staleValue === $sentinel) {
+                    return $this->generateAndCache($namespacedKey, $durations, $callback);
+                }
 
                 // Trigger background refresh (simplified - in real implementation would be async)
                 $this->refreshInBackground($namespacedKey, $durations, $callback);

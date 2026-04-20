@@ -13,6 +13,8 @@ use SmartCache\Strategies\EncryptionStrategy;
 use SmartCache\Strategies\SmartSerializationStrategy;
 use SmartCache\Console\Commands\ClearCommand;
 use SmartCache\Console\Commands\CleanupChunksCommand;
+use SmartCache\Console\Commands\AuditCommand;
+use SmartCache\Console\Commands\BenchCommand;
 use SmartCache\Console\Commands\StatusCommand;
 use SmartCache\Console\Commands\WarmCacheCommand;
 
@@ -121,6 +123,8 @@ class SmartCacheServiceProvider extends ServiceProvider
             $this->commands([
                 ClearCommand::class,
                 StatusCommand::class,
+                AuditCommand::class,
+                BenchCommand::class,
                 CleanupChunksCommand::class,
                 WarmCacheCommand::class,
             ]);
@@ -169,6 +173,16 @@ class SmartCacheServiceProvider extends ServiceProvider
                 'class' => StatusCommand::class,
                 'description' => 'Display information about SmartCache usage and configuration',
                 'signature' => 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}'
+            ],
+            'smart-cache:audit' => [
+                'class' => AuditCommand::class,
+                'description' => 'Audit managed keys, chunk health, oversized entries, and eviction suggestions',
+                'signature' => 'smart-cache:audit {--format=table : Output format: table or json} {--driver= : Cache store to audit} {--limit=20 : Maximum number of keys to show in tables}'
+            ],
+            'smart-cache:bench' => [
+                'class' => BenchCommand::class,
+                'description' => 'Benchmark SmartCache compression and chunking against raw Laravel cache operations',
+                'signature' => 'smart-cache:bench {--profile=all : Benchmark profile} {--driver= : Cache store to benchmark} {--iterations=3 : Number of iterations per profile} {--format=table : Output format: table or json} {--output= : Write JSON report to a file path}'
             ],
             'smart-cache:cleanup-chunks' => [
                 'class' => CleanupChunksCommand::class,
