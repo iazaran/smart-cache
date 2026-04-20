@@ -26,6 +26,12 @@ composer test
 vendor/bin/phpunit
 ```
 
+Current suite size:
+
+```bash
+# 435 tests, 1,821 assertions
+```
+
 ### Run Specific Test Suites
 ```bash
 # Unit tests only
@@ -118,6 +124,25 @@ Command tests verify:
 - Proper exit codes
 - Integration with SmartCache service
 - Error handling
+
+Audit and benchmark commands also have focused coverage:
+
+```bash
+vendor/bin/phpunit tests/Unit/Console/AuditCommandTest.php
+vendor/bin/phpunit tests/Unit/Console/BenchCommandTest.php
+```
+
+`smart-cache:audit` tests cover healthy reports, JSON output, and broken chunk detection. `smart-cache:bench` tests cover profile execution, JSON output, report file writing, data integrity, and key-shape preservation.
+
+## Local Benchmark Report
+
+The package can generate a reproducible benchmark report without a full Laravel app by using Orchestra Testbench. Prefer Redis for public-facing examples when it is available locally:
+
+```bash
+vendor/bin/testbench smart-cache:bench --driver=redis --iterations=10 --format=json --output=docs/benchmark-report-redis.json
+```
+
+If Redis is not configured, use `--driver=array` as a command-behavior smoke test, but avoid presenting it as cache-backend performance. Benchmark numbers depend on hardware, PHP version, Laravel version, cache driver, serialization settings, and payload shape; run the command against Redis, Memcached, file, or database stores in your own environment before making production sizing decisions.
 
 ## Testing Without Laravel Installation
 
@@ -255,5 +280,3 @@ class MyIntegrationTest extends TestCase
 - Feature tests may take longer due to data processing
 - Use smaller test datasets when possible
 - Clean up test data in tearDown methods
-
-

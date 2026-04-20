@@ -23,6 +23,8 @@ class HttpCommandExecutionTest extends TestCase
         $this->assertIsArray($commands);
         $this->assertArrayHasKey('smart-cache:clear', $commands);
         $this->assertArrayHasKey('smart-cache:status', $commands);
+        $this->assertArrayHasKey('smart-cache:audit', $commands);
+        $this->assertArrayHasKey('smart-cache:bench', $commands);
         
         // Check clear command metadata
         $clearCommand = $commands['smart-cache:clear'];
@@ -37,6 +39,9 @@ class HttpCommandExecutionTest extends TestCase
         $this->assertArrayHasKey('description', $statusCommand);
         $this->assertArrayHasKey('signature', $statusCommand);
         $this->assertEquals('SmartCache\Console\Commands\StatusCommand', $statusCommand['class']);
+
+        $this->assertEquals('SmartCache\Console\Commands\AuditCommand', $commands['smart-cache:audit']['class']);
+        $this->assertEquals('SmartCache\Console\Commands\BenchCommand', $commands['smart-cache:bench']['class']);
     }
 
     public function test_execute_clear_command_without_parameters(): void
@@ -205,6 +210,8 @@ class HttpCommandExecutionTest extends TestCase
         $this->assertIsArray($commands);
         $this->assertArrayHasKey('smart-cache:clear', $commands);
         $this->assertArrayHasKey('smart-cache:status', $commands);
+        $this->assertArrayHasKey('smart-cache:audit', $commands);
+        $this->assertArrayHasKey('smart-cache:bench', $commands);
     }
 
     public function test_command_shortcuts(): void

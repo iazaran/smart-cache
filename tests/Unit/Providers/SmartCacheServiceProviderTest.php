@@ -5,6 +5,8 @@ namespace SmartCache\Tests\Unit\Providers;
 use SmartCache\Providers\SmartCacheServiceProvider;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
 use SmartCache\SmartCache;
+use SmartCache\Console\Commands\AuditCommand;
+use SmartCache\Console\Commands\BenchCommand;
 use SmartCache\Console\Commands\ClearCommand;
 use SmartCache\Console\Commands\StatusCommand;
 use SmartCache\Tests\TestCase;
@@ -190,13 +192,19 @@ class SmartCacheServiceProviderTest extends TestCase
         // The commands should be registered and available
         $clearCommand = $this->app->make(ClearCommand::class);
         $statusCommand = $this->app->make(StatusCommand::class);
+        $auditCommand = $this->app->make(AuditCommand::class);
+        $benchCommand = $this->app->make(BenchCommand::class);
         
         $this->assertInstanceOf(ClearCommand::class, $clearCommand);
         $this->assertInstanceOf(StatusCommand::class, $statusCommand);
+        $this->assertInstanceOf(AuditCommand::class, $auditCommand);
+        $this->assertInstanceOf(BenchCommand::class, $benchCommand);
         
         // Verify command signatures
         $this->assertEquals('smart-cache:clear', $clearCommand->getName());
         $this->assertEquals('smart-cache:status', $statusCommand->getName());
+        $this->assertEquals('smart-cache:audit', $auditCommand->getName());
+        $this->assertEquals('smart-cache:bench', $benchCommand->getName());
     }
 
     public function test_service_provider_merges_configuration()
