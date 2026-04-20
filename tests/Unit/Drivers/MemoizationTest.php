@@ -2,6 +2,8 @@
 
 namespace SmartCache\Tests\Unit\Drivers;
 
+use Illuminate\Contracts\Cache\Repository;
+use SmartCache\Drivers\MemoizedCacheDriver;
 use SmartCache\Tests\TestCase;
 use SmartCache\Facades\SmartCache;
 
@@ -33,23 +35,25 @@ class MemoizationTest extends TestCase
 
     public function test_memo_with_large_data()
     {
-        $memo = SmartCache::memo();
-        
         // Create large dataset
         $largeData = array_fill(0, 10000, 'test_data');
-        
-        $memo->put('large_key', $largeData, 60);
-        
-        // Multiple accesses should be instant (from memory)
-        $start = microtime(true);
+
+        $repository = $this->createMock(Repository::class);
+        $repository->expects($this->once())
+            ->method('get')
+            ->with('large_key', null)
+            ->willReturn($largeData);
+
+        $memo = new MemoizedCacheDriver($repository);
+        $data = null;
+
+        // Multiple accesses should hit the underlying cache only once.
         for ($i = 0; $i < 100; $i++) {
             $data = $memo->get('large_key');
         }
-        $duration = microtime(true) - $start;
-        
-        // Should be very fast (< 100ms for 100 accesses - lenient for CI)
-        $this->assertLessThan(0.1, $duration);
+
         $this->assertCount(10000, $data);
+        $this->assertSame(1, $memo->getMemoizationStats()['memoized_count']);
     }
 
     public function test_memo_handles_cache_misses()
@@ -137,27 +141,23 @@ class MemoizationTest extends TestCase
         $this->assertEquals('array_value', $memoArray->get('array_test'));
     }
 
-    public function test_memo_performance_improvement()
+    public function test_memo_avoids_repeated_repository_gets()
     {
-        // Test without memoization
-        $start = microtime(true);
+        $repository = $this->createMock(Repository::class);
+        $repository->expects($this->once())
+            ->method('get')
+            ->with('test_key', null)
+            ->willReturn('test_value');
+
+        $memo = new MemoizedCacheDriver($repository);
+        $value = null;
+
         for ($i = 0; $i < 100; $i++) {
-            SmartCache::get('test_key');
+            $value = $memo->get('test_key');
         }
-        $durationWithoutMemo = microtime(true) - $start;
-        
-        // Test with memoization
-        $memo = SmartCache::memo();
-        $memo->put('test_key', 'test_value', 60);
-        
-        $start = microtime(true);
-        for ($i = 0; $i < 100; $i++) {
-            $memo->get('test_key');
-        }
-        $durationWithMemo = microtime(true) - $start;
-        
-        // Memoization should be significantly faster
-        $this->assertLessThan($durationWithoutMemo, $durationWithMemo);
+
+        $this->assertSame('test_value', $value);
+        $this->assertSame(1, $memo->getMemoizationStats()['memoized_count']);
     }
 
     public function test_memo_with_many_operations()
@@ -228,4 +228,3 @@ class MemoizationTest extends TestCase
         $this->assertGreaterThan(0, $stats['total_memory']);
     }
 }
-
