@@ -5,7 +5,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/iazaran/smart-cache?style=flat-square)](https://github.com/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
-[![Tests](https://img.shields.io/badge/tests-435%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
+[![Tests](https://img.shields.io/badge/tests-452%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
 
 **Drop-in replacement for Laravel's `Cache` facade** that automatically compresses, chunks, and optimizes cached data — with write deduplication, self-healing recovery, and cost-aware eviction built in.
 
@@ -366,7 +366,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 435 tests, 1,821 assertions
+composer test            # 452 tests, 1,895 assertions
 composer test-coverage   # with code coverage
 ```
 
