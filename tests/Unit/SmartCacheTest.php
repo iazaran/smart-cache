@@ -16,7 +16,7 @@ class SmartCacheTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         $this->smartCache = $this->app->make(\SmartCache\Contracts\SmartCache::class);
     }
 
@@ -123,7 +123,7 @@ class SmartCacheTest extends TestCase
             $this->app['config'],
             [new CompressionStrategy(1024, 6)] // 1KB threshold, level 6
         );
-        
+
         $key = 'large-string-key';
         $value = $this->createCompressibleData(); // Creates string > 1KB
 
@@ -147,7 +147,7 @@ class SmartCacheTest extends TestCase
             $this->app['config'],
             [new CompressionStrategy(1024, 6)] // 1KB threshold, level 6
         );
-        
+
         $key = 'large-array-key';
         $value = $this->createLargeTestData(50); // Creates array that should exceed threshold
 
@@ -166,7 +166,7 @@ class SmartCacheTest extends TestCase
     {
         // Disable compression for this test to ensure chunking is applied
         $this->app['config']->set('smart-cache.strategies.compression.enabled', false);
-        
+
         // Create a fresh SmartCache instance with the new configuration
         $smartCache = new SmartCache(
             $this->getCacheStore(),
@@ -174,7 +174,7 @@ class SmartCacheTest extends TestCase
             $this->app['config'],
             [new ChunkingStrategy(2048, 100)]
         );
-        
+
         $key = 'chunked-array-key';
         $value = $this->createChunkableData(); // Creates array that should trigger chunking
 
@@ -229,16 +229,16 @@ class SmartCacheTest extends TestCase
     {
         $key1 = 'tracked-key-1';
         $key2 = 'tracked-key-2';
-        
+
         // Store a large value that triggers optimization
         $largeValue = $this->createCompressibleData();
         $this->smartCache->put($key1, $largeValue);
-        
+
         // Store a small value (still tracked for pattern matching and invalidation)
         $this->smartCache->put($key2, 'small value');
 
         $managedKeys = $this->smartCache->getManagedKeys();
-        
+
         // Both keys should now be tracked for advanced invalidation features
         $this->assertContains($key1, $managedKeys);
         $this->assertContains($key2, $managedKeys);
@@ -348,7 +348,7 @@ class SmartCacheTest extends TestCase
     {
         // Disable compression for this test to ensure chunking is applied
         $this->app['config']->set('smart-cache.strategies.compression.enabled', false);
-        
+
         // Create a fresh SmartCache instance with the new configuration
         $smartCache = new SmartCache(
             $this->getCacheStore(),
@@ -356,16 +356,16 @@ class SmartCacheTest extends TestCase
             $this->app['config'],
             [new ChunkingStrategy(2048, 100)]
         );
-        
+
         $key = 'chunked-cleanup-key';
         $value = $this->createChunkableData();
 
         $smartCache->put($key, $value);
-        
+
         // Get the chunked metadata
         $cached = $this->getCacheStore()->get($key);
         $this->assertValueIsChunked($cached);
-        
+
         // Verify chunk keys exist
         foreach ($cached['chunk_keys'] as $chunkKey) {
             $this->assertTrue($this->getCacheStore()->has($chunkKey));
@@ -472,12 +472,12 @@ class SmartCacheTest extends TestCase
             return $largeValue;
         };
 
-        // Laravel format: [freshTtl, staleTtl] 
+        // Laravel format: [freshTtl, staleTtl]
         $durations = [3600, 7200]; // Fresh for 1 hour, stale until 2 hours
 
         // Test the flexible method with real SmartCache instance
         $result = $this->smartCache->flexible($key, $durations, $callback);
-        
+
         $this->assertEquals($largeValue, $result);
         $this->assertEquals(1, $callCount);
 
@@ -579,11 +579,11 @@ class SmartCacheTest extends TestCase
         // Test that an unknown method gets delegated to the underlying cache
         $key = 'magic-method-key';
         $value = 'magic value';
-        
+
         // Use a method that exists on Laravel's cache but not explicitly on SmartCache
         // We'll use the many() method as an example
         $result = $this->smartCache->many([$key]);
-        
+
         // Should return array with null values since key doesn't exist
         $this->assertIsArray($result);
         $this->assertArrayHasKey($key, $result);
@@ -591,7 +591,7 @@ class SmartCacheTest extends TestCase
 
         // Store a value first
         $this->smartCache->put($key, $value);
-        
+
         // Now many() should return the value
         $result = $this->smartCache->many([$key]);
         $this->assertArrayHasKey($key, $result);
@@ -602,20 +602,20 @@ class SmartCacheTest extends TestCase
     {
         // Test that a completely unknown method gets delegated
         // This simulates what would happen with new Laravel 12+ methods
-        
+
         // We'll mock the cache store to have a new method
         $mockCache = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
         $mockCache->shouldReceive('hypotheticalNewMethod')
                   ->with('param1', 'param2')
                   ->once()
                   ->andReturn('new method result');
-        
+
         // Also mock other necessary methods that SmartCache constructor might call
         $mockCache->shouldReceive('getStore')->andReturn($mockCache);
         $mockCache->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
         $mockCache->shouldReceive('get')->with('_sc_dependencies', [])->andReturn([]);
         $mockCache->shouldReceive('get')->with('_sc_performance_metrics', [])->andReturn([]);
-        
+
         $smartCache = new SmartCache(
             $mockCache,
             $this->getCacheManager(),
@@ -632,7 +632,7 @@ class SmartCacheTest extends TestCase
         // Test that flexible method properly applies SmartCache optimizations
         $key = 'flexible-optimization-key';
         $largeValue = $this->createCompressibleData();
-        
+
         $callback = function () use ($largeValue) {
             return $largeValue;
         };
@@ -641,10 +641,10 @@ class SmartCacheTest extends TestCase
 
         // Test with real SmartCache instance
         $result = $this->smartCache->flexible($key, $durations, $callback);
-        
+
         // Verify the method works correctly
         $this->assertEquals($largeValue, $result);
-        
+
         // Verify key tracking works (optimization was applied)
         $managedKeys = $this->smartCache->getManagedKeys();
         $this->assertContains($key, $managedKeys);
@@ -652,14 +652,109 @@ class SmartCacheTest extends TestCase
         // Test the flexible method interacts properly with other SmartCache methods
         $this->assertTrue($this->smartCache->has($key));
         $this->assertEquals($largeValue, $this->smartCache->get($key));
-        
+
         // Test cleanup works (should also clean up metadata)
         $this->assertTrue($this->smartCache->forget($key));
         $this->assertFalse($this->smartCache->has($key));
-        
+
         // Verify metadata was also cleaned up
         $metaKey = $key . '_sc_meta';
         $this->assertNull($this->smartCache->get($metaKey));
+    }
+
+    public function test_touch_updates_chunked_keys()
+    {
+        // Ensure chunking is enabled
+        $this->app['config']->set('smart-cache.strategies.compression.enabled', false);
+
+        $key = 'chunked-touch-key';
+
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore->shouldReceive('getStore')->andReturn(Mockery::mock(\Illuminate\Contracts\Cache\Store::class));
+        $mockStore->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
+        $mockStore->shouldReceive('get')->with('_sc_dependencies', [])->andReturn([]);
+        $mockStore->shouldReceive('get')->with('_sc_performance_metrics', [])->andReturn([]);
+
+        $mockSmartCache = new SmartCache(
+            $mockStore,
+            $this->getCacheManager(),
+            $this->app['config'],
+            [new ChunkingStrategy(2048, 100)]
+        );
+
+        // Generate a mock chunk metadata structure
+        $rawCached = [
+            '_sc_chunked' => true,
+            'chunk_keys' => ['chunk1', 'chunk2'],
+            'total_chunks' => 2
+        ];
+
+        // Expect get to return chunked metadata
+        $mockStore->shouldReceive('get')->with($key, Mockery::any())->andReturn($rawCached);
+
+        // Ignore SWR meta and DNA
+        $mockStore->shouldReceive('has')->with("_sc_meta:{$key}")->andReturn(false);
+        $mockStore->shouldReceive('has')->with("_sc_dna:{$key}")->andReturn(false);
+
+        if (\method_exists(\Illuminate\Contracts\Cache\Repository::class, 'touch')) {
+            // Laravel 13+: native touch() path
+            $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(true);
+        } else {
+            // Laravel <13: fallback path uses get + put
+            $mockStore->shouldReceive('put')->with($key, $rawCached, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('get')->with('chunk1', Mockery::any())->once()->andReturn('chunk1-value');
+            $mockStore->shouldReceive('get')->with('chunk2', Mockery::any())->once()->andReturn('chunk2-value');
+            $mockStore->shouldReceive('put')->with('chunk1', 'chunk1-value', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('put')->with('chunk2', 'chunk2-value', 3600)->once()->andReturn(true);
+        }
+
+        $result = $mockSmartCache->touch($key, 3600);
+        $this->assertTrue($result);
+    }
+
+    public function test_touch_returns_false_when_chunk_touch_fails()
+    {
+        $key = 'chunked-touch-failure-key';
+
+        $mockStore = Mockery::mock(\Illuminate\Contracts\Cache\Repository::class);
+        $mockStore->shouldReceive('getStore')->andReturn(Mockery::mock(\Illuminate\Contracts\Cache\Store::class));
+        $mockStore->shouldReceive('get')->with('_sc_managed_keys', [])->andReturn([]);
+        $mockStore->shouldReceive('get')->with('_sc_dependencies', [])->andReturn([]);
+        $mockStore->shouldReceive('get')->with('_sc_performance_metrics', [])->andReturn([]);
+
+        $mockSmartCache = new SmartCache(
+            $mockStore,
+            $this->getCacheManager(),
+            $this->app['config'],
+            [new ChunkingStrategy(2048, 100)]
+        );
+
+        $rawCached = [
+            '_sc_chunked' => true,
+            'chunk_keys' => ['chunk1', 'chunk2'],
+            'total_chunks' => 2
+        ];
+
+        $mockStore->shouldReceive('get')->with($key, Mockery::any())->andReturn($rawCached);
+        $mockStore->shouldReceive('has')->with("_sc_meta:{$key}")->andReturn(false);
+
+        if (\method_exists(\Illuminate\Contracts\Cache\Repository::class, 'touch')) {
+            // Laravel 13+: native touch() path; second chunk touch fails
+            $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(false);
+        } else {
+            // Laravel <13: fallback path; second chunk put fails
+            $mockStore->shouldReceive('put')->with($key, $rawCached, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('get')->with('chunk1', Mockery::any())->once()->andReturn('chunk1-value');
+            $mockStore->shouldReceive('get')->with('chunk2', Mockery::any())->once()->andReturn('chunk2-value');
+            $mockStore->shouldReceive('put')->with('chunk1', 'chunk1-value', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('put')->with('chunk2', 'chunk2-value', 3600)->once()->andReturn(false);
+        }
+
+        $this->assertFalse($mockSmartCache->touch($key, 3600));
     }
 
     // ========================================

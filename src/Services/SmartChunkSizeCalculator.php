@@ -4,7 +4,7 @@ namespace SmartCache\Services;
 
 /**
  * Smart Chunk Size Calculator
- * 
+ *
  * Dynamically calculates optimal chunk sizes based on:
  * - Cache driver limitations
  * - Data characteristics (item size, total size)
@@ -39,27 +39,27 @@ class SmartChunkSizeCalculator
     {
         // Get driver limit
         $maxValueSize = $this->getDriverLimit($driver);
-        
+
         // Analyze data characteristics
         $totalItems = count($data);
         $avgItemSize = $this->calculateAverageItemSize($data);
         $totalSize = $totalItems * $avgItemSize;
-        
+
         // If data is small, don't chunk
         if ($totalSize < 100 * 1024) { // < 100KB
             return $totalItems; // Return all items in one chunk
         }
-        
+
         // Calculate chunk size based on driver limit
         // Use 80% of max size to leave safety margin
         $safeMaxSize = (int) ($maxValueSize * 0.8);
-        $optimalChunkSize = $avgItemSize > 0 
+        $optimalChunkSize = $avgItemSize > 0
             ? (int) floor($safeMaxSize / $avgItemSize)
             : $defaultChunkSize;
-        
+
         // Ensure minimum chunk size
         $optimalChunkSize = max($optimalChunkSize, 100);
-        
+
         // Adjust based on total data size
         if ($totalSize > 10 * 1024 * 1024) { // > 10MB
             // Use smaller chunks for very large datasets
@@ -68,10 +68,10 @@ class SmartChunkSizeCalculator
             // Use larger chunks for smaller datasets
             $optimalChunkSize = min($optimalChunkSize, 5000);
         }
-        
+
         // Ensure we don't exceed total items
         $optimalChunkSize = min($optimalChunkSize, $totalItems);
-        
+
         return $optimalChunkSize;
     }
 
@@ -86,7 +86,7 @@ class SmartChunkSizeCalculator
         if (!$driver) {
             return $this->driverLimits['default'];
         }
-        
+
         return $this->driverLimits[$driver] ?? $this->driverLimits['default'];
     }
 
@@ -102,21 +102,20 @@ class SmartChunkSizeCalculator
         if (empty($data)) {
             return 0;
         }
-        
+
         $totalItems = count($data);
         $samplesToTake = min($sampleSize, $totalItems);
-        
-        // Sample random items
-        $samples = array_rand($data, $samplesToTake);
-        if (!is_array($samples)) {
-            $samples = [$samples];
-        }
-        
+
         $totalSize = 0;
-        foreach ($samples as $key) {
-            $totalSize += strlen(serialize($data[$key]));
+        $count = 0;
+        foreach ($data as $item) {
+            $totalSize += strlen(serialize($item));
+            $count++;
+            if ($count >= $samplesToTake) {
+                break;
+            }
         }
-        
+
         return (int) ceil($totalSize / $samplesToTake);
     }
 
@@ -146,7 +145,7 @@ class SmartChunkSizeCalculator
         $totalSize = $totalItems * $avgItemSize;
         $optimalChunkSize = $this->calculateOptimalSize($data, $driver);
         $chunkCount = $this->calculateChunkCount($totalItems, $optimalChunkSize);
-        
+
         return [
             'total_items' => $totalItems,
             'total_size' => $totalSize,
@@ -172,7 +171,7 @@ class SmartChunkSizeCalculator
     {
         $estimatedChunkBytes = $chunkSize * $avgItemSize;
         $driverLimit = $this->getDriverLimit($driver);
-        
+
         // Use 80% of limit as safety margin
         return $estimatedChunkBytes <= ($driverLimit * 0.8);
     }

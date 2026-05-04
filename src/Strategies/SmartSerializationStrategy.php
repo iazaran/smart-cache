@@ -6,7 +6,7 @@ use SmartCache\Contracts\OptimizationStrategy;
 
 /**
  * Smart Serialization Strategy
- * 
+ *
  * Automatically selects the best serialization method based on data type:
  * - JSON for simple arrays (faster, more compact, cross-platform)
  * - igbinary for complex data (more compact than PHP serialize)
@@ -14,6 +14,8 @@ use SmartCache\Contracts\OptimizationStrategy;
  */
 class SmartSerializationStrategy implements OptimizationStrategy
 {
+    protected const JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
+
     /**
      * @var string
      */
@@ -79,7 +81,7 @@ class SmartSerializationStrategy implements OptimizationStrategy
     public function optimize(mixed $value, array $context = []): mixed
     {
         $method = $this->selectSerializationMethod($value);
-        
+
         return [
             '_sc_serialized' => true,
             'method' => $method,
@@ -95,7 +97,7 @@ class SmartSerializationStrategy implements OptimizationStrategy
         if (!is_array($value) || !isset($value['_sc_serialized']) || $value['_sc_serialized'] !== true) {
             return $value;
         }
-        
+
         return $this->unserialize($value['data'], $value['method']);
     }
 
@@ -117,21 +119,23 @@ class SmartSerializationStrategy implements OptimizationStrategy
     {
         // If not auto-detecting, use preferred method
         if (!$this->autoDetect) {
-            return $this->getAvailableMethod($this->preferredMethod);
+            $method = $this->getAvailableMethod($this->preferredMethod);
+
+            return $method === 'json' && !$this->isJsonSafe($value) ? 'php' : $method;
         }
-        
+
         // Auto-detect best method
-        
+
         // Try JSON first for simple data (fastest and most compact)
         if ($this->isJsonSafe($value)) {
             return 'json';
         }
-        
+
         // Use igbinary if available (more compact than PHP serialize)
         if (function_exists('igbinary_serialize')) {
             return 'igbinary';
         }
-        
+
         // Fallback to PHP serialize
         return 'php';
     }
@@ -139,15 +143,20 @@ class SmartSerializationStrategy implements OptimizationStrategy
     /**
      * Check if a value can be safely serialized with JSON.
      *
-     * Uses a single json_encode call which natively detects all unsupported types
-     * (resources, closures, non-stdClass objects with private state, etc.).
+     * JSON is only considered safe when encoding and associative decoding
+     * preserves the exact PHP value. Objects, resources, closures, and floats
+     * that would change type fall back to PHP/igbinary serialization.
+     *
+     * Top-level resources, closures and non-stdClass objects are rejected
+     * upfront to keep the hot path cheap and to avoid emitting unsuppressable
+     * E_WARNINGs when json_encode encounters them. Nested unsupported types
+     * are caught by the JSON_THROW_ON_ERROR round-trip below.
      *
      * @param mixed $value
      * @return bool
      */
     protected function isJsonSafe(mixed $value): bool
     {
-        // Quick rejection for types that json_encode cannot handle
         if (\is_resource($value) || $value instanceof \Closure) {
             return false;
         }
@@ -156,8 +165,19 @@ class SmartSerializationStrategy implements OptimizationStrategy
             return false;
         }
 
-        // Single encode attempt — catches nested issues too
-        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) !== false;
+        try {
+            $json = json_encode($value, self::JSON_FLAGS | JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return false;
+        }
+
+        try {
+            $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return false;
+        }
+
+        return $decoded === $value;
     }
 
     /**
@@ -171,11 +191,11 @@ class SmartSerializationStrategy implements OptimizationStrategy
         if ($method === 'auto') {
             return 'php';
         }
-        
+
         if ($method === 'igbinary' && !function_exists('igbinary_serialize')) {
             return 'php';
         }
-        
+
         return $method;
     }
 
@@ -189,7 +209,7 @@ class SmartSerializationStrategy implements OptimizationStrategy
     protected function serialize(mixed $value, string $method): string
     {
         return match ($method) {
-            'json' => json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'json' => json_encode($value, self::JSON_FLAGS),
             'igbinary' => base64_encode(igbinary_serialize($value)),
             'php' => base64_encode(serialize($value)),
             default => base64_encode(serialize($value)),
@@ -222,10 +242,10 @@ class SmartSerializationStrategy implements OptimizationStrategy
     public function getSerializationStats(mixed $value): array
     {
         $stats = [];
-        
+
         // Test JSON
         if ($this->isJsonSafe($value)) {
-            $jsonData = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $jsonData = json_encode($value, self::JSON_FLAGS);
             $stats['json'] = [
                 'size' => strlen($jsonData),
                 'available' => true,
@@ -236,7 +256,7 @@ class SmartSerializationStrategy implements OptimizationStrategy
                 'available' => false,
             ];
         }
-        
+
         // Test igbinary
         if (function_exists('igbinary_serialize')) {
             $igbinaryData = igbinary_serialize($value);
@@ -250,32 +270,31 @@ class SmartSerializationStrategy implements OptimizationStrategy
                 'available' => false,
             ];
         }
-        
+
         // Test PHP serialize
         $phpData = serialize($value);
         $stats['php'] = [
             'size' => strlen($phpData),
             'available' => true,
         ];
-        
+
         // Determine best method
         $bestMethod = 'php';
         $bestSize = $stats['php']['size'];
-        
+
         if ($stats['json']['available'] && $stats['json']['size'] < $bestSize) {
             $bestMethod = 'json';
             $bestSize = $stats['json']['size'];
         }
-        
+
         if ($stats['igbinary']['available'] && $stats['igbinary']['size'] < $bestSize) {
             $bestMethod = 'igbinary';
             $bestSize = $stats['igbinary']['size'];
         }
-        
+
         $stats['recommended'] = $bestMethod;
         $stats['best_size'] = $bestSize;
-        
+
         return $stats;
     }
 }
-

@@ -1,6 +1,7 @@
 vendor/
 composer.lock
 .phpunit.cache/
+.codex
 coverage/
 .DS_Store
 tests/storage/framework/cache/
