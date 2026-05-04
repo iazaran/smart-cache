@@ -317,6 +317,49 @@ class SmartCacheIntegrationTest extends TestCase
         $this->assertLessThan(5.0, $duration, 'Performance test took too long: ' . $duration . ' seconds');
     }
 
+    public function test_touch_on_chunked_entry_preserves_value_and_chunks()
+    {
+        // Disable compression so chunking is the active optimization
+        $this->app['config']->set('smart-cache.strategies.compression.enabled', false);
+
+        $chunkingSmartCache = new \SmartCache\SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+            [new \SmartCache\Strategies\ChunkingStrategy(2048, 100)]
+        );
+
+        $key = 'integration-touch-chunked-test';
+        $largeArray = $this->createChunkableData();
+
+        $this->assertTrue($chunkingSmartCache->put($key, $largeArray, 60));
+
+        $rawCached = Cache::get($key);
+        $this->assertValueIsChunked($rawCached);
+        $chunkKeys = $rawCached['chunk_keys'];
+
+        $this->assertTrue($chunkingSmartCache->touch($key, 3600));
+
+        // Wrapper still resolves to the original value
+        $this->assertEquals($largeArray, $chunkingSmartCache->get($key));
+
+        // All chunk keys still present after the touch
+        foreach ($chunkKeys as $chunkKey) {
+            $this->assertTrue(Cache::has($chunkKey), "Chunk {$chunkKey} should still exist after touch");
+        }
+
+        // Cleanup
+        $chunkingSmartCache->forget($key);
+        foreach ($chunkKeys as $chunkKey) {
+            $this->assertFalse(Cache::has($chunkKey));
+        }
+    }
+
+    public function test_touch_returns_false_for_missing_key()
+    {
+        $this->assertFalse($this->smartCache->touch('integration-touch-missing-key', 3600));
+    }
+
     public function test_memory_usage_with_large_datasets()
     {
         $initialMemory = memory_get_usage();
