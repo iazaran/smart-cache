@@ -624,14 +624,77 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function touch($key, $ttl): bool
     {
-        $key = $this->applyNamespace((string) $key);
+        $namespacedKey = $this->applyNamespace((string) $key);
+
+        $sentinel = static::sentinel();
+        $rawValue = $this->cache->get($namespacedKey, $sentinel);
+
+        if ($rawValue === $sentinel) {
+            return false;
+        }
 
         // Delegate to the underlying cache's touch() if available (Laravel 13+)
         if (\method_exists($this->cache, 'touch')) {
-            return $this->cache->touch($key, $ttl);
+            $success = $this->cache->touch($namespacedKey, $ttl);
+        } else {
+            // Fallback for older Laravel versions: read the raw value and re-store it
+            $success = $this->cache->put($namespacedKey, $rawValue, $ttl);
         }
 
-        // Fallback for older Laravel versions: read the raw value and re-store it
+        if (!$success) {
+            return false;
+        }
+
+        return $this->touchRelatedRawKeys($rawValue, $namespacedKey, $ttl);
+    }
+
+    /**
+     * Extend metadata and chunk keys that must live as long as the main value.
+     */
+    protected function touchRelatedRawKeys(mixed $rawValue, string $namespacedKey, mixed $ttl): bool
+    {
+        $success = $this->touchOptionalRawKey("_sc_meta:{$namespacedKey}", $ttl);
+
+        if ($this->deduplicationEnabled) {
+            $success = $this->touchOptionalRawKey("_sc_dna:{$namespacedKey}", $ttl) && $success;
+        }
+
+        if (!\is_array($rawValue) || !isset($rawValue['_sc_chunked']) || $rawValue['_sc_chunked'] !== true) {
+            return $success;
+        }
+
+        if (!isset($rawValue['chunk_keys']) || !\is_array($rawValue['chunk_keys'])) {
+            return false;
+        }
+
+        foreach ($rawValue['chunk_keys'] as $chunkKey) {
+            $success = $this->touchRequiredRawKey((string) $chunkKey, $ttl) && $success;
+        }
+
+        return $success;
+    }
+
+    /**
+     * Touch a related key only when it exists.
+     */
+    protected function touchOptionalRawKey(string $key, mixed $ttl): bool
+    {
+        if (!$this->cache->has($key)) {
+            return true;
+        }
+
+        return $this->touchRequiredRawKey($key, $ttl);
+    }
+
+    /**
+     * Touch a related key that is required for restoring the main cache value.
+     */
+    protected function touchRequiredRawKey(string $key, mixed $ttl): bool
+    {
+        if (\method_exists($this->cache, 'touch')) {
+            return (bool) $this->cache->touch($key, $ttl);
+        }
+
         $sentinel = static::sentinel();
         $value = $this->cache->get($key, $sentinel);
 
@@ -639,7 +702,7 @@ class SmartCache implements SmartCacheContract, Repository
             return false;
         }
 
-        return $this->cache->put($key, $value, $ttl);
+        return (bool) $this->cache->put($key, $value, $ttl);
     }
 
     /**
@@ -972,11 +1035,11 @@ class SmartCache implements SmartCacheContract, Repository
                     if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                         Log::warning("SmartCache optimization failed for {$key}: " . $e->getMessage());
                     }
-                    
+
                     if ($this->config->get('smart-cache.fallback.enabled', true)) {
                         continue;
                     }
-                    
+
                     throw $e;
                 }
             }
@@ -1247,7 +1310,7 @@ class SmartCache implements SmartCacheContract, Repository
 
     /**
      * Stale-while-revalidate cache with optimization support.
-     * 
+     *
      * Laravel's flexible method uses: [freshTtl, staleTtl]
      * - freshTtl: seconds data is considered fresh
      * - staleTtl: absolute seconds to serve stale data while revalidating
@@ -1347,7 +1410,7 @@ class SmartCache implements SmartCacheContract, Repository
 
     /**
      * Stale-While-Revalidate (SWR) caching pattern.
-     * 
+     *
      * Returns cached data immediately, triggers background refresh if stale.
      *
      * @param string $key
@@ -1363,7 +1426,7 @@ class SmartCache implements SmartCacheContract, Repository
 
     /**
      * Stale cache pattern - allows serving stale data beyond TTL.
-     * 
+     *
      * Serves stale data for extended period while attempting background refresh.
      *
      * @param string $key
@@ -1379,7 +1442,7 @@ class SmartCache implements SmartCacheContract, Repository
 
     /**
      * Refresh-Ahead caching pattern.
-     * 
+     *
      * Proactively refreshes cache before expiration to avoid cache misses.
      *
      * @param string $key
@@ -1736,7 +1799,7 @@ class SmartCache implements SmartCacheContract, Repository
         if ($this->invalidationService === null) {
             $this->invalidationService = new CacheInvalidationService($this);
         }
-        
+
         return $this->invalidationService;
     }
 
@@ -2084,11 +2147,11 @@ class SmartCache implements SmartCacheContract, Repository
                 case 'clear':
                 case 'smart-cache:clear':
                     return $this->executeClearCommand($parameters);
-                    
+
                 case 'status':
                 case 'smart-cache:status':
                     return $this->executeStatusCommand($parameters);
-                    
+
                 default:
                     return [
                         'success' => false,
@@ -2372,12 +2435,12 @@ class SmartCache implements SmartCacheContract, Repository
         $recommendations = [];
         $efficiency = $metrics['cache_efficiency'];
         $optimization = $metrics['optimization_impact'];
-        
+
         // Get warning thresholds from config
         $hitRatioThreshold = $this->config->get('smart-cache.warnings.hit_ratio_threshold', 70);
         $optimizationThreshold = $this->config->get('smart-cache.warnings.optimization_ratio_threshold', 20);
         $slowWriteThreshold = $this->config->get('smart-cache.warnings.slow_write_threshold', 0.1);
-        
+
         // Hit ratio recommendations
         if ($efficiency['hit_ratio'] < $hitRatioThreshold) {
             $recommendations[] = [
@@ -2388,7 +2451,7 @@ class SmartCache implements SmartCacheContract, Repository
                 'threshold' => $hitRatioThreshold
             ];
         }
-        
+
         // Optimization recommendations
         if ($optimization['optimization_ratio'] < $optimizationThreshold && $optimization['total_writes'] > 10) {
             $recommendations[] = [
@@ -2399,7 +2462,7 @@ class SmartCache implements SmartCacheContract, Repository
                 'threshold' => $optimizationThreshold
             ];
         }
-        
+
         // Performance issues
         $writes = $metrics['metrics']['cache_write'] ?? [];
         if (isset($writes['average_duration']) && $writes['average_duration'] > $slowWriteThreshold) {
@@ -2411,7 +2474,7 @@ class SmartCache implements SmartCacheContract, Repository
                 'threshold' => round($slowWriteThreshold * 1000) . 'ms'
             ];
         }
-        
+
         return [
             'analysis_timestamp' => now()->toDateTimeString(),
             'overall_health' => \count($recommendations) === 0 ? 'good' : 'needs_attention',

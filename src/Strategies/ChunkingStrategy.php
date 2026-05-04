@@ -101,9 +101,23 @@ class ChunkingStrategy implements OptimizationStrategy
             return false;
         }
 
-        // Estimate size without full serialization: count * avg item size
+        // Estimate size without full serialization
         $count = \count($value);
-        $estimate = $count * 50; // rough estimate per item
+
+        $sampleSize = min(5, $count);
+        $sampleBytes = 0;
+        $sampled = 0;
+
+        foreach ($value as $item) {
+            $sampleBytes += \strlen(\serialize($item));
+            $sampled++;
+            if ($sampled >= $sampleSize) {
+                break;
+            }
+        }
+
+        $avgItemSize = $sampleSize > 0 ? (int) ceil($sampleBytes / $sampleSize) : 50;
+        $estimate = $count * $avgItemSize;
 
         // If clearly below threshold, skip serialization
         if ($estimate < $this->threshold / 2) {
@@ -234,4 +248,4 @@ class ChunkingStrategy implements OptimizationStrategy
     {
         return 'chunking';
     }
-} 
+}

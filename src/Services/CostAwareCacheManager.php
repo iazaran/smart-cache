@@ -238,6 +238,11 @@ class CostAwareCacheManager
      */
     protected function trimIfNeeded(): void
     {
+        if ($this->maxTrackedKeys < 1) {
+            $this->metadata = [];
+            return;
+        }
+
         if (\count($this->metadata) <= $this->maxTrackedKeys) {
             return;
         }
@@ -250,8 +255,9 @@ class CostAwareCacheManager
 
         \arsort($scored);
 
-        // Keep only the top maxTrackedKeys
-        $keysToKeep = \array_slice($scored, 0, $this->maxTrackedKeys, true);
+        // Keep 90% of maxTrackedKeys to amortize sorting cost over multiple inserts.
+        $targetSize = \max(1, (int) \floor($this->maxTrackedKeys * 0.9));
+        $keysToKeep = \array_slice($scored, 0, $targetSize, true);
         $this->metadata = \array_intersect_key($this->metadata, $keysToKeep);
     }
 
