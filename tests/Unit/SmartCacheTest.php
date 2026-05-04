@@ -692,16 +692,23 @@ class SmartCacheTest extends TestCase
         // Expect get to return chunked metadata
         $mockStore->shouldReceive('get')->with($key, Mockery::any())->andReturn($rawCached);
 
-        // Expect touch on the main key
-        $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
-
-        // Expect touch on ALL chunk keys!
-        $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
-        $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(true);
-
         // Ignore SWR meta and DNA
         $mockStore->shouldReceive('has')->with("_sc_meta:{$key}")->andReturn(false);
         $mockStore->shouldReceive('has')->with("_sc_dna:{$key}")->andReturn(false);
+
+        if (\method_exists(\Illuminate\Contracts\Cache\Repository::class, 'touch')) {
+            // Laravel 13+: native touch() path
+            $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(true);
+        } else {
+            // Laravel <13: fallback path uses get + put
+            $mockStore->shouldReceive('put')->with($key, $rawCached, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('get')->with('chunk1', Mockery::any())->once()->andReturn('chunk1-value');
+            $mockStore->shouldReceive('get')->with('chunk2', Mockery::any())->once()->andReturn('chunk2-value');
+            $mockStore->shouldReceive('put')->with('chunk1', 'chunk1-value', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('put')->with('chunk2', 'chunk2-value', 3600)->once()->andReturn(true);
+        }
 
         $result = $mockSmartCache->touch($key, 3600);
         $this->assertTrue($result);
@@ -731,10 +738,21 @@ class SmartCacheTest extends TestCase
         ];
 
         $mockStore->shouldReceive('get')->with($key, Mockery::any())->andReturn($rawCached);
-        $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
         $mockStore->shouldReceive('has')->with("_sc_meta:{$key}")->andReturn(false);
-        $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
-        $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(false);
+
+        if (\method_exists(\Illuminate\Contracts\Cache\Repository::class, 'touch')) {
+            // Laravel 13+: native touch() path; second chunk touch fails
+            $mockStore->shouldReceive('touch')->with($key, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk1', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('touch')->with('chunk2', 3600)->once()->andReturn(false);
+        } else {
+            // Laravel <13: fallback path; second chunk put fails
+            $mockStore->shouldReceive('put')->with($key, $rawCached, 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('get')->with('chunk1', Mockery::any())->once()->andReturn('chunk1-value');
+            $mockStore->shouldReceive('get')->with('chunk2', Mockery::any())->once()->andReturn('chunk2-value');
+            $mockStore->shouldReceive('put')->with('chunk1', 'chunk1-value', 3600)->once()->andReturn(true);
+            $mockStore->shouldReceive('put')->with('chunk2', 'chunk2-value', 3600)->once()->andReturn(false);
+        }
 
         $this->assertFalse($mockSmartCache->touch($key, 3600));
     }
