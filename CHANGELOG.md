@@ -5,6 +5,23 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-05-04
+### Fixed
+- `touch()` now extends the TTL of every chunk key, the SWR/stampede metadata key (`_sc_meta:{key}`), and the Cache DNA hash key (`_sc_dna:{key}`) in addition to the wrapper key. Previously, calling `touch()` on a chunked entry left the underlying chunks scheduled to expire at their original TTL, which could surface as `RuntimeException: Missing cache chunk […]` on subsequent reads.
+- `touch()` now returns `false` when the target key does not exist, matching Laravel cache semantics across both the native (Laravel 13+) and fallback paths.
+- `SmartSerializationStrategy::isJsonSafe()` now performs a JSON encode/decode round-trip and rejects values whose decoded form does not strictly equal the original (e.g. `stdClass` collapsing to an empty array, `Exception` instances losing their class, and similar type-changing payloads). Forced-`json` mode degrades to `php` when the value cannot be safely round-tripped.
+- JSON serialization writes float values with `JSON_PRESERVE_ZERO_FRACTION`, so values like `1.0` round-trip as float instead of being silently coerced to `int(1)`.
+### Changed
+- `isJsonSafe()` rejects top-level resources, closures and non-`stdClass` objects upfront, and runs the round-trip check with `JSON_THROW_ON_ERROR` so that nested unsupported types do not emit unsuppressable `E_WARNING`s into application logs.
+- `CostAwareCacheManager::trimIfNeeded()` now trims down to 90% of `max_tracked_keys` instead of exactly the cap, amortising the `arsort()` cost across multiple inserts. Memory ceiling is unchanged. Behaviour with `max_tracked_keys < 1` is now well-defined (metadata is cleared).
+- `ChunkingStrategy::shouldApply()` estimates value size by sampling the serialized bytes of up to five items instead of using a fixed 50-byte-per-item heuristic, producing more accurate chunk decisions for non-trivial item sizes while keeping the borderline-case full-serialize fallback intact.
+- `SmartChunkSizeCalculator::calculateAverageItemSize()` walks the first N items instead of calling `array_rand()`, removing RNG overhead and the `is_array($samples)` defensive branch.
+- `.gitignore` now excludes the `.codex` directory used by AI tooling.
+### Added
+- Unit tests covering chunked `touch()` (happy path and chunk-failure path), `JSON_PRESERVE_ZERO_FRACTION` preservation, `stdClass`/`Exception`/nested-object fallbacks, forced-`json` graceful degradation, legacy JSON payload restore compatibility, and dedicated tests verifying `isJsonSafe()` does not emit warnings for top-level resources, top-level closures, or nested resources.
+- Feature tests covering end-to-end `touch()` on chunked entries (value still resolves and every chunk key survives) and `touch()` returning `false` for missing keys.
+- Unit tests for `CostAwareCacheManager` covering cost-based scoring, the new 90%-of-capacity trimming behaviour, the `max_tracked_keys = 1` edge case, and persist/load round-trip.
+
 ## [1.10.0] - 2026-04-20
 ### Added
 - Added `smart-cache:audit` for read-only diagnostics of managed keys, missing tracked keys, broken chunked entries, orphan chunks, large unoptimized values, and cost-aware eviction suggestions.
@@ -145,6 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.11.0]: https://github.com/iazaran/smart-cache/compare/1.10.0...1.11.0
 [1.10.0]: https://github.com/iazaran/smart-cache/compare/1.9.3...1.10.0
 [1.9.3]: https://github.com/iazaran/smart-cache/compare/1.9.2...1.9.3
 [1.9.2]: https://github.com/iazaran/smart-cache/compare/1.9.1...1.9.2
