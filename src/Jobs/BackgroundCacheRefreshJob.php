@@ -63,6 +63,17 @@ class BackgroundCacheRefreshJob implements ShouldQueue
      */
     public function __construct(string $key, callable|string $callback, ?int $ttl = null, array $tags = [])
     {
+        // Closures cannot be safely serialized by Laravel's queue drivers,
+        // so reject them early with a clear, actionable error rather than
+        // letting the worker fail later with a cryptic serialization warning.
+        if ($callback instanceof \Closure) {
+            throw new \InvalidArgumentException(
+                'BackgroundCacheRefreshJob does not accept Closures because they cannot be serialized for the queue. '
+                . 'Pass a serializable callback instead: a "Class@method" string, an invokable class name, '
+                . 'or a [Class::class, "method"] array. For inline closures, use SmartCache::swr() (synchronous in-process refresh).'
+            );
+        }
+
         $this->key = $key;
         $this->callback = $callback;
         $this->ttl = $ttl;
