@@ -5,7 +5,8 @@
 [![GitHub Stars](https://img.shields.io/github/stars/iazaran/smart-cache?style=flat-square)](https://github.com/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
-[![Tests](https://img.shields.io/badge/tests-452%20passed-brightgreen?style=flat-square)](https://github.com/iazaran/smart-cache/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/iazaran/smart-cache/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/iazaran/smart-cache/actions/workflows/tests.yml)
+[![Coverage](https://img.shields.io/github/actions/workflow/status/iazaran/smart-cache/code-analysis.yml?branch=main&label=coverage&style=flat-square)](https://github.com/iazaran/smart-cache/actions/workflows/code-analysis.yml)
 
 **Drop-in replacement for Laravel's `Cache` facade** that automatically compresses, chunks, and optimizes cached data — with write deduplication, self-healing recovery, and cost-aware eviction built in.
 
@@ -106,9 +107,13 @@ $config = SmartCache::stale('site_config', fn() => Config::fromDatabase(), 3600,
 // Proactive refresh before expiry
 $analytics = SmartCache::refreshAhead('daily_analytics', fn() => Analytics::generateReport(), 1800, 300);
 
-// Queue-based background refresh — returns stale immediately
+// Queue-based background refresh — returns stale immediately, refresh runs on a worker
 $data = SmartCache::asyncSwr('dashboard_stats', fn() => Stats::generate(), 300, 900, 'cache-refresh');
 ```
+
+> **How "background" works.** `swr()`, `stale()` and `refreshAhead()` run the refresh callback **synchronously** in the same PHP process after returning the stale value to the caller. This keeps the request hot path fast (the caller does not wait for the new value), but the worker still pays the cost of the regeneration. Use `asyncSwr()` with a Laravel queue worker if you need the refresh to run in a separate process. **`asyncSwr()` does not accept `Closure` callbacks** — pass either a serializable invokable class or a `"Class@method"` string. Closures throw `InvalidArgumentException` since v1.12.0 so the failure is loud at dispatch time instead of inside the queue serializer.
+>
+> **Single-flight refresh (opt-in, v1.12.0+).** Set `smart-cache.swr.single_flight = true` to wrap the synchronous refresh in an opportunistic non-blocking lock keyed on `_sc_swr_refresh:{key}`. When the cache store implements `LockProvider` (redis, memcached, database, dynamodb, file) only one worker regenerates a stale entry; concurrent workers keep serving stale and return immediately. Default `false` preserves the historical "every worker refreshes" behaviour.
 
 ### Stampede Protection
 
@@ -337,15 +342,27 @@ return [
         'encryption'  => ['enabled' => false, 'keys' => []],
     ],
     'monitoring'      => ['enabled' => true, 'metrics_ttl' => 3600],
-    'circuit_breaker' => ['enabled' => false, 'failure_threshold' => 5, 'recovery_timeout' => 30],
+    'circuit_breaker' => [
+        'enabled'           => false,
+        'failure_threshold' => 5,
+        'recovery_timeout'  => 30,
+        'shared'            => false, // v1.12.0: share breaker state across workers via the cache
+        'shared_ttl'        => 300,   // v1.12.0: TTL for the shared state key
+    ],
     'rate_limiter'    => ['enabled' => true, 'window' => 60, 'max_attempts' => 10],
     'jitter'          => ['enabled' => false, 'percentage' => 0.1],
     'deduplication'   => ['enabled' => true],   // Write deduplication (Cache DNA)
     'self_healing'    => ['enabled' => true],   // Auto-evict corrupted entries
+    'swr'             => ['single_flight' => false], // v1.12.0: opt-in single-flight refresh
+    'managed_keys'    => ['max_tracked' => 0],       // v1.12.0: 0 = unlimited (default)
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
     'warmers'         => [],                    // Cache warmer classes for smart-cache:warm
 ];
 ```
+
+## Laravel Octane / Long-Running Workers
+
+SmartCache is registered as a singleton, which means per-request state (active tags, namespaces, in-memory metric buffers) would normally leak between requests on **Laravel Octane**, **Swoole**, **FrankenPHP** or **RoadRunner**. Since **v1.12.0** the service provider's `terminating()` hook calls `SmartCache::reset()` and `OrphanChunkCleanupService::flush()` at the end of every request, so there is **nothing extra to configure**. If you embed SmartCache in your own long-running runtime, call `app(\SmartCache\Contracts\SmartCache::class)->reset()` between iterations.
 
 ## Migration from Laravel Cache
 
@@ -366,7 +383,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 452 tests, 1,895 assertions
+composer test            # 470 tests, 1,931 assertions
 composer test-coverage   # with code coverage
 ```
 

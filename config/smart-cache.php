@@ -84,6 +84,10 @@ return [
         'failure_threshold' => 5, // Number of failures before opening circuit
         'recovery_timeout' => 30, // Seconds to wait before trying again
         'success_threshold' => 3, // Successful calls needed to close circuit
+        'shared' => false, // When true, breaker state is persisted to the cache so it is
+                           // shared across workers/processes. Default false preserves
+                           // the historical per-instance behaviour.
+        'shared_ttl' => 300, // Seconds to keep the shared state in cache (best-effort).
     ],
 
     /*
@@ -170,6 +174,60 @@ return [
     */
     'self_healing' => [
         'enabled' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Stale-While-Revalidate (SWR)
+    |--------------------------------------------------------------------------
+    |
+    | Configure SWR behaviour shared by `flexible()`, `swr()`, `stale()`, and
+    | `refreshAhead()`.  When `single_flight` is enabled and the underlying
+    | cache store implements `LockProvider`, only one process will execute
+    | the in-process background refresh for a given key at a time.  Other
+    | processes continue to serve the stale value without piling on the
+    | upstream source.  Falls back to the historical behaviour when the
+    | store does not support locks.
+    |
+    */
+    'swr' => [
+        'single_flight' => false, // Opportunistic non-blocking lock around refreshInBackground().
+                                  // Default false preserves the historical behaviour where every
+                                  // worker performs its own synchronous refresh.
+        'lock_ttl' => 30,         // Seconds the refresh lock is held when single_flight is enabled.
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Managed Keys Tracking
+    |--------------------------------------------------------------------------
+    |
+    | SmartCache maintains an index of optimized keys (`_sc_managed_keys`)
+    | so that pattern-based invalidation, audits, and the dashboard can work
+    | without scanning the underlying store.  On very large key spaces the
+    | index can grow unbounded.  Set `max_tracked` to a positive integer to
+    | cap the index size; the oldest entries are dropped first.  `null` or
+    | `0` keep the historical unlimited behaviour.
+    |
+    */
+    'managed_keys' => [
+        'max_tracked' => null,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Chunk Registry
+    |--------------------------------------------------------------------------
+    |
+    | The orphan-chunk cleanup service persists its registry every time a
+    | chunked entry is written.  On extremely write-heavy workloads this
+    | can dominate cache I/O.  Increase `persist_every` to batch writes —
+    | the registry is still flushed on `cleanupOrphanChunks()` and on
+    | service shutdown.  Default `1` matches the historical behaviour.
+    |
+    */
+    'chunk_registry' => [
+        'persist_every' => 1,
     ],
 
     /*

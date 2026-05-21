@@ -228,9 +228,83 @@ class CompressionStrategyTest extends TestCase
         foreach ($testCases as $testCase) {
             $optimized = $this->strategy->optimize($testCase);
             $restored = $this->strategy->restore($optimized);
-            
-            $this->assertEquals($testCase, $restored, 
+
+            $this->assertEquals($testCase, $restored,
                 'Round-trip compression should preserve data integrity for: ' . gettype($testCase));
         }
+    }
+
+    public function test_restore_throws_runtime_exception_for_invalid_base64()
+    {
+        $this->expectException(\RuntimeException::class);
+
+        $this->strategy->restore([
+            '_sc_compressed' => true,
+            'data' => 'NOT_BASE64!!!@@@',
+            'is_string' => true,
+        ]);
+    }
+
+    public function test_restore_throws_runtime_exception_for_corrupted_gzip_stream()
+    {
+        $this->expectException(\RuntimeException::class);
+
+        $this->strategy->restore([
+            '_sc_compressed' => true,
+            'data' => base64_encode('not actually gzipped content at all'),
+            'is_string' => true,
+        ]);
+    }
+
+    public function test_restore_throws_runtime_exception_for_missing_data_field()
+    {
+        $this->expectException(\RuntimeException::class);
+
+        $this->strategy->restore([
+            '_sc_compressed' => true,
+            'is_string' => true,
+        ]);
+    }
+
+    public function test_restore_throws_runtime_exception_for_corrupted_serialized_payload()
+    {
+        $this->expectException(\RuntimeException::class);
+
+        $this->strategy->restore([
+            '_sc_compressed' => true,
+            'data' => base64_encode(gzencode('not a valid serialized php payload')),
+            'is_string' => false,
+        ]);
+    }
+
+    public function test_restore_does_not_emit_warnings_for_corrupted_serialized_payload()
+    {
+        $errors = [];
+        set_error_handler(function ($severity, $message) use (&$errors): bool {
+            $errors[] = $message;
+            return true;
+        });
+
+        try {
+            $this->strategy->restore([
+                '_sc_compressed' => true,
+                'data' => base64_encode(gzencode('not a valid serialized php payload')),
+                'is_string' => false,
+            ]);
+            $this->fail('Expected RuntimeException was not thrown.');
+        } catch (\RuntimeException $e) {
+            // Expected
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $errors, 'restore() must not leak unserialize warnings into application logs.');
+    }
+
+    public function test_restore_can_roundtrip_serialized_false_value()
+    {
+        // Edge case: unserialize(serialize(false)) === false legitimately.
+        $optimized = $this->strategy->optimize(false);
+        $this->assertEquals(false, $this->strategy->restore($optimized));
     }
 }

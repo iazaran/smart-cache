@@ -66,9 +66,21 @@ jobs:
           echo "::add-matcher::${{ runner.tool_cache }}/phpunit.json"
 
       - name: Install dependencies
+        env:
+          COMPOSER_PROCESS_TIMEOUT: 600
         run: |
-          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update
-          composer update --${{ matrix.stability }} --prefer-dist --no-interaction
+          # Retry the install pipeline to absorb transient packagist DNS / curl
+          # timeouts that occasionally hit GitHub-hosted runners.
+          for attempt in 1 2 3; do
+            composer require "laravel/framework:${{ matrix.laravel }}" --no-interaction --no-update && \
+            composer require --dev "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update && \
+            composer update --${{ matrix.stability }} --prefer-dist --no-interaction --no-progress && \
+            exit 0
+            echo "::warning::composer install attempt ${attempt} failed, retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "::error::composer install failed after 3 attempts"
+          exit 1
 
       - name: List Installed Dependencies
         run: composer show -D

@@ -100,14 +100,39 @@ class CompressionStrategy implements OptimizationStrategy
         if (!is_array($value) || !isset($value['_sc_compressed']) || $value['_sc_compressed'] !== true) {
             return $value;
         }
-        
-        $decompressed = gzdecode(base64_decode($value['data']));
-        
-        if ($value['is_string']) {
+
+        if (!isset($value['data']) || !is_string($value['data'])) {
+            throw new \RuntimeException('SmartCache compressed payload is missing the "data" field.');
+        }
+
+        $decoded = base64_decode($value['data'], true);
+        if ($decoded === false) {
+            throw new \RuntimeException('SmartCache compressed payload contains invalid base64 data.');
+        }
+
+        $decompressed = @gzdecode($decoded);
+        if ($decompressed === false) {
+            throw new \RuntimeException('SmartCache compressed payload failed gzdecode (corrupted gzip stream).');
+        }
+
+        if (!empty($value['is_string'])) {
             return $decompressed;
         }
-        
-        return unserialize($decompressed);
+
+        $previous = \set_error_handler(static function (): bool {
+            return true;
+        });
+        try {
+            $restored = \unserialize($decompressed);
+        } finally {
+            \set_error_handler($previous);
+        }
+
+        if ($restored === false && $decompressed !== \serialize(false)) {
+            throw new \RuntimeException('SmartCache compressed payload failed unserialize (corrupted serialized data).');
+        }
+
+        return $restored;
     }
 
     /**

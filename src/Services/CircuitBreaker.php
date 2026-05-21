@@ -2,6 +2,8 @@
 
 namespace SmartCache\Services;
 
+use Illuminate\Contracts\Cache\Repository;
+
 /**
  * Circuit Breaker for Cache Operations
  *
@@ -24,6 +26,31 @@ class CircuitBreaker
     protected array $failureHistory = [];
     protected int $maxHistorySize = 100;
 
+    /**
+     * Optional cache repository used to share breaker state across workers.
+     * When set, every state mutation is mirrored to the cache and every
+     * state read first hydrates from the cache.  Stays null for per-instance
+     * (historical) behaviour.
+     *
+     * @var Repository|null
+     */
+    protected ?Repository $sharedStateCache = null;
+
+    /**
+     * Cache key used when sharing state.
+     *
+     * @var string|null
+     */
+    protected ?string $sharedStateKey = null;
+
+    /**
+     * TTL (seconds) for the shared state entry.  Best-effort eventual
+     * consistency — breakers self-heal when the key expires.
+     *
+     * @var int
+     */
+    protected int $sharedStateTtl = 300;
+
     public function __construct(
         int $failureThreshold = 5,
         int $recoveryTimeout = 30,
@@ -34,8 +61,80 @@ class CircuitBreaker
         $this->successThreshold = $successThreshold;
     }
 
+    /**
+     * Enable cross-process state sharing through the given cache repository.
+     *
+     * After this call every state mutation persists to `$key` and every state
+     * read first hydrates from it, so multiple workers/processes see a single
+     * circuit breaker.  Opt-in; default behaviour stays per-instance.
+     *
+     * @param Repository $cache
+     * @param string $key
+     * @param int $ttl Best-effort TTL (seconds) for the persisted state
+     * @return $this
+     */
+    public function enableSharedState(Repository $cache, string $key, int $ttl = 300): self
+    {
+        $this->sharedStateCache = $cache;
+        $this->sharedStateKey = $key;
+        $this->sharedStateTtl = max(1, $ttl);
+        $this->hydrateSharedState();
+        return $this;
+    }
+
+    /**
+     * Refresh local state from the shared cache entry, if shared state is
+     * enabled.  Silently no-ops on read errors so a broken cache never breaks
+     * the application path.
+     */
+    protected function hydrateSharedState(): void
+    {
+        if ($this->sharedStateCache === null || $this->sharedStateKey === null) {
+            return;
+        }
+
+        try {
+            $payload = $this->sharedStateCache->get($this->sharedStateKey);
+        } catch (\Throwable $e) {
+            return;
+        }
+
+        if (!\is_array($payload)) {
+            return;
+        }
+
+        $this->state = $payload['state'] ?? $this->state;
+        $this->failureCount = (int) ($payload['failure_count'] ?? $this->failureCount);
+        $this->successCount = (int) ($payload['success_count'] ?? $this->successCount);
+        $this->openedAt = isset($payload['opened_at']) ? (int) $payload['opened_at'] : $this->openedAt;
+    }
+
+    /**
+     * Mirror the current local state to the shared cache entry.  Silently
+     * absorbs write errors so a broken cache never breaks the application path.
+     */
+    protected function persistSharedState(): void
+    {
+        if ($this->sharedStateCache === null || $this->sharedStateKey === null) {
+            return;
+        }
+
+        try {
+            $this->sharedStateCache->put($this->sharedStateKey, [
+                'state' => $this->state,
+                'failure_count' => $this->failureCount,
+                'success_count' => $this->successCount,
+                'opened_at' => $this->openedAt,
+            ], $this->sharedStateTtl);
+        } catch (\Throwable $e) {
+            // Best-effort persistence.
+        }
+    }
+
     public function isAvailable(): bool
     {
+        $this->hydrateSharedState();
+
         if ($this->state === self::STATE_CLOSED) {
             return true;
         }
@@ -45,6 +144,7 @@ class CircuitBreaker
             if ($elapsed >= $this->recoveryTimeout) {
                 $this->state = self::STATE_HALF_OPEN;
                 $this->successCount = 0;
+                $this->persistSharedState();
                 return true;
             }
             return false;
@@ -63,6 +163,7 @@ class CircuitBreaker
         } else {
             $this->failureCount = 0;
         }
+        $this->persistSharedState();
     }
 
     public function recordFailure(?\Throwable $exception = null): void
@@ -82,6 +183,7 @@ class CircuitBreaker
         if ($this->state === self::STATE_HALF_OPEN || $this->failureCount >= $this->failureThreshold) {
             $this->open();
         }
+        $this->persistSharedState();
     }
 
     protected function open(): void
@@ -102,10 +204,13 @@ class CircuitBreaker
     {
         $this->close();
         $this->failureHistory = [];
+        $this->persistSharedState();
     }
 
     public function getState(): string
     {
+        $this->hydrateSharedState();
+
         if ($this->state === self::STATE_OPEN && $this->openedAt !== null) {
             $elapsed = \time() - $this->openedAt;
             if ($elapsed >= $this->recoveryTimeout) {

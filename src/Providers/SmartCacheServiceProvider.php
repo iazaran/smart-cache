@@ -162,6 +162,21 @@ class SmartCacheServiceProvider extends ServiceProvider
             }
         });
 
+        // Clear per-request state at the end of every request so the SmartCache
+        // singleton can be safely reused across requests in long-running runtimes
+        // (Laravel Octane, Swoole, FrankenPHP, RoadRunner). On traditional
+        // PHP-FPM the process dies anyway, so this is a cheap no-op.
+        $this->app->terminating(function () {
+            try {
+                $smartCache = $this->app->make(SmartCacheContract::class);
+                if (\method_exists($smartCache, 'reset')) {
+                    $smartCache->reset();
+                }
+            } catch (\Throwable $e) {
+                // Silently fail — don't break the response
+            }
+        });
+
         // Register command metadata for HTTP context
         $this->app->singleton('smart-cache.commands', fn () => [
             'smart-cache:clear' => [

@@ -20,14 +20,56 @@ class OrphanChunkCleanupService
     protected array $chunkRegistry = [];
 
     /**
+     * Number of registry mutations between persists.  Default `1` matches the
+     * historical behaviour (persist on every change).  Higher values batch
+     * writes on extremely chunk-heavy workloads.
+     *
+     * @var int
+     */
+    protected int $persistEvery = 1;
+
+    /**
+     * Counter for un-persisted mutations.
+     *
+     * @var int
+     */
+    protected int $pendingChanges = 0;
+
+    /**
      * Create a new orphan chunk cleanup service.
      *
      * @param Repository $cache
+     * @param int $persistEvery Persist the registry every N mutations (>=1).
      */
-    public function __construct(Repository $cache)
+    public function __construct(Repository $cache, int $persistEvery = 1)
     {
         $this->cache = $cache;
+        $this->persistEvery = max(1, $persistEvery);
         $this->loadChunkRegistry();
+    }
+
+    /**
+     * Flush any buffered registry changes to the underlying cache.  Called by
+     * the SmartCache shutdown hook so debounced writes are not lost between
+     * requests.
+     *
+     * @return void
+     */
+    public function flush(): void
+    {
+        if ($this->pendingChanges > 0) {
+            $this->persistRegistry();
+            $this->pendingChanges = 0;
+        }
+    }
+
+    public function __destruct()
+    {
+        try {
+            $this->flush();
+        } catch (\Throwable $e) {
+            // Best-effort flush on shutdown.
+        }
     }
 
     /**
@@ -43,7 +85,7 @@ class OrphanChunkCleanupService
             'chunk_keys' => $chunkKeys,
             'registered_at' => time(),
         ];
-        $this->persistRegistry();
+        $this->recordChange();
     }
 
     /**
@@ -54,8 +96,25 @@ class OrphanChunkCleanupService
      */
     public function unregisterChunks(string $mainKey): void
     {
+        if (!isset($this->chunkRegistry[$mainKey])) {
+            return;
+        }
+
         unset($this->chunkRegistry[$mainKey]);
-        $this->persistRegistry();
+        $this->recordChange();
+    }
+
+    /**
+     * Record a registry mutation, flushing to cache once the debounce
+     * threshold is reached.
+     */
+    protected function recordChange(): void
+    {
+        $this->pendingChanges++;
+        if ($this->pendingChanges >= $this->persistEvery) {
+            $this->persistRegistry();
+            $this->pendingChanges = 0;
+        }
     }
 
     /**
@@ -86,8 +145,11 @@ class OrphanChunkCleanupService
             unset($this->chunkRegistry[$mainKey]);
         }
 
-        if (!empty($orphanedMainKeys)) {
+        // Always persist after a cleanup pass so the registry on disk reflects
+        // the current state, including any debounced mutations from earlier calls.
+        if (!empty($orphanedMainKeys) || $this->pendingChanges > 0) {
             $this->persistRegistry();
+            $this->pendingChanges = 0;
         }
 
         return [
