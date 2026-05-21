@@ -1084,8 +1084,25 @@ class SmartCache implements SmartCacheContract, Repository
                 // call transparently regenerates the data instead of serving garbage.
                 if ($this->selfHealingEnabled) {
                     try {
+                        // If the wrapper points at chunk keys, drop them too so we do not
+                        // leak orphan chunks into the underlying store.
+                        if (\is_array($value)
+                            && isset($value['_sc_chunked'], $value['chunk_keys'])
+                            && $value['_sc_chunked'] === true
+                            && \is_array($value['chunk_keys'])
+                        ) {
+                            foreach ($value['chunk_keys'] as $chunkKey) {
+                                $this->cache->forget($chunkKey);
+                            }
+                            if ($this->chunkCleanupService !== null) {
+                                $this->chunkCleanupService->unregisterChunks($key);
+                            }
+                        }
+
                         $this->cache->forget($key);
+                        $this->cache->forget("_sc_meta:{$key}");
                         $this->cache->forget("_sc_dna:{$key}");
+                        $this->untrackKey($key);
                         Log::info("SmartCache self-healing: evicted corrupted key [{$key}]");
                     } catch (\Throwable $evictError) {
                         // Best-effort eviction
@@ -1120,6 +1137,14 @@ class SmartCache implements SmartCacheContract, Repository
             $this->managedKeys[$key] = true;
             $this->managedKeysDirty = true;
             $this->managedKeysChangeCount++;
+
+            // Optional cap: drop oldest entries when the index grows past the configured limit.
+            // Default (null/0) preserves the historical unlimited behaviour.
+            $maxTracked = (int) $this->config->get('smart-cache.managed_keys.max_tracked', 0);
+            if ($maxTracked > 0 && \count($this->managedKeys) > $maxTracked) {
+                $overflow = \count($this->managedKeys) - $maxTracked;
+                $this->managedKeys = \array_slice($this->managedKeys, $overflow, null, true);
+            }
 
             if ($this->managedKeysChangeCount >= $this->managedKeysPersistThreshold) {
                 $this->persistManagedKeys();
@@ -1170,6 +1195,64 @@ class SmartCache implements SmartCacheContract, Repository
     public function __destruct()
     {
         $this->persistManagedKeys();
+
+        if ($this->chunkCleanupService !== null) {
+            try {
+                $this->chunkCleanupService->flush();
+            } catch (\Throwable $e) {
+                // Best-effort flush on shutdown.
+            }
+        }
+    }
+
+    /**
+     * Reset per-request, in-memory state so the singleton can be safely reused
+     * across requests in long-running workers (Laravel Octane, Swoole, RoadRunner).
+     *
+     * Persists any pending managed-keys mutations to the underlying cache before
+     * clearing the local buffers, then drops active tags, namespace, lazy-load
+     * flags, and accumulated performance metrics.  This does **not** clear
+     * cached values themselves — only the per-request state held in memory.
+     *
+     * Recommended Octane wiring:
+     *
+     * ```php
+     * use Laravel\Octane\Events\RequestReceived;
+     * use SmartCache\Contracts\SmartCache;
+     *
+     * Event::listen(RequestReceived::class, function ($event) {
+     *     $event->sandbox->make(SmartCache::class)->reset();
+     * });
+     * ```
+     *
+     * @return void
+     */
+    public function reset(): void
+    {
+        // Flush any dirty in-memory state to the store before discarding it.
+        try {
+            $this->persistManagedKeys();
+            if ($this->performanceMetricsLoaded && !empty($this->performanceMetrics)) {
+                $this->persistPerformanceMetrics();
+            }
+            if ($this->chunkCleanupService !== null) {
+                $this->chunkCleanupService->flush();
+            }
+        } catch (\Throwable $e) {
+            // Best-effort persist; never let a reset() call break the request lifecycle.
+        }
+
+        $this->activeTags = [];
+        $this->activeNamespace = null;
+        $this->dependencies = [];
+        $this->managedKeys = [];
+        $this->performanceMetrics = [];
+
+        $this->managedKeysLoaded = false;
+        $this->dependenciesLoaded = false;
+        $this->performanceMetricsLoaded = false;
+        $this->managedKeysDirty = false;
+        $this->managedKeysChangeCount = 0;
     }
 
     /**
@@ -1392,18 +1475,51 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
-     * Refresh cache in background (simplified version).
+     * Refresh cache in background.
+     *
+     * When `smart-cache.swr.single_flight` is enabled and the underlying
+     * cache store implements `LockProvider`, only one process performs
+     * the synchronous in-process refresh for a given key at a time.  Other
+     * concurrent callers continue to serve the stale value without piling
+     * on the upstream source.  Falls back to the historical behaviour when
+     * locks are unavailable.
      */
     protected function refreshInBackground(string $key, array $durations, \Closure $callback): void
     {
-        // In a real implementation, this would be dispatched to a queue
-        // For testing purposes, we'll do it synchronously but mark it as background refresh
+        $singleFlight = (bool) $this->config->get('smart-cache.swr.single_flight', false);
+        $lock = null;
+
+        if ($singleFlight) {
+            $store = $this->cache->getStore();
+            if ($store instanceof \Illuminate\Contracts\Cache\LockProvider) {
+                $lockTtl = (int) $this->config->get('smart-cache.swr.lock_ttl', 30);
+                try {
+                    $lock = $store->lock("_sc_swr_refresh:{$key}", max(1, $lockTtl));
+                    if (!$lock->get()) {
+                        // Another process is already refreshing this key — keep serving stale.
+                        return;
+                    }
+                } catch (\Throwable $lockError) {
+                    // Lock acquisition failed — fall through to the legacy behaviour.
+                    $lock = null;
+                }
+            }
+        }
+
         try {
             $this->generateAndCache($key, $durations, $callback);
         } catch (\Throwable $e) {
             // Background refresh failed - log but don't interrupt main flow
             if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                 Log::warning("SmartCache background refresh failed for {$key}: " . $e->getMessage());
+            }
+        } finally {
+            if ($lock !== null) {
+                try {
+                    $lock->release();
+                } catch (\Throwable $releaseError) {
+                    // Best-effort release; lock will expire on its TTL.
+                }
             }
         }
     }
@@ -1855,7 +1971,8 @@ class SmartCache implements SmartCacheContract, Repository
     public function chunkCleanupService(): OrphanChunkCleanupService
     {
         if ($this->chunkCleanupService === null) {
-            $this->chunkCleanupService = new OrphanChunkCleanupService($this->cache);
+            $persistEvery = (int) $this->config->get('smart-cache.chunk_registry.persist_every', 1);
+            $this->chunkCleanupService = new OrphanChunkCleanupService($this->cache, $persistEvery);
         }
 
         return $this->chunkCleanupService;
@@ -1884,6 +2001,13 @@ class SmartCache implements SmartCacheContract, Repository
                 $this->config->get('smart-cache.circuit_breaker.recovery_timeout', 30),
                 $this->config->get('smart-cache.circuit_breaker.success_threshold', 3)
             );
+
+            // Opt-in cross-process state sharing through the cache.
+            if ($this->config->get('smart-cache.circuit_breaker.shared', false)) {
+                $sharedKey = '_sc_circuit_breaker:' . ($this->driver ?? 'default');
+                $sharedTtl = (int) $this->config->get('smart-cache.circuit_breaker.shared_ttl', 300);
+                $this->circuitBreaker->enableSharedState($this->cache, $sharedKey, $sharedTtl);
+            }
         }
 
         return $this->circuitBreaker;
@@ -2413,7 +2537,8 @@ class SmartCache implements SmartCacheContract, Repository
     protected function persistPerformanceMetrics(): void
     {
         if ($this->enablePerformanceMonitoring) {
-            $this->cache->put('_sc_performance_metrics', $this->performanceMetrics, 3600); // 1 hour TTL
+            $ttl = (int) $this->config->get('smart-cache.monitoring.metrics_ttl', 3600);
+            $this->cache->put('_sc_performance_metrics', $this->performanceMetrics, $ttl);
         }
     }
 
