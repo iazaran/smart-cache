@@ -1082,9 +1082,23 @@ $analytics = SmartCache::refreshAhead('daily_analytics', function() {
                     <p>Return stale data immediately and refresh asynchronously via a queued job:</p>
 
                     <pre><code class="language-php">// Returns stale data instantly, dispatches a background job to refresh
-$data = SmartCache::asyncSwr('dashboard_stats', function() {
-    return Stats::generate();
-}, 300, 900, 'cache-refresh'); // 5min fresh, 15min stale, dispatched to 'cache-refresh' queue</code></pre>
+// Pass a "Class@method" string or an invokable class — Closures are rejected
+// since v1.12.0 because Laravel's queue serializer cannot persist them.
+$data = SmartCache::asyncSwr('dashboard_stats', RefreshDashboardStats::class, 300, 900, 'cache-refresh');</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>How "background" actually works.</strong> <code>swr()</code>, <code>stale()</code> and <code>refreshAhead()</code> run the refresh callback <strong>synchronously</strong> in the same PHP process <em>after</em> returning the stale value to the caller. The caller is fast; the worker still does the regeneration work. Use <code>asyncSwr()</code> with a queue worker for true out-of-process refresh.
+                    </div>
+
+                    <h2>Single-Flight Refresh <span class="badge badge-success">v1.12.0</span></h2>
+                    <p>Prevent stampedes during the stale window by serialising concurrent refreshes through an opportunistic non-blocking lock:</p>
+
+                    <pre><code class="language-php">// config/smart-cache.php
+'swr' => [
+    'single_flight' => true, // default false (BC)
+],</code></pre>
+
+                    <p>When enabled and the underlying store implements <code>LockProvider</code> (redis, memcached, database, dynamodb, file), only one worker regenerates a stale entry; concurrent workers continue to serve the stale value without piling up redundant callback executions. Default <code>false</code> preserves the historical behaviour.</p>
 
                     <h2>Real-World Examples</h2>
 
@@ -1756,6 +1770,16 @@ $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
                         <strong>Enterprise use case:</strong> In high-availability environments, a single corrupted cache entry can cascade into repeated exceptions. Self-healing ensures the application degrades gracefully, evicts the bad entry, and recovers automatically.
                     </div>
 
+                    <div class="alert alert-success">
+                        <strong>v1.12.0 hardening.</strong> <code>CompressionStrategy::restore()</code> now explicitly validates the base64, gzip and unserialize steps and throws <code>RuntimeException</code> on any failure (no more silent <code>E_NOTICE</code>s reaching application logs). The self-healing eviction was extended to drop the full footprint of a corrupted entry: wrapper key, SWR metadata (<code>_sc_meta:{key}</code>), Cache DNA hash (<code>_sc_dna:{key}</code>), managed-keys index entry, and — for chunked values — every chunk key referenced by <code>chunk_keys</code> plus the orphan-chunk registry entry.
+                    </div>
+
+                    <h2>🚀 Laravel Octane / Long-Running Workers <span class="badge badge-success">v1.12.0</span></h2>
+                    <p>SmartCache is registered as a singleton, which means per-request state (active tags, namespaces, in-memory metric buffers) would normally leak between requests on <strong>Laravel Octane</strong>, <strong>Swoole</strong>, <strong>FrankenPHP</strong> or <strong>RoadRunner</strong>. Since v1.12.0 the service provider's <code>terminating()</code> hook calls <code>SmartCache::reset()</code> and <code>OrphanChunkCleanupService::flush()</code> at the end of every request, so there is <strong>nothing extra to configure</strong>.</p>
+
+                    <pre><code class="language-php">// If you embed SmartCache in your own long-running runtime, call reset() between iterations:
+app(\SmartCache\Contracts\SmartCache::class)->reset();</code></pre>
+
                     <h2>Configuration Reference</h2>
                     <pre><code class="language-php">// config/smart-cache.php
 return [
@@ -1776,6 +1800,8 @@ return [
         'failure_threshold' => 5,
         'recovery_timeout' => 30,
         'success_threshold' => 3,
+        'shared' => false,           // v1.12.0: share breaker state across workers via the cache
+        'shared_ttl' => 300,         // v1.12.0: TTL for the shared state key
     ],
 
     'rate_limiter' => [
@@ -1801,6 +1827,14 @@ return [
 
     'self_healing' => [
         'enabled' => true,              // Auto-evict corrupted entries
+    ],
+
+    'swr' => [
+        'single_flight' => false,       // v1.12.0: opt-in single-flight refresh (LockProvider stores)
+    ],
+
+    'managed_keys' => [
+        'max_tracked' => 0,             // v1.12.0: cap the in-memory managed-keys index (0 = unlimited)
     ],
 
     'dashboard' => [
@@ -2869,7 +2903,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 452 tests, 1,895 assertions
+# 470 tests, 1,931 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>
