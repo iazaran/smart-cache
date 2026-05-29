@@ -957,12 +957,19 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Compute a fast content hash for write deduplication (Cache DNA).
      *
+     * Uses `xxh128` (PHP 8.1+, guaranteed by the package's PHP requirement) which is
+     * significantly faster than `md5` on typical payloads while producing the same
+     * 32-character hex output. This is a non-cryptographic dedup check; collision
+     * resistance is sufficient for distinguishing payload identity, and timing
+     * comparisons here are not security-relevant because the hash is never an
+     * authentication token.
+     *
      * @param mixed $value
      * @return string
      */
     protected function contentHash(mixed $value): string
     {
-        return \md5(\serialize($value));
+        return \hash('xxh128', \serialize($value));
     }
 
     /**

@@ -1209,6 +1209,38 @@ class SmartCacheTest extends TestCase
         $this->assertNull($this->getCacheStore()->get("_sc_dna:{$key}"));
     }
 
+    public function test_cache_dna_hash_format_is_stable()
+    {
+        // Locks the contract for the stored `_sc_dna:{key}` value:
+        //   - 32 lowercase hex characters (same width as md5, drop-in compatible
+        //     with any operator tooling that expects a fixed-width hash)
+        //   - deterministic for identical inputs
+        //   - sensitive to value changes (otherwise dedup would skip legitimate writes)
+        // Catches accidental algorithm swaps to a wider/narrower hash (e.g. sha256, crc32).
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-format-key';
+        $smartCache->put($key, 'payload-A', 3600);
+        $hashA = $this->getCacheStore()->get("_sc_dna:{$key}");
+
+        $this->assertIsString($hashA);
+        $this->assertSame(32, \strlen($hashA));
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $hashA);
+
+        $smartCache->forget($key);
+        $smartCache->put($key, 'payload-A', 3600);
+        $this->assertSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}"));
+
+        $smartCache->put($key, 'payload-B', 3600);
+        $this->assertNotSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}"));
+    }
+
     // ---------------------------------------------------------------
     // rememberIf (Conditional Caching) tests
     // ---------------------------------------------------------------

@@ -383,7 +383,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 470 tests, 1,931 assertions
+composer test            # 471 tests, 1,936 assertions
 composer test-coverage   # with code coverage
 ```
 

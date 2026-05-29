@@ -5,6 +5,14 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] - 2026-05-29
+### Security
+- Upgraded `symfony/mime` from `v8.0.8` to `v8.1.0` (>= patched line `8.0.12`) to address GHSA Email Header / SMTP Command Injection via CRLF in `Symfony\Component\Mime\Address` and Email Header Injection via Non-Token Characters in Mime Parameter Names. Transitive bumps: `symfony/deprecation-contracts` `v3.6.0` → `v3.7.0`, `symfony/polyfill-intl-idn` `v1.36.0` → `v1.38.1`, `symfony/polyfill-intl-normalizer` `v1.36.0` → `v1.38.0`, `symfony/polyfill-mbstring` `v1.36.0` → `v1.38.1`. No package API change.
+### Changed
+- `SmartCache::contentHash()` (Cache DNA write-deduplication hot path) now uses `xxh128` (PHP 8.1+, already a hard requirement) instead of `md5`. Output is still 32 lowercase hex characters, so the `_sc_dna:{key}` storage format is unchanged. Significantly faster on every `put()` when deduplication is enabled (default `true`). Existing `_sc_dna:*` entries from prior releases will mismatch once after upgrade and be transparently overwritten on the next `put()`; no errors, no data corruption.
+### Added
+- `tests/Unit/SmartCacheTest.php::test_cache_dna_hash_format_is_stable` locks the stored DNA hash contract (32 lowercase hex characters, deterministic for identical inputs, sensitive to value changes) so a future algorithm swap that breaks the key-length assumption is caught immediately.
+
 ## [1.12.0] - 2026-05-21
 ### Fixed
 - `CompressionStrategy::restore()` now explicitly validates the `data` field, the base64 decode step, the `gzdecode()` decompression step, and the `unserialize()` step, throwing `RuntimeException` on any failure. Previously a corrupted compressed payload could surface as a silent PHP warning followed by a `false`/garbage return value, which the cache layer would then re-cache. The `unserialize()` call is now wrapped with a temporary error handler so corrupted payloads no longer leak `E_NOTICE` warnings into application logs (round-tripping the value `false` still works).
