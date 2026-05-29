@@ -5,6 +5,10 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-05-29
+### Security
+- Upgraded every remaining `symfony/*` lockfile entry from `v8.0.8` to `v8.1.0` (>= patched lines `8.0.12` / `8.0.13`) to clear the rest of the open Dependabot advisories plus two pending CVEs surfaced by `composer audit`. Runtime: `symfony/mailer` (CVE-2026-45068, `SendmailTransport` argument injection via dash-prefixed recipient), `symfony/routing` (CVE-2026-45065, `UrlGenerator` route-requirement bypass via unanchored regex alternation; CVE-2026-48784, dot-segment encoding skip), `symfony/http-foundation` (CVE-2026-48736), `symfony/http-kernel` (CVE-2026-45075, `#[IsGranted(methods: ['GET'])]` filter bypass via `HEAD`). Dev: `symfony/yaml` (CVE-2026-45133 uncontrolled recursion, CVE-2026-45304 collection-alias "Billion Laughs", CVE-2026-45305 `Parser::cleanup()` ReDoS). `composer audit` is now clean across runtime and dev scopes. `composer.json` is unchanged — the existing ranges already permitted these versions; Dependabot was failing because of a stale resolver state on its side.
+
 ## [1.12.1] - 2026-05-29
 ### Security
 - Upgraded `symfony/mime` from `v8.0.8` to `v8.1.0` (>= patched line `8.0.12`) to address GHSA Email Header / SMTP Command Injection via CRLF in `Symfony\Component\Mime\Address` and Email Header Injection via Non-Token Characters in Mime Parameter Names. Transitive bumps: `symfony/deprecation-contracts` `v3.6.0` → `v3.7.0`, `symfony/polyfill-intl-idn` `v1.36.0` → `v1.38.1`, `symfony/polyfill-intl-normalizer` `v1.36.0` → `v1.38.0`, `symfony/polyfill-mbstring` `v1.36.0` → `v1.38.1`. No package API change.
