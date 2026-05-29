@@ -2903,7 +2903,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 470 tests, 1,931 assertions
+# 471 tests, 1,936 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>
