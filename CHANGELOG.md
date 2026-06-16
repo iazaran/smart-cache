@@ -5,6 +5,23 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-06-16
+### Added
+- Declarative model invalidation rules via a protected `cacheInvalidation(): array` method. Existing fluent setters still work and are merged with declared rules.
+- `Model::flushCacheTags()` for explicit invalidation after `saveQuietly()`, query-builder updates/deletes, upserts, mass inserts, raw SQL, or any other path that bypasses Eloquent events.
+- `TagFlushed` event, including the tag name, live key count, and source (`manual`, `model`, or `model_helper`), when cache events are enabled.
+- Config options for metadata locks (`smart-cache.metadata_lock.*`) and transaction-aware model invalidation (`smart-cache.model_invalidation.after_commit`).
+
+### Changed
+- Model auto-invalidation now defers cache flushing until the active database transaction commits by default. Rollbacks no longer flush cache, and nested transactions wait for the outer commit. Set `smart-cache.model_invalidation.after_commit` to `false` to restore immediate invalidation.
+- Tag metadata writes now register before the cache value is written and use a short Laravel cache lock when the store supports `LockProvider`, reducing lost tag-index updates under concurrent writers while preserving best-effort behavior for stores without locks.
+- Tag reads lazily prune expired or missing key references, and tag flushes correctly handle keys written under an active namespace.
+
+### Fixed
+- `SmartCache::add()` no longer leaks active tags into the next write when the atomic add fails because the key already exists.
+- Cache DNA deduplicated writes now still refresh tag/managed-key metadata and only skip the value write when the cached value is still present.
+- Dependency invalidation now refreshes dependency metadata before traversal, so long-running workers do not miss relationships added by another process after the local map was loaded.
+
 ## [1.12.2] - 2026-05-29
 ### Security
 - Upgraded every remaining `symfony/*` lockfile entry from `v8.0.8` to `v8.1.0` (>= patched lines `8.0.12` / `8.0.13`) to clear the rest of the open Dependabot advisories plus two pending CVEs surfaced by `composer audit`. Runtime: `symfony/mailer` (CVE-2026-45068, `SendmailTransport` argument injection via dash-prefixed recipient), `symfony/routing` (CVE-2026-45065, `UrlGenerator` route-requirement bypass via unanchored regex alternation; CVE-2026-48784, dot-segment encoding skip), `symfony/http-foundation` (CVE-2026-48736), `symfony/http-kernel` (CVE-2026-45075, `#[IsGranted(methods: ['GET'])]` filter bypass via `HEAD`). Dev: `symfony/yaml` (CVE-2026-45133 uncontrolled recursion, CVE-2026-45304 collection-alias "Billion Laughs", CVE-2026-45305 `Parser::cleanup()` ReDoS). `composer audit` is now clean across runtime and dev scopes. `composer.json` is unchanged — the existing ranges already permitted these versions; Dependabot was failing because of a stale resolver state on its side.

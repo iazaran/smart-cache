@@ -221,12 +221,29 @@ class User extends Model
 {
     use CacheInvalidation;
 
-    public function getCacheKeysToInvalidate(): array
+    protected function cacheInvalidation(): array
     {
-        return ["user_{$this->id}_profile", "user_{$this->id}_posts", 'users_list_*'];
+        return [
+            'keys' => ['user_{id}_profile', 'user_{id}_posts'],
+            'tags' => ['users', 'user_{id}', 'team_{team_id}'],
+            'patterns' => ['users_list_*'],
+            'dependencies' => ['team_{team_id}_summary'],
+        ];
     }
 }
+
+// Event-blind writes can flush explicitly:
+User::where('status', 'inactive')->update(['archived' => true]);
+User::flushCacheTags(['users']);
 ```
+
+Model invalidation is deferred until the current database transaction commits by default (`smart-cache.model_invalidation.after_commit = true`). This prevents another request from re-caching pre-commit data between an Eloquent event and the final commit. Set the flag to `false` if you need the historical immediate behavior.
+
+Eloquent events do not fire for `saveQuietly()`, query-builder `update()` / `delete()`, `upsert()`, mass `insert()`, or raw SQL. For those paths, call `flushCacheTags()` or `SmartCache::flushTags()` explicitly.
+
+### Choosing Cache Tags
+
+Tags should describe the data used to build a response, not the controller that built it. Start with the tables or models read by the endpoint: list endpoints usually use coarse tags such as `products`, while item endpoints can add instance tags such as `product_123`. Over-tagging causes extra refreshes; under-tagging leaves stale data behind. For hard-to-map endpoints, enable Laravel's query log in a test and compare the tables read during response generation with the tags declared for that cache entry.
 
 ### Encryption at Rest
 
@@ -268,6 +285,10 @@ SmartCache::deleteMultiple(['key1', 'key2', 'key3']);
 config(['smart-cache.events.enabled' => true]);
 Event::listen(CacheHit::class, fn($e) => Log::info("Hit: {$e->key}"));
 Event::listen(CacheMissed::class, fn($e) => Log::warning("Miss: {$e->key}"));
+Event::listen(TagFlushed::class, fn($e) => Log::notice("Flushed {$e->tag}", [
+    'keys' => $e->keyCount,
+    'source' => $e->source, // manual, model, or model_helper
+]));
 ```
 
 ### Monitoring & Dashboard
@@ -355,6 +376,8 @@ return [
     'self_healing'    => ['enabled' => true],   // Auto-evict corrupted entries
     'swr'             => ['single_flight' => false], // v1.12.0: opt-in single-flight refresh
     'managed_keys'    => ['max_tracked' => 0],       // v1.12.0: 0 = unlimited (default)
+    'metadata_lock'   => ['enabled' => true, 'ttl' => 5, 'wait' => 1],
+    'model_invalidation' => ['after_commit' => true],
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
     'warmers'         => [],                    // Cache warmer classes for smart-cache:warm
 ];
@@ -383,7 +406,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 471 tests, 1,936 assertions
+composer test            # 485 tests, 1,972 assertions
 composer test-coverage   # with code coverage
 ```
 

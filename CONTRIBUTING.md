@@ -34,7 +34,7 @@ composer test
 composer test-coverage
 ```
 
-All pull requests must pass the existing test suite (425+ tests) before merging. If you add a new feature, include corresponding test cases.
+All pull requests must pass the existing test suite (485 tests) before merging. If you add a new feature, include corresponding test cases.
 
 ## Coding Style
 
