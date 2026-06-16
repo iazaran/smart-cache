@@ -216,6 +216,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Metadata Locks
+    |--------------------------------------------------------------------------
+    |
+    | Tag indexes and dependency metadata are small shared cache entries. When
+    | the selected cache store supports Laravel atomic locks, SmartCache wraps
+    | metadata mutations in a short lock to reduce lost updates during concurrent
+    | writes. Stores without lock support keep the historical best-effort
+    | behavior.
+    |
+    */
+    'metadata_lock' => [
+        'enabled' => true,
+        'ttl' => 5,
+        'wait' => 1,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Model Invalidation
+    |--------------------------------------------------------------------------
+    |
+    | Eloquent model events fire while a database transaction is still open.
+    | Deferring invalidation until commit prevents another request from
+    | re-caching pre-commit data between the flush and the commit. Set
+    | `after_commit` to false to restore immediate invalidation.
+    |
+    */
+    'model_invalidation' => [
+        'after_commit' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Chunk Registry
     |--------------------------------------------------------------------------
     |
@@ -297,6 +330,7 @@ return [
             'key_written' => true,
             'key_forgotten' => true,
             'optimization_applied' => true,
+            'tag_flushed' => true,
         ],
     ],
 
