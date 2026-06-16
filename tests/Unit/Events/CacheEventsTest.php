@@ -8,6 +8,7 @@ use SmartCache\Events\CacheHit;
 use SmartCache\Events\CacheMissed;
 use SmartCache\Events\KeyWritten;
 use SmartCache\Events\KeyForgotten;
+use SmartCache\Events\TagFlushed;
 use Illuminate\Support\Facades\Event;
 
 class CacheEventsTest extends TestCase
@@ -198,5 +199,18 @@ class CacheEventsTest extends TestCase
         // Should dispatch KeyForgotten for each key
         Event::assertDispatched(KeyForgotten::class, 3);
     }
-}
 
+    public function test_tag_flushed_event_is_dispatched()
+    {
+        Event::fake();
+
+        SmartCache::tags('users')->put('user_payload', 'value', 60);
+        SmartCache::flushTags('users');
+
+        Event::assertDispatched(TagFlushed::class, function ($event) {
+            return $event->tag === 'users'
+                && $event->keyCount === 1
+                && $event->source === 'manual';
+        });
+    }
+}
