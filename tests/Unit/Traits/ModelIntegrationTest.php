@@ -4,10 +4,12 @@ namespace SmartCache\Tests\Unit\Traits;
 
 use SmartCache\Tests\TestCase;
 use SmartCache\Contracts\SmartCache;
+use SmartCache\Events\TagFlushed;
 use SmartCache\Traits\CacheInvalidation;
 use SmartCache\Observers\CacheInvalidationObserver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 use Mockery;
 
 // Test model that uses the CacheInvalidation trait
@@ -168,6 +170,139 @@ class TestPost extends Model
         }
         
         return $tags;
+    }
+}
+
+class DeclarativeProduct extends Model
+{
+    use CacheInvalidation;
+
+    public $id = 77;
+    public $category_id = 9;
+
+    public function getAttribute($key)
+    {
+        return $this->$key ?? null;
+    }
+
+    protected function cacheInvalidation(): array
+    {
+        return [
+            'keys' => ['product_{id}'],
+            'tags' => ['products', 'product_{id}', 'category_{category_id}'],
+            'patterns' => ['products_category_{category_id}_*'],
+            'dependencies' => ['category_{category_id}_summary'],
+        ];
+    }
+}
+
+class ModelWithExistingCacheInvalidationMethod extends Model
+{
+    use CacheInvalidation;
+
+    public function __construct()
+    {
+        parent::__construct();
+
+        $this->invalidatesKeys(['legacy_key'])
+             ->invalidatesTags(['legacy_tag']);
+    }
+
+    public function cacheInvalidation(string $context): array
+    {
+        return [
+            'keys' => ["unexpected_{$context}"],
+        ];
+    }
+}
+
+class FakeTransactionConnection
+{
+    protected int $transactionLevel = 0;
+
+    protected array $afterCommitCallbacks = [];
+
+    public function beginTransaction(): void
+    {
+        $this->transactionLevel++;
+    }
+
+    public function commit(): void
+    {
+        if ($this->transactionLevel === 0) {
+            return;
+        }
+
+        $this->transactionLevel--;
+
+        if ($this->transactionLevel > 0) {
+            return;
+        }
+
+        $callbacks = $this->afterCommitCallbacks;
+        $this->afterCommitCallbacks = [];
+
+        foreach ($callbacks as $callback) {
+            $callback();
+        }
+    }
+
+    public function rollBack(): void
+    {
+        if ($this->transactionLevel === 0) {
+            return;
+        }
+
+        $this->transactionLevel--;
+
+        if ($this->transactionLevel === 0) {
+            $this->afterCommitCallbacks = [];
+        }
+    }
+
+    public function transactionLevel(): int
+    {
+        return $this->transactionLevel;
+    }
+
+    public function afterCommit(callable $callback): void
+    {
+        $this->afterCommitCallbacks[] = $callback;
+    }
+}
+
+class FakeTransactionalUser extends Model
+{
+    use CacheInvalidation;
+
+    public int $id = 1;
+
+    public FakeTransactionConnection $fakeConnection;
+
+    public function __construct(?FakeTransactionConnection $connection = null, int $id = 1)
+    {
+        parent::__construct();
+
+        $this->fakeConnection = $connection ?? new FakeTransactionConnection();
+        $this->id = $id;
+    }
+
+    public function getConnection()
+    {
+        return $this->fakeConnection;
+    }
+
+    public function getAttribute($key)
+    {
+        return $this->$key ?? null;
+    }
+
+    protected function cacheInvalidation(): array
+    {
+        return [
+            'keys' => ['transaction_user_{id}'],
+            'tags' => ['transactional_users'],
+        ];
     }
 }
 
@@ -412,6 +547,62 @@ class ModelIntegrationTest extends TestCase
         $this->assertContains('users', $config['tags']);
     }
 
+    public function test_declarative_cache_invalidation_method_is_supported()
+    {
+        $product = new DeclarativeProduct();
+
+        $this->assertContains('product_77', $product->getCacheKeysToInvalidate());
+        $this->assertContains('products', $product->getCacheTagsToFlush());
+        $this->assertContains('product_77', $product->getCacheTagsToFlush());
+        $this->assertContains('category_9', $product->getCacheTagsToFlush());
+        $this->assertContains('products_category_9_*', $product->getCachePatternsToInvalidate());
+        $this->assertContains('category_9_summary', $product->getCacheDependenciesToInvalidate());
+    }
+
+    public function test_existing_cache_invalidation_method_with_required_arguments_is_ignored()
+    {
+        $model = new ModelWithExistingCacheInvalidationMethod();
+
+        $this->assertContains('legacy_key', $model->getCacheKeysToInvalidate());
+        $this->assertContains('legacy_tag', $model->getCacheTagsToFlush());
+    }
+
+    public function test_static_flush_cache_tags_helper_flushes_declared_tags()
+    {
+        config(['smart-cache.events.enabled' => true]);
+        Event::fake();
+
+        $this->smartCache->tags('products')->put('products_payload', 'payload', 3600);
+
+        $this->assertTrue($this->smartCache->has('products_payload'));
+
+        $this->assertTrue(DeclarativeProduct::flushCacheTags());
+
+        $this->assertFalse($this->smartCache->has('products_payload'));
+
+        Event::assertDispatched(TagFlushed::class, function ($event) {
+            return $event->tag === 'products'
+                && $event->keyCount === 1
+                && $event->source === 'model_helper';
+        });
+    }
+
+    public function test_model_auto_invalidation_tag_flush_event_source_is_model()
+    {
+        config(['smart-cache.events.enabled' => true]);
+        Event::fake();
+
+        $this->smartCache->tags('users')->put('users_payload', 'payload', 3600);
+
+        (new TestUser())->performCacheInvalidation();
+
+        Event::assertDispatched(TagFlushed::class, function ($event) {
+            return $event->tag === 'users'
+                && $event->keyCount === 1
+                && $event->source === 'model';
+        });
+    }
+
     public function test_placeholder_replacement_with_null_attributes()
     {
         $user = new TestUser();
@@ -490,5 +681,86 @@ class ModelIntegrationTest extends TestCase
         
         // Performance should be reasonable (less than 1 second for 100 keys)
         $this->assertLessThan(1.0, $executionTime, 'Invalidation should complete in reasonable time');
+    }
+
+    public function test_model_invalidation_runs_after_transaction_commit()
+    {
+        $connection = new FakeTransactionConnection();
+        $user = new FakeTransactionalUser($connection, 1);
+        $observer = new CacheInvalidationObserver();
+        $this->smartCache->put('transaction_user_1', 'cached', 3600);
+        $this->smartCache->tags('transactional_users')->put('transactional_users_payload', 'cached', 3600);
+
+        $connection->beginTransaction();
+
+        $observer->updated($user);
+
+        $this->assertTrue($this->smartCache->has('transaction_user_1'));
+        $this->assertTrue($this->smartCache->has('transactional_users_payload'));
+
+        $connection->commit();
+
+        $this->assertFalse($this->smartCache->has('transaction_user_1'));
+        $this->assertFalse($this->smartCache->has('transactional_users_payload'));
+    }
+
+    public function test_model_invalidation_is_not_run_when_transaction_rolls_back()
+    {
+        $connection = new FakeTransactionConnection();
+        $user = new FakeTransactionalUser($connection, 2);
+        $observer = new CacheInvalidationObserver();
+        $this->smartCache->put('transaction_user_2', 'cached', 3600);
+        $this->smartCache->tags('transactional_users')->put('transactional_users_rollback_payload', 'cached', 3600);
+
+        $connection->beginTransaction();
+
+        $observer->updated($user);
+
+        $this->assertTrue($this->smartCache->has('transaction_user_2'));
+
+        $connection->rollBack();
+
+        $this->assertTrue($this->smartCache->has('transaction_user_2'));
+        $this->assertTrue($this->smartCache->has('transactional_users_rollback_payload'));
+    }
+
+    public function test_nested_transactions_invalidate_only_after_outer_commit()
+    {
+        $connection = new FakeTransactionConnection();
+        $user = new FakeTransactionalUser($connection, 3);
+        $observer = new CacheInvalidationObserver();
+        $this->smartCache->put('transaction_user_3', 'cached', 3600);
+
+        $connection->beginTransaction();
+        $connection->beginTransaction();
+
+        $observer->updated($user);
+
+        $this->assertTrue($this->smartCache->has('transaction_user_3'));
+
+        $connection->commit();
+        $this->assertTrue($this->smartCache->has('transaction_user_3'));
+
+        $connection->commit();
+
+        $this->assertFalse($this->smartCache->has('transaction_user_3'));
+    }
+
+    public function test_model_invalidation_can_be_immediate_inside_transaction()
+    {
+        config(['smart-cache.model_invalidation.after_commit' => false]);
+
+        $connection = new FakeTransactionConnection();
+        $user = new FakeTransactionalUser($connection, 4);
+        $observer = new CacheInvalidationObserver();
+        $this->smartCache->put('transaction_user_4', 'cached', 3600);
+
+        $connection->beginTransaction();
+
+        $observer->updated($user);
+
+        $this->assertFalse($this->smartCache->has('transaction_user_4'));
+
+        $connection->rollBack();
     }
 }

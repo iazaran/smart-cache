@@ -4,7 +4,9 @@ namespace SmartCache\Tests\Unit;
 
 use SmartCache\Tests\TestCase;
 use SmartCache\Contracts\SmartCache;
+use SmartCache\Events\TagFlushed;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 
 class TagBasedInvalidationTest extends TestCase
 {
@@ -272,5 +274,67 @@ class TagBasedInvalidationTest extends TestCase
         
         // Verify tag metadata is cleaned up even though key didn't exist
         $this->assertFalse(Cache::has("_sc_tag_{$tag}"));
+    }
+
+    public function test_tag_flush_works_with_active_namespace()
+    {
+        $this->smartCache->namespace('api')->tags('users')->put('user_1', 'namespaced_user', 3600);
+
+        $this->assertTrue($this->smartCache->has('user_1'));
+
+        $this->smartCache->flushTags('users');
+
+        $this->assertFalse($this->smartCache->has('user_1'));
+
+        $this->smartCache->withoutNamespace();
+    }
+
+    public function test_failed_add_does_not_leak_tags_to_next_write()
+    {
+        $this->smartCache->put('existing_key', 'original', 3600);
+
+        $this->assertFalse(
+            $this->smartCache->tags('failed_add_tag')->add('existing_key', 'replacement', 3600)
+        );
+
+        $this->smartCache->put('next_key', 'next_value', 3600);
+
+        $taggedKeys = Cache::get('_sc_tag_failed_add_tag', []);
+
+        $this->assertNotContains('next_key', $taggedKeys);
+    }
+
+    public function test_tag_index_prunes_dead_references_when_read()
+    {
+        $this->smartCache->put('live_key', 'live_value', 3600);
+        Cache::forever('_sc_tag_prune_tag', ['missing_key', 'live_key']);
+
+        $reflection = new \ReflectionClass($this->smartCache);
+        $method = $reflection->getMethod('getKeysForTag');
+        $method->setAccessible(true);
+
+        $keys = $method->invoke($this->smartCache, 'prune_tag');
+
+        $this->assertSame(['live_key'], $keys);
+        $this->assertSame(['live_key'], Cache::get('_sc_tag_prune_tag'));
+    }
+
+    public function test_flush_tags_event_count_reflects_only_live_keys()
+    {
+        config(['smart-cache.events.enabled' => true]);
+        Event::fake();
+
+        $this->smartCache->put('live_payload', 'value', 3600);
+        // Index references a key whose value no longer exists (expired/evicted).
+        Cache::forever('_sc_tag_flush_count_tag', ['missing_payload', 'live_payload']);
+
+        $this->smartCache->flushTags('flush_count_tag');
+
+        $this->assertFalse($this->smartCache->has('live_payload'));
+        $this->assertFalse(Cache::has('_sc_tag_flush_count_tag'));
+
+        Event::assertDispatched(TagFlushed::class, function ($event) {
+            return $event->tag === 'flush_count_tag' && $event->keyCount === 1;
+        });
     }
 }

@@ -8,6 +8,7 @@ use SmartCache\Events\CacheMissed;
 use SmartCache\Events\KeyWritten;
 use SmartCache\Events\KeyForgotten;
 use SmartCache\Events\OptimizationApplied;
+use SmartCache\Events\TagFlushed;
 
 trait DispatchesCacheEvents
 {
@@ -83,6 +84,21 @@ trait DispatchesCacheEvents
     }
 
     /**
+     * Dispatch a tag flushed event.
+     *
+     * @param string $tag
+     * @param int $keyCount
+     * @param string $source
+     * @return void
+     */
+    protected function dispatchTagFlushed(string $tag, int $keyCount, string $source = 'manual'): void
+    {
+        if ($this->shouldDispatchEvent('tag_flushed')) {
+            Event::dispatch(new TagFlushed($tag, $keyCount, $source));
+        }
+    }
+
+    /**
      * Determine if an event should be dispatched.
      *
      * @param string $eventType
@@ -97,4 +113,3 @@ trait DispatchesCacheEvents
         return $this->config->get("smart-cache.events.dispatch.{$eventType}", true);
     }
 }
-

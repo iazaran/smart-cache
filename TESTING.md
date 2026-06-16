@@ -29,7 +29,7 @@ vendor/bin/phpunit
 Current suite size:
 
 ```bash
-# 452 tests, 1,895 assertions
+# 485 tests, 1,972 assertions
 ```
 
 ### Run Specific Test Suites

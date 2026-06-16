@@ -92,7 +92,14 @@ trait CacheInvalidation
      */
     public function getCacheInvalidationConfig(): array
     {
-        return $this->cacheInvalidation;
+        $config = $this->cacheInvalidation;
+        $declaredConfig = $this->getDeclarativeCacheInvalidationConfig();
+
+        if ($declaredConfig !== null) {
+            $config = $this->mergeCacheInvalidationConfig($declaredConfig, $config);
+        }
+
+        return $this->normalizeCacheInvalidationConfig($config);
     }
 
     /**
@@ -103,19 +110,9 @@ trait CacheInvalidation
      */
     public function getCacheKeysToInvalidate(): array
     {
-        $keys = $this->cacheInvalidation['keys'];
+        $config = $this->getCacheInvalidationConfig();
 
-        // Resolve dynamic keys based on model attributes
-        $resolvedKeys = [];
-        foreach ($keys as $key) {
-            // Replace placeholders like {id}, {slug}, etc.
-            $resolvedKeys[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
-                $attribute = $matches[1];
-                return $this->getAttribute($attribute) ?? $matches[0];
-            }, $key);
-        }
-
-        return array_unique($resolvedKeys);
+        return $this->resolveCacheInvalidationValues($config['keys']);
     }
 
     /**
@@ -126,19 +123,33 @@ trait CacheInvalidation
      */
     public function getCacheTagsToFlush(): array
     {
-        $tags = $this->cacheInvalidation['tags'];
+        $config = $this->getCacheInvalidationConfig();
 
-        // Resolve dynamic tags based on model attributes
-        $resolvedTags = [];
-        foreach ($tags as $tag) {
-            // Replace placeholders like {id}, {category_id}, etc.
-            $resolvedTags[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
-                $attribute = $matches[1];
-                return $this->getAttribute($attribute) ?? $matches[0];
-            }, $tag);
-        }
+        return $this->resolveCacheInvalidationValues($config['tags']);
+    }
 
-        return array_unique($resolvedTags);
+    /**
+     * Get cache key patterns to invalidate for this model instance.
+     *
+     * @return array
+     */
+    public function getCachePatternsToInvalidate(): array
+    {
+        $config = $this->getCacheInvalidationConfig();
+
+        return $this->resolveCacheInvalidationValues($config['patterns']);
+    }
+
+    /**
+     * Get cache dependencies to invalidate for this model instance.
+     *
+     * @return array
+     */
+    public function getCacheDependenciesToInvalidate(): array
+    {
+        $config = $this->getCacheInvalidationConfig();
+
+        return $this->resolveCacheInvalidationValues($config['dependencies']);
     }
 
     /**
@@ -156,18 +167,50 @@ trait CacheInvalidation
         // Flush tags
         $tagsToFlush = $this->getCacheTagsToFlush();
         if (!empty($tagsToFlush)) {
-            SmartCache::flushTags($tagsToFlush);
+            SmartCache::flushTags($tagsToFlush, 'model');
         }
 
         // Handle patterns (basic wildcard support)
-        foreach ($this->cacheInvalidation['patterns'] as $pattern) {
+        foreach ($this->getCachePatternsToInvalidate() as $pattern) {
             $this->invalidatePattern($pattern);
         }
 
         // Handle dependencies
-        foreach ($this->cacheInvalidation['dependencies'] as $dependency) {
+        foreach ($this->getCacheDependenciesToInvalidate() as $dependency) {
             SmartCache::invalidate($dependency);
         }
+    }
+
+    /**
+     * Flush cache tags for a model class explicitly.
+     *
+     * Useful after query-builder updates, mass deletes, upserts, raw SQL, or
+     * quiet saves where Eloquent model events are intentionally bypassed.
+     *
+     * The no-argument form resolves the model's declared tags against a fresh
+     * instance, so it is intended for static tags (e.g. 'products'). Tags that
+     * embed instance placeholders like 'category_{category_id}' cannot be
+     * resolved without a loaded model — pass those tags explicitly instead.
+     *
+     * @param string|array|null $tags
+     * @return bool
+     */
+    public static function flushCacheTags(string|array|null $tags = null): bool
+    {
+        $tagsToFlush = $tags === null
+            ? (new static())->getCacheTagsToFlush()
+            : (\is_array($tags) ? $tags : [$tags]);
+
+        $tagsToFlush = \array_values(\array_unique(\array_filter(
+            $tagsToFlush,
+            fn ($tag) => \is_string($tag) && $tag !== ''
+        )));
+
+        if ($tagsToFlush === []) {
+            return true;
+        }
+
+        return SmartCache::flushTags($tagsToFlush, 'model_helper');
     }
 
     /**
@@ -178,12 +221,6 @@ trait CacheInvalidation
      */
     protected function invalidatePattern(string $pattern): void
     {
-        // Replace model placeholders
-        $pattern = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
-            $attribute = $matches[1];
-            return $this->getAttribute($attribute) ?? $matches[0];
-        }, $pattern);
-
         // This is a simplified pattern matching
         // In a real implementation, you might want to use the cache store's
         // native pattern matching capabilities (like Redis KEYS command)
@@ -208,5 +245,103 @@ trait CacheInvalidation
         // Convert simple wildcard pattern to regex
         $regexPattern = str_replace(['*', '?'], ['.*', '.'], preg_quote($pattern, '/'));
         return (bool) preg_match("/^{$regexPattern}$/", $key);
+    }
+
+    /**
+     * Read an optional declarative invalidation method when it is compatible.
+     *
+     * The guard keeps this additive for existing models that may already have
+     * a cacheInvalidation() method for another purpose with required arguments.
+     *
+     * @return array|null
+     */
+    protected function getDeclarativeCacheInvalidationConfig(): ?array
+    {
+        if (!\method_exists($this, 'cacheInvalidation')) {
+            return null;
+        }
+
+        try {
+            $method = new \ReflectionMethod($this, 'cacheInvalidation');
+
+            if ($method->getNumberOfRequiredParameters() > 0) {
+                return null;
+            }
+
+            $config = $this->cacheInvalidation();
+
+            return \is_array($config) ? $config : null;
+        } catch (\ReflectionException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Merge two invalidation config arrays without duplicating entries.
+     *
+     * @param array $base
+     * @param array $override
+     * @return array
+     */
+    protected function mergeCacheInvalidationConfig(array $base, array $override): array
+    {
+        $base = $this->normalizeCacheInvalidationConfig($base);
+        $override = $this->normalizeCacheInvalidationConfig($override);
+
+        foreach (['keys', 'tags', 'patterns', 'dependencies'] as $section) {
+            $base[$section] = \array_values(\array_unique([
+                ...$base[$section],
+                ...$override[$section],
+            ]));
+        }
+
+        return $base;
+    }
+
+    /**
+     * Normalize invalidation config into the expected shape.
+     *
+     * @param array $config
+     * @return array
+     */
+    protected function normalizeCacheInvalidationConfig(array $config): array
+    {
+        $normalized = [
+            'keys' => [],
+            'tags' => [],
+            'patterns' => [],
+            'dependencies' => [],
+        ];
+
+        foreach ($normalized as $section => $default) {
+            $values = $config[$section] ?? [];
+            $normalized[$section] = \is_array($values) ? \array_values($values) : [$values];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Resolve placeholders like {id}, {slug}, and {category_id}.
+     *
+     * @param array $values
+     * @return array
+     */
+    protected function resolveCacheInvalidationValues(array $values): array
+    {
+        $resolvedValues = [];
+
+        foreach ($values as $value) {
+            if (!\is_string($value)) {
+                continue;
+            }
+
+            $resolvedValues[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
+                $attribute = $matches[1];
+                return $this->getAttribute($attribute) ?? $matches[0];
+            }, $value);
+        }
+
+        return \array_values(\array_unique($resolvedValues));
     }
 }

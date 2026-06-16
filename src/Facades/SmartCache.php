@@ -47,7 +47,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static mixed withFallback(callable $callback, mixed $fallback = null)
  * @method static mixed throttle(string $key, int $maxAttempts, int $decaySeconds, callable $callback)
  * @method static static tags(string|array $tags)
- * @method static bool flushTags(string|array $tags)
+ * @method static bool flushTags(string|array $tags, string $source = 'manual')
  * @method static static dependsOn(string $key, string|array $dependencies)
  * @method static bool invalidate(string $key)
  * @method static int flushPatterns(array $patterns)
@@ -100,4 +100,4 @@ class SmartCache extends Facade
     {
         return 'smart-cache';
     }
-} 
+}

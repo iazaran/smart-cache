@@ -1026,6 +1026,19 @@ return [
 
     'events' => [
         'enabled' => false,          // Enable for monitoring
+        'dispatch' => [
+            'tag_flushed' => true,
+        ],
+    ],
+
+    'metadata_lock' => [
+        'enabled' => true,           // Lock tag/dependency metadata when supported
+        'ttl' => 5,
+        'wait' => 1,
+    ],
+
+    'model_invalidation' => [
+        'after_commit' => true,      // Flush after DB commit when inside a transaction
     ],
 
     'monitoring' => [
@@ -1281,7 +1294,7 @@ $stats = $memo->getMemoizationStats();
 config(['smart-cache.events.enabled' => true]);
 
 // Listen to cache operations
-use SmartCache\Events\{CacheHit, CacheMissed, KeyWritten, KeyForgotten, OptimizationApplied};
+use SmartCache\Events\{CacheHit, CacheMissed, KeyWritten, KeyForgotten, OptimizationApplied, TagFlushed};
 
 Event::listen(CacheHit::class, function ($event) {
     Log::info("Cache hit: {$event->key}", ['tags' => $event->tags]);
@@ -1293,6 +1306,13 @@ Event::listen(CacheMissed::class, function ($event) {
 
 Event::listen(OptimizationApplied::class, function ($event) {
     Log::info("Optimized {$event->key}: {$event->strategy} - {$event->ratio}% reduction");
+});
+
+Event::listen(TagFlushed::class, function ($event) {
+    Log::notice("Flushed {$event->tag}", [
+        'keys' => $event->keyCount,
+        'source' => $event->source, // manual, model, or model_helper
+    ]);
 });</code></pre>
 
                     <div class="alert alert-warning">
@@ -1402,19 +1422,33 @@ class User extends Model
 {
     use CacheInvalidation;
     
-    public function getCacheKeysToInvalidate(): array
+    protected function cacheInvalidation(): array
     {
         return [
-            "user_{$this->id}_profile",
-            "user_{$this->id}_posts",
-            'users_list_*'
+            'keys' => ['user_{id}_profile', 'user_{id}_posts'],
+            'tags' => ['users', 'user_{id}', 'team_{team_id}'],
+            'patterns' => ['users_list_*'],
+            'dependencies' => ['team_{team_id}_summary'],
         ];
     }
 }
 
 // Cache automatically cleared when user changes!
 $user = User::find(1);
-$user->update(['name' => 'New Name']); // Cache cleared automatically</code></pre>
+$user->update(['name' => 'New Name']); // Flushes after the transaction commits
+
+// Event-blind writes should flush explicitly.
+User::where('status', 'inactive')->update(['archived' => true]);
+User::flushCacheTags(['users']);</code></pre>
+
+                    <div class="alert alert-warning">
+                        <strong>Eloquent event blind spots.</strong> Model auto-invalidation depends on Eloquent events. It does not run for <code>saveQuietly()</code>, query-builder <code>update()</code> / <code>delete()</code>, <code>upsert()</code>, mass <code>insert()</code>, or raw SQL. Use <code>Model::flushCacheTags()</code> or <code>SmartCache::flushTags()</code> in those paths.
+                    </div>
+
+                    <p>When an Eloquent event fires inside a database transaction, SmartCache defers invalidation until the outer transaction commits by default. This avoids flushing cache and then letting another request re-cache pre-commit data. Disable with <code>smart-cache.model_invalidation.after_commit = false</code> if your application needs immediate invalidation.</p>
+
+                    <h3>Dependency Map Cookbook</h3>
+                    <p>Declare tags for the data used to build the response, not for the controller or route name. Use coarse tags for list endpoints such as <code>products</code>, add instance tags for detail endpoints such as <code>product_123</code>, and prefer over-tagging to under-tagging. For opaque endpoints, capture Laravel's query log in a test and compare the selected tables with the cache tags you declared.</p>
 
                     <h2>Custom Optimization Strategies</h2>
                     <p>Create custom optimization strategies for your specific needs:</p>
@@ -1837,6 +1871,16 @@ return [
         'max_tracked' => 0,             // v1.12.0: cap the in-memory managed-keys index (0 = unlimited)
     ],
 
+    'metadata_lock' => [
+        'enabled' => true,              // Lock tag/dependency metadata when the store supports locks
+        'ttl' => 5,
+        'wait' => 1,
+    ],
+
+    'model_invalidation' => [
+        'after_commit' => true,         // Defer model invalidation until DB commit
+    ],
+
     'dashboard' => [
         'enabled' => false,
         'prefix' => 'smart-cache',
@@ -2177,10 +2221,13 @@ SmartCache::tags('products')->put('product_123', $product, 1800);</code></pre>
 
                     <div class="method">
                         <div class="method-name">SmartCache::flushTags()</div>
-                        <div class="method-signature">SmartCache::flushTags(string|array $tags): bool</div>
-                        <p>Flush all cache entries associated with given tags.</p>
+                        <div class="method-signature">SmartCache::flushTags(string|array $tags, string $source = 'manual'): bool</div>
+                        <p>Flush all cache entries associated with given tags. Tag metadata is pruned lazily when tags are read, so expired entries do not build up indefinitely in rarely flushed tags.</p>
                         <div class="parameter">
                             <span class="parameter-name">$tags</span> <span class="parameter-type">(string|array)</span> - Tag name(s)
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$source</span> <span class="parameter-type">(string)</span> - Optional source label exposed on the TagFlushed event
                         </div>
                         <div class="parameter">
                             <span class="return-type">Returns:</span> bool - True on success
@@ -2188,6 +2235,17 @@ SmartCache::tags('products')->put('product_123', $product, 1800);</code></pre>
                         <div class="example">
                             <strong>Example:</strong>
                             <pre><code class="language-php">SmartCache::flushTags(['users']); // Clear all user-related cache</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">Model::flushCacheTags()</div>
+                        <div class="method-signature">User::flushCacheTags(string|array|null $tags = null): bool</div>
+                        <p>Flush model cache tags explicitly after writes that bypass Eloquent events, such as query-builder updates, upserts, mass inserts, quiet saves, or raw SQL.</p>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">User::where('active', false)->delete();
+User::flushCacheTags(['users']);</code></pre>
                         </div>
                     </div>
 
@@ -2903,7 +2961,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 471 tests, 1,936 assertions
+# 485 tests, 1,972 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

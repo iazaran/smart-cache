@@ -312,6 +312,28 @@ class DependencyTrackingTest extends TestCase
         $this->assertFalse($newSmartCache->has($childKey));
     }
 
+    public function test_invalidate_refreshes_dependencies_loaded_by_another_instance()
+    {
+        $parentKey = 'cross_instance_parent';
+        $childKey = 'cross_instance_child';
+
+        // Load an empty dependency map into the first instance.
+        $this->smartCache->invalidate('unrelated_key');
+
+        // Simulate another worker adding a dependency after the first instance
+        // has already lazy-loaded its dependency metadata.
+        $otherInstance = $this->smartCache->store('array');
+        $otherInstance->dependsOn($childKey, $parentKey);
+
+        $this->smartCache->put($parentKey, 'parent_value', 3600);
+        $this->smartCache->put($childKey, 'child_value', 3600);
+
+        $this->smartCache->invalidate($parentKey);
+
+        $this->assertFalse($this->smartCache->has($parentKey));
+        $this->assertFalse($this->smartCache->has($childKey));
+    }
+
     public function test_circular_dependency_prevention()
     {
         // This tests that we don't get into infinite loops

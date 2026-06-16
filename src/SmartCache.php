@@ -4,6 +4,7 @@ namespace SmartCache;
 
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Cache\Store;
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
@@ -349,26 +350,27 @@ class SmartCache implements SmartCacheContract, Repository
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
 
-        // Cache DNA — skip write when content is identical
+        // Track metadata before writing the value. A tag/managed-key entry
+        // pointing at a missing value is harmless; a value missing from the
+        // metadata indexes can survive invalidation indefinitely.
+        $this->trackKey($key);
+
+        if (!empty($this->activeTags)) {
+            $this->associateTagsWithKey($key, $this->activeTags);
+        }
+
+        // Cache DNA — skip write when content is identical and the value still exists.
         $newHash = null;
         if ($this->deduplicationEnabled) {
             $newHash = $this->contentHash($optimizedValue);
             $storedHash = $this->cache->get("_sc_dna:{$key}");
-            if ($storedHash === $newHash) {
+            if ($storedHash === $newHash && $this->cache->has($key)) {
                 // Content unchanged — record a deduplicated write metric and return early
                 if ($this->enablePerformanceMonitoring) {
                     $this->recordPerformanceMetric('cache_write_dedup', $key, $startTime);
                 }
                 return true;
             }
-        }
-
-        // Track all keys for pattern matching and invalidation
-        $this->trackKey($key);
-
-        // Handle active tags
-        if (!empty($this->activeTags)) {
-            $this->associateTagsWithKey($key, $this->activeTags);
         }
 
         $result = $this->cache->put($key, $optimizedValue, $ttl);
@@ -730,6 +732,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function add($key, $value, $ttl = null): bool
     {
         $namespacedKey = $this->applyNamespace((string) $key);
+        $tags = $this->activeTags;
 
         // Use the underlying cache's atomic add() if available
         $storable = static::wrapNullValue($value);
@@ -740,9 +743,11 @@ class SmartCache implements SmartCacheContract, Repository
             if ($result) {
                 $this->trackKey($namespacedKey);
 
-                if (!empty($this->activeTags)) {
-                    $this->associateTagsWithKey($namespacedKey, $this->activeTags);
+                if (!empty($tags)) {
+                    $this->associateTagsWithKey($namespacedKey, $tags);
                 }
+            } else {
+                $this->activeTags = [];
             }
 
             return $result;
@@ -750,6 +755,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Fallback: non-atomic approach for stores that don't support add()
         if ($this->has($key)) {
+            $this->activeTags = [];
             return false;
         }
 
@@ -1682,19 +1688,30 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * {@inheritdoc}
      */
-    public function flushTags(string|array $tags): bool
+    public function flushTags(string|array $tags, string $source = 'manual'): bool
     {
         $tags = \is_array($tags) ? $tags : [$tags];
 
         foreach ($tags as $tag) {
-            $tagKeys = $this->getKeysForTag($tag);
+            $tag = (string) $tag;
+
+            // Read the raw index rather than getKeysForTag(): pruning and
+            // re-persisting the index is wasted work when the tag entry is about
+            // to be deleted below.
+            $tagKeys = $this->readTagKeys($tag);
+            $flushed = 0;
+
             foreach ($tagKeys as $key) {
-                // Use forget method which handles both regular and optimized cache cleanup
-                // We don't care about the return value - if key doesn't exist, that's fine
-                $this->forget($key);
+                // Use forget method which handles both regular and optimized cache cleanup.
+                // We don't care about the return value - if the key doesn't exist, that's fine.
+                if ($this->cache->has($key)) {
+                    $flushed++;
+                }
+                $this->forgetStoredKey($key);
             }
             // Clean up the tag itself
             $this->cache->forget("_sc_tag_{$tag}");
+            $this->dispatchTagFlushed($tag, $flushed, $source);
         }
 
         return true; // Always return true since we handle missing keys gracefully
@@ -1801,16 +1818,14 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function dependsOn(string $key, string|array $dependencies): static
     {
-        $this->ensureDependenciesLoaded();
-
         $dependencies = \is_array($dependencies) ? $dependencies : [$dependencies];
 
-        if (!isset($this->dependencies[$key])) {
-            $this->dependencies[$key] = [];
-        }
+        $this->mutateDependencies(function (array $map) use ($key, $dependencies): array {
+            $existing = $map[$key] ?? [];
+            $map[$key] = \array_values(\array_unique([...$existing, ...$dependencies]));
 
-        $this->dependencies[$key] = \array_unique([...$this->dependencies[$key], ...$dependencies]);
-        $this->saveDependencies();
+            return $map;
+        });
 
         return $this;
     }
@@ -1820,6 +1835,9 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function invalidate(string $key): bool
     {
+        $this->loadDependencies();
+        $this->dependenciesLoaded = true;
+
         return $this->invalidateWithVisited($key, []);
     }
 
@@ -1843,8 +1861,11 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         $this->forget($key);
-        unset($this->dependencies[$key]);
-        $this->saveDependencies();
+        $this->mutateDependencies(function (array $map) use ($key): array {
+            unset($map[$key]);
+
+            return $map;
+        });
 
         return $success;
     }
@@ -1859,22 +1880,131 @@ class SmartCache implements SmartCacheContract, Repository
     protected function associateTagsWithKey(string $key, array $tags): void
     {
         foreach ($tags as $tag) {
-            $tagKey = "_sc_tag_{$tag}";
-            $taggedKeys = $this->cache->get($tagKey, []);
+            $tag = (string) $tag;
 
-            if (!\in_array($key, $taggedKeys, true)) {
-                $taggedKeys[] = $key;
-                $this->cache->forever($tagKey, $taggedKeys);
+            if ($tag === '') {
+                continue;
             }
+
+            $this->mutateTagKeys($tag, function (array $taggedKeys) use ($key): array {
+                if (!\in_array($key, $taggedKeys, true)) {
+                    $taggedKeys[] = $key;
+                }
+
+                return $taggedKeys;
+            });
         }
 
         $this->activeTags = [];
     }
 
+    /**
+     * Get the live keys associated with a tag, pruning stale references.
+     *
+     * Reads the tag index, drops entries whose values no longer exist, and
+     * rewrites the index when anything was pruned so long-lived tags do not
+     * accumulate dead references indefinitely.
+     *
+     * @param string $tag
+     * @return array
+     */
     protected function getKeysForTag(string $tag): array
     {
+        $keys = $this->readTagKeys($tag);
+        $liveKeys = [];
+
+        foreach ($keys as $key) {
+            if ($this->cache->has($key)) {
+                $liveKeys[] = $key;
+            }
+        }
+
+        if (\count($liveKeys) !== \count($keys)) {
+            $this->persistTagKeys($tag, $liveKeys);
+        }
+
+        return $liveKeys;
+    }
+
+    protected function readTagKeys(string $tag): array
+    {
         $tagKey = "_sc_tag_{$tag}";
-        return $this->cache->get($tagKey, []);
+        $keys = $this->cache->get($tagKey, []);
+
+        return \is_array($keys) ? \array_values(\array_unique($keys)) : [];
+    }
+
+    protected function persistTagKeys(string $tag, array $keys): void
+    {
+        $tagKey = "_sc_tag_{$tag}";
+        $keys = \array_values(\array_unique($keys));
+
+        if ($keys === []) {
+            $this->cache->forget($tagKey);
+            return;
+        }
+
+        $this->cache->forever($tagKey, $keys);
+    }
+
+    protected function mutateTagKeys(string $tag, callable $callback): void
+    {
+        $this->withMetadataLock("tag:{$tag}", function () use ($tag, $callback): void {
+            $keys = $this->readTagKeys($tag);
+            $this->persistTagKeys($tag, $callback($keys));
+        });
+    }
+
+    protected function withMetadataLock(string $scope, callable $callback): mixed
+    {
+        if (!$this->config->get('smart-cache.metadata_lock.enabled', true)) {
+            return $callback();
+        }
+
+        $store = $this->cache->getStore();
+
+        if (!$store instanceof LockProvider) {
+            return $callback();
+        }
+
+        $ttl = \max(1, (int) $this->config->get('smart-cache.metadata_lock.ttl', 5));
+        $wait = \max(0, (int) $this->config->get('smart-cache.metadata_lock.wait', 1));
+        $lockName = '_sc_meta_lock:' . \sha1($scope);
+
+        try {
+            $lock = $store->lock($lockName, $ttl);
+
+            if ($wait > 0 && \method_exists($lock, 'block')) {
+                return $lock->block($wait, $callback);
+            }
+
+            $ran = false;
+            $result = $lock->get(function () use ($callback, &$ran): mixed {
+                $ran = true;
+                return $callback();
+            });
+
+            if ($ran) {
+                return $result;
+            }
+        } catch (\Throwable $e) {
+            // Best-effort locking: unsupported or unavailable locks should not
+            // make cache writes fail.
+        }
+
+        return $callback();
+    }
+
+    protected function forgetStoredKey(string $key): bool
+    {
+        $savedNamespace = $this->activeNamespace;
+        $this->activeNamespace = null;
+
+        try {
+            return $this->forget($key);
+        } finally {
+            $this->activeNamespace = $savedNamespace;
+        }
     }
 
     protected function getDependentKeys(string $key): array
@@ -1899,7 +2029,8 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function loadDependencies(): void
     {
-        $this->dependencies = $this->cache->get('_sc_dependencies', []);
+        $dependencies = $this->cache->get('_sc_dependencies', []);
+        $this->dependencies = \is_array($dependencies) ? $dependencies : [];
     }
 
     /**
@@ -1909,7 +2040,36 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function saveDependencies(): void
     {
-        $this->cache->forever('_sc_dependencies', $this->dependencies);
+        $this->mutateDependencies(fn (array $map): array => $map);
+    }
+
+    /**
+     * Apply a mutation to the dependency map under a metadata lock.
+     *
+     * The stored map is re-read inside the lock before the callback runs so
+     * concurrent dependency changes from other processes are not lost. The
+     * in-memory copy is kept in sync with what is persisted.
+     *
+     * @param callable $callback Receives the current map, returns the new map.
+     * @return void
+     */
+    protected function mutateDependencies(callable $callback): void
+    {
+        $this->withMetadataLock('dependencies', function () use ($callback): void {
+            $stored = $this->cache->get('_sc_dependencies', []);
+            $stored = \is_array($stored) ? $stored : [];
+
+            $updated = $callback($stored);
+            $this->dependencies = $updated;
+            $this->dependenciesLoaded = true;
+
+            if ($updated === []) {
+                $this->cache->forget('_sc_dependencies');
+                return;
+            }
+
+            $this->cache->forever('_sc_dependencies', $updated);
+        });
     }
 
     /**
