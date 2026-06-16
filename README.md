@@ -2,7 +2,7 @@
 
 [![Latest Version](https://img.shields.io/packagist/v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![Total Downloads](https://img.shields.io/packagist/dt/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
-[![GitHub Stars](https://img.shields.io/github/stars/iazaran/smart-cache?style=flat-square)](https://github.com/iazaran/smart-cache)
+[![GitHub Stars](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiazaran%2Fsmart-cache&query=%24.stargazers_count&label=stars&style=flat-square)](https://github.com/iazaran/smart-cache)
 [![License](https://img.shields.io/packagist/l/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![PHP Version](https://img.shields.io/packagist/php-v/iazaran/smart-cache.svg?style=flat-square)](https://packagist.org/packages/iazaran/smart-cache)
 [![Tests](https://img.shields.io/github/actions/workflow/status/iazaran/smart-cache/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/iazaran/smart-cache/actions/workflows/tests.yml)
