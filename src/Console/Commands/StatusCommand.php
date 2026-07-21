@@ -166,7 +166,6 @@ class StatusCommand extends Command
         try {
             $reflection = new \ReflectionClass($store);
             $storageProperty = $reflection->getProperty('storage');
-            $storageProperty->setAccessible(true);
             $storage = $storageProperty->getValue($store);
 
             return \array_keys($storage ?? []);

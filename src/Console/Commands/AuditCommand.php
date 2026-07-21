@@ -297,7 +297,6 @@ class AuditCommand extends Command
 
             $reflection = new \ReflectionClass($store);
             $storageProperty = $reflection->getProperty('storage');
-            $storageProperty->setAccessible(true);
             $storage = $storageProperty->getValue($store);
 
             return \array_keys($storage ?? []);

@@ -388,7 +388,6 @@ class SmartSerializationStrategyTest extends TestCase
     protected function invokeIsJsonSafe(SmartSerializationStrategy $strategy, mixed $value): bool
     {
         $reflection = new \ReflectionMethod($strategy, 'isJsonSafe');
-        $reflection->setAccessible(true);
 
         return (bool) $reflection->invoke($strategy, $value);
     }

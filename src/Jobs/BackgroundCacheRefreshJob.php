@@ -25,7 +25,7 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     protected string $key;
 
     /**
-     * @var \Closure|string
+     * @var callable|string
      */
     protected $callback;
 
@@ -154,4 +154,3 @@ class BackgroundCacheRefreshJob implements ShouldQueue
         return ['smart-cache', 'cache-refresh', "key:{$this->key}"];
     }
 }
-
