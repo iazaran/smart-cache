@@ -5,7 +5,7 @@ This guide explains how to run tests for the SmartCache Laravel package without 
 ## Overview
 
 The test suite uses:
-- **PHPUnit 10** - Testing framework
+- **PHPUnit 9–13** - Version selected by the supported PHP/Laravel dependency matrix
 - **Orchestra Testbench** - Minimal Laravel environment for package testing
 - **Mockery** - Mocking framework for isolated unit tests
 
@@ -29,7 +29,7 @@ vendor/bin/phpunit
 Current suite size:
 
 ```bash
-# 485 tests, 1,972 assertions
+# 486 tests, 1,976 assertions
 ```
 
 ### Run Specific Test Suites
@@ -256,7 +256,6 @@ class MyIntegrationTest extends TestCase
 2. **Missing Extensions**
    Ensure required PHP extensions are installed:
    - `ext-zlib` (for compression)
-   - `ext-json`
    - `ext-mbstring`
 
 3. **Composer Autoload Issues**

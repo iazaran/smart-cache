@@ -2,13 +2,15 @@
 
 ## Supported Versions
 
-Currently, the following versions are actively receiving security updates. We always recommend upgrading to the latest minor version (`^1.9.0`) with your Laravel installation to ensure optimal performance, structural compliance, and security.
+Only the latest SmartCache minor line receives routine security fixes. We recommend `^1.13` for existing 1.x installations.
 
-| Version | Maintained?        | PHP Requirements | Laravel Framework |
-| ------- | ------------------ | ---------------- | ----------------- |
-| >= 1.9.0| :white_check_mark: | PHP 8.1+         | 8.x – 13.x        |
-| >= 1.3.7| :warning:          | PHP 8.1+         | 8.x – 12.x        |
-| < 1.3.7 | :x:                | -                | -                 |
+| SmartCache Version | Maintained? | Package Compatibility |
+| ------------------ | ----------- | --------------------- |
+| 1.13.x             | :white_check_mark: | PHP 8.1–8.5, Laravel 8–13 |
+| 1.9.x–1.12.x       | :warning: | Upgrade required; security backports are not guaranteed |
+| < 1.9.0            | :x: | Unsupported |
+
+Package compatibility does not extend the security lifetime of PHP, Laravel, or the selected cache backend. Enterprise deployments should use a [currently supported PHP release](https://www.php.net/supported-versions.php) and a Laravel version inside the [official Laravel support window](https://laravel.com/docs/releases#support-policy).
 
 ## Reporting a Vulnerability
 

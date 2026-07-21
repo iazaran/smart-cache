@@ -5,6 +5,27 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-07-21
+
+### Security
+- Updated the repository's locked Guzzle stack to `guzzlehttp/guzzle` 7.15.1, `guzzlehttp/promises` 2.5.1, and `guzzlehttp/psr7` 2.13.0 to resolve four upstream advisories reported on 2026-07-20. SmartCache does not directly require Guzzle; the packages are present through the Laravel development/test dependency graph. `composer audit` is clean after the update.
+
+### Added
+- Added PHP 8.5 to the GitHub Actions compatibility matrix for Laravel 12 and 13, the upstream-supported framework lines that support PHP 8.5.
+- Added `SmartCache::clearManaged()` as an explicit concrete-class and facade API for removing SmartCache-tracked entries without flushing unrelated keys. The public `SmartCache` contract is unchanged so third-party implementations remain compatible.
+- Added enterprise adoption guidance covering appropriate workloads, unsuitable payloads, internal metadata keys, upstream runtime support windows, incremental migration, and explicit cache-clearing scope.
+
+### Changed
+- Clarified that SmartCache 1.x preserves managed-only `clear()` behavior while `flush()` clears the entire underlying store. Existing behavior is unchanged; new application code should prefer the scope-explicit `clearManaged()` or `flush()` methods.
+- Repositioned the README and full documentation around SmartCache's primary value: safe optimization and invalidation for large Laravel cache payloads. Claims such as zero overhead, universal opt-in behavior, and unchanged full PSR-16 semantics were replaced with precise operational guidance.
+- Removed the redundant `ext-json` suggestion and installation prerequisite because JSON is always enabled in PHP 8+.
+- Updated the security policy to identify 1.13.x as the maintained release line and distinguish package compatibility from upstream PHP and Laravel security support.
+
+### Fixed
+- Replaced invalid `asyncSwr()` Closure examples with serializable invokable-class examples; queued refresh callbacks reject closures by design.
+- Corrected SWR documentation to distinguish the synchronous refresh behavior of `swr()`, `stale()`, and `refreshAhead()` from the queue-backed `asyncSwr()` method, and corrected rollback guidance for optimized cache wrappers.
+- Corrected the full documentation's Cache DNA description from MD5 to the `xxh128` algorithm used since 1.12.1.
+
 ## [1.13.0] - 2026-06-16
 ### Added
 - Declarative model invalidation rules via a protected `cacheInvalidation(): array` method. Existing fluent setters still work and are merged with declared rules.
@@ -207,6 +228,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.13.1]: https://github.com/iazaran/smart-cache/compare/1.13.0...1.13.1
+[1.13.0]: https://github.com/iazaran/smart-cache/compare/1.12.2...1.13.0
+[1.12.2]: https://github.com/iazaran/smart-cache/compare/1.12.1...1.12.2
+[1.12.1]: https://github.com/iazaran/smart-cache/compare/1.12.0...1.12.1
+[1.12.0]: https://github.com/iazaran/smart-cache/compare/1.11.0...1.12.0
 [1.11.0]: https://github.com/iazaran/smart-cache/compare/1.10.0...1.11.0
 [1.10.0]: https://github.com/iazaran/smart-cache/compare/1.9.3...1.10.0
 [1.9.3]: https://github.com/iazaran/smart-cache/compare/1.9.2...1.9.3

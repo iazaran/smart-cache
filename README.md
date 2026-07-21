@@ -8,23 +8,27 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/iazaran/smart-cache/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/iazaran/smart-cache/actions/workflows/tests.yml)
 [![Coverage](https://img.shields.io/github/actions/workflow/status/iazaran/smart-cache/code-analysis.yml?branch=main&label=coverage&style=flat-square)](https://github.com/iazaran/smart-cache/actions/workflows/code-analysis.yml)
 
-**Drop-in replacement for Laravel's `Cache` facade** that automatically compresses, chunks, and optimizes cached data — with write deduplication, self-healing recovery, and cost-aware eviction built in.
+**A Laravel cache optimizer for large payloads.** SmartCache wraps Laravel's familiar cache API with automatic compression, driver-safe chunking, write deduplication, self-healing recovery, and operational diagnostics.
 
-Implements `Illuminate\Contracts\Cache\Repository` and PSR-16 `SimpleCache`. Your existing code works unchanged.
+SmartCache implements `Illuminate\Contracts\Cache\Repository`, which extends the PSR-16 interface. Most Laravel cache calls migrate with an import change; the [cache-clearing semantics](#cache-clearing-semantics) are intentionally explicit for SmartCache 1.x.
 
-**PHP 8.1+ · Laravel 8–13 · Redis, File, Database, Memcached, Array**
+**PHP 8.1–8.5 · Laravel 8–13 · Redis, File, Database, Memcached, Array**
 
 ---
 
 ## Installation
 
-**Prerequisites:** PHP extensions `ext-zlib` (for data compression) and `ext-json` (for optimal object serialization) are strongly recommended to enable all performance optimization strategies.
+**Recommended:** enable `ext-zlib` to use gzip compression. JSON support is built into PHP 8+.
 
 ```bash
 composer require iazaran/smart-cache
 ```
 
-That's it. No further configuration is required — works immediately with your existing cache driver.
+No configuration is required to start. SmartCache uses your existing Laravel cache driver and ships with documented defaults.
+
+### Compatibility and support
+
+SmartCache tests Laravel 8–13 and PHP 8.1–8.5. Compatibility with an older framework or PHP release does not extend that dependency's upstream security lifetime. For new and enterprise deployments, use a [currently supported PHP release](https://www.php.net/supported-versions.php) and a Laravel version inside the [official Laravel support window](https://laravel.com/docs/releases#support-policy).
 
 ## Quick Start
 
@@ -43,33 +47,43 @@ smart_cache(['products' => $products], 3600);
 $products = smart_cache('products');
 ```
 
-Large data is automatically compressed and chunked behind the scenes. No code changes needed.
+Large values are optimized behind the same familiar API. Adoption can be gradual: change the facade import only where SmartCache is useful.
 
 ## Why SmartCache?
 
 | Problem | Without SmartCache | With SmartCache |
 |---|---|---|
-| Large payloads (100 KB+) | Stored as-is, slow reads | Auto-compressed & chunked |
+| Large payloads | Stored as one raw value | Auto-compressed or split into driver-safe chunks |
+| Driver size limits | Application-managed splitting | Transparent chunking and key-preserving restore |
+| Cross-driver invalidation | Driver-specific tags or custom indexes | Tags, dependencies, patterns, and model hooks |
 | Redundant writes | Every `put()` hits the store | Skipped when unchanged (write deduplication) |
 | Corrupted entries | Exception crashes the request | Auto-evicted and regenerated, including broken chunk sets |
 | Eviction decisions | LRU / random | Cost-aware scoring — keeps high-value keys |
-| Cache stampede | Thundering herd on expiry | XFetch, jitter, and rate limiting |
-| Conditional caching | Manual `if` around `put()` | `rememberIf()` — one-liner |
-| Stale data serving | Not available | SWR, stale, refresh-ahead, async queue refresh |
 | Observability | DIY logging | Built-in dashboard, metrics, and health checks |
 
 ### How Automatic Optimization Works
 
-SmartCache selects the best strategy based on your data — zero configuration:
+SmartCache selects the best enabled strategy based on your data; the defaults work without publishing configuration:
 
 | Data Profile | Strategy Applied | Effect |
 |---|---|---|
-| Arrays with 5 000+ items | Chunking | Lower memory, faster access |
-| Serialized data > 50 KB | Compression | Significant size reduction (gzip) |
-| API responses > 100 KB | Chunking + Compression | Best of both |
-| Data < 50 KB | None | Zero overhead |
+| Large arrays or collections meeting the chunk threshold | Chunking | Driver-safe splitting with key preservation |
+| Compressible serialized data above 50 KB | Compression | Reduced stored size with gzip |
+| Data below the configured thresholds | No size strategy | Value is stored without compression or chunking |
 
-All thresholds are [configurable](#configuration).
+All thresholds are [configurable](#configuration). Monitoring, managed-key tracking, cost metadata, and write deduplication can still add small metadata or CPU costs even when no size strategy is selected; benchmark your real payloads and driver before production rollout.
+
+### When to use SmartCache
+
+- Large Eloquent results, reports, dashboards, or API payloads put pressure on Redis, Memcached, database, or file cache storage.
+- You need consistent tag or dependency invalidation across drivers.
+- You want cache diagnostics, corruption recovery, and measurable optimization behavior without building a parallel cache layer.
+
+### When not to use SmartCache
+
+- Most values are already small and the native Laravel cache meets your latency and operational needs.
+- Payloads are already compressed or encrypted and will not benefit from gzip.
+- You cannot budget the extra metadata keys used for tracking, deduplication, metrics, tags, dependencies, or chunks.
 
 ### Production Safety for Large Data
 
@@ -82,7 +96,7 @@ SmartCache is built for the painful cases that appear after an application grows
 
 ## Features
 
-Every feature below is **opt-in** and backward-compatible.
+Compression, chunking, monitoring, cost tracking, write deduplication, and self-healing have documented enabled defaults. Advanced behavior such as encryption, serialization, TTL jitter, the circuit breaker, cache events, and the dashboard remains opt-in.
 
 ### Multiple Cache Drivers
 
@@ -98,7 +112,7 @@ SmartCache::repository('redis')->put('key', $value, 3600);
 ### SWR Patterns (Stale-While-Revalidate)
 
 ```php
-// Serve stale data while refreshing in background
+// Due refreshes run synchronously before this method returns stale data
 $data = SmartCache::swr('github_repos', fn() => Http::get('...')->json(), 300, 900);
 
 // Extended stale serving (1 h fresh, 24 h stale)
@@ -107,11 +121,11 @@ $config = SmartCache::stale('site_config', fn() => Config::fromDatabase(), 3600,
 // Proactive refresh before expiry
 $analytics = SmartCache::refreshAhead('daily_analytics', fn() => Analytics::generateReport(), 1800, 300);
 
-// Queue-based background refresh — returns stale immediately, refresh runs on a worker
-$data = SmartCache::asyncSwr('dashboard_stats', fn() => Stats::generate(), 300, 900, 'cache-refresh');
+// Queue-based background refresh — use a serializable invokable class
+$data = SmartCache::asyncSwr('dashboard_stats', RefreshDashboardStats::class, 300, 900, 'cache-refresh');
 ```
 
-> **How "background" works.** `swr()`, `stale()` and `refreshAhead()` run the refresh callback **synchronously** in the same PHP process after returning the stale value to the caller. This keeps the request hot path fast (the caller does not wait for the new value), but the worker still pays the cost of the regeneration. Use `asyncSwr()` with a Laravel queue worker if you need the refresh to run in a separate process. **`asyncSwr()` does not accept `Closure` callbacks** — pass either a serializable invokable class or a `"Class@method"` string. Closures throw `InvalidArgumentException` since v1.12.0 so the failure is loud at dispatch time instead of inside the queue serializer.
+> **How refresh execution works.** `swr()`, `stale()` and `refreshAhead()` execute a due refresh callback **synchronously** in the current PHP process before the method returns the stale value. Use `asyncSwr()` with a Laravel queue worker when the caller must not wait for regeneration. **`asyncSwr()` does not accept `Closure` callbacks** — pass either a serializable invokable class or a `"Class@method"` string. Closures throw `InvalidArgumentException` since v1.12.0 so the failure is loud at dispatch time instead of inside the queue serializer.
 >
 > **Single-flight refresh (opt-in, v1.12.0+).** Set `smart-cache.swr.single_flight = true` to wrap the synchronous refresh in an opportunistic non-blocking lock keyed on `_sc_swr_refresh:{key}`. When the cache store implements `LockProvider` (redis, memcached, database, dynamodb, file) only one worker regenerates a stale entry; concurrent workers keep serving stale and return immediately. Default `false` preserves the historical "every worker refreshes" behaviour.
 
@@ -131,16 +145,16 @@ SmartCache::withJitter(0.1)->put('popular_data', $data, 3600);
 
 ### Write Deduplication (Cache DNA)
 
-Hashes every value before writing. Identical content → write skipped entirely.
+Hashes every value before writing. Identical content → cached-value rewrite skipped.
 
 ```php
 SmartCache::put('app_config', Config::all(), 3600);
-SmartCache::put('app_config', Config::all(), 3600); // no I/O — data unchanged
+SmartCache::put('app_config', Config::all(), 3600); // value rewrite skipped; metadata may refresh
 ```
 
 ### Self-Healing Cache
 
-Corrupted entries are auto-evicted and regenerated on next read — zero downtime. This includes missing chunks from large chunked payloads.
+Corrupted entries are auto-evicted instead of being returned. With `remember()`-style reads, the callback can regenerate the value on the next read. This includes missing chunks from large chunked payloads.
 
 ```php
 $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
@@ -335,6 +349,10 @@ php artisan smart-cache:bench --format=json --output=storage/smart-cache-bench.j
 
 A generated Redis report is included at [`docs/benchmark-report-redis.json`](docs/benchmark-report-redis.json). On the included PHP 8.4 / Laravel 13 / Redis run, the `api-json` profile compressed from 323,811 bytes to 7,829 bytes (97.58% smaller). Each profile includes a `goal`, `success_metric`, `goal_passed`, and `result_summary` field so compression is judged by byte reduction, chunking is judged by driver-safe splitting and key preservation, and small payloads are judged by avoiding unnecessary optimization.
 
+### Operational Footprint
+
+SmartCache stores internal metadata in the selected cache store. Depending on the enabled features, this can include `_sc_managed_keys`, `_sc_dna:{key}`, `_sc_meta:{key}`, `_sc_chunk_*`, `_sc_tag_*`, `_sc_dependencies`, `_sc_cost_metadata`, and `_sc_performance_metrics`. Use a dedicated cache store or Laravel cache prefix when applications share infrastructure, set `managed_keys.max_tracked` for high-cardinality workloads, and run `smart-cache:audit` before and after production changes.
+
 ## Best Practices & Troubleshooting
 
 - **Binary Data:** If caching already compressed objects like images, video, or encrypted data, disable `compression` for those specific cache keys as they waste CPU cycles without yielding size reductions.
@@ -387,9 +405,22 @@ return [
 
 SmartCache is registered as a singleton, which means per-request state (active tags, namespaces, in-memory metric buffers) would normally leak between requests on **Laravel Octane**, **Swoole**, **FrankenPHP** or **RoadRunner**. Since **v1.12.0** the service provider's `terminating()` hook calls `SmartCache::reset()` and `OrphanChunkCleanupService::flush()` at the end of every request, so there is **nothing extra to configure**. If you embed SmartCache in your own long-running runtime, call `app(\SmartCache\Contracts\SmartCache::class)->reset()` between iterations.
 
+## Cache Clearing Semantics
+
+SmartCache 1.x preserves its historical managed-only behavior for `clear()`. Prefer the explicit method in new code:
+
+```php
+SmartCache::clearManaged(); // Remove SmartCache-tracked entries only
+SmartCache::flush();        // Flush the entire underlying cache store
+```
+
+This is the one intentional behavioral difference to consider when using SmartCache through the PSR-16 interface, where `clear()` normally means clearing the entire cache pool. The existing behavior remains unchanged in 1.x for backward compatibility.
+
+`clearManaged()` is available on the facade and concrete `SmartCache` class. It is intentionally not added to `SmartCache\Contracts\SmartCache` in the 1.x line, so existing third-party implementations of that contract do not break.
+
 ## Migration from Laravel Cache
 
-Change one import — everything else stays the same:
+Change one import for the cache operations you want SmartCache to optimize:
 
 ```php
 - use Illuminate\Support\Facades\Cache;
@@ -399,6 +430,8 @@ SmartCache::put('users', $users, 3600);
 $users = SmartCache::get('users');
 ```
 
+Review calls to `clear()` during migration and choose `clearManaged()` or `flush()` explicitly. For incremental adoption, keep Laravel's `Cache` facade alongside SmartCache and migrate only large or operationally sensitive keys.
+
 ## Documentation
 
 [Full documentation →](https://iazaran.github.io/smart-cache/) — Installation, API reference, SWR patterns, and more.
@@ -406,7 +439,7 @@ $users = SmartCache::get('users');
 ## Testing
 
 ```bash
-composer test            # 485 tests, 1,972 assertions
+composer test            # 486 tests, 1,976 assertions
 composer test-coverage   # with code coverage
 ```
 
