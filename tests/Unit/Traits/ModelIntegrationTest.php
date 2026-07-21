@@ -646,7 +646,6 @@ class ModelIntegrationTest extends TestCase
         // Create reflection to test private method
         $reflection = new \ReflectionClass($observer);
         $method = $reflection->getMethod('usesCacheInvalidationTrait');
-        $method->setAccessible(true);
         
         $userWithTrait = new TestUser();
         $userWithoutTrait = new class extends Model {};

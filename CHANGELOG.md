@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated the security policy to identify 1.13.x as the maintained release line and distinguish package compatibility from upstream PHP and Laravel security support.
 
 ### Fixed
+- Removed obsolete reflection `setAccessible()` calls, which have no effect on the supported PHP 8.1+ range and emit deprecation warnings on PHP 8.5.
 - Replaced invalid `asyncSwr()` Closure examples with serializable invokable-class examples; queued refresh callbacks reject closures by design.
 - Corrected SWR documentation to distinguish the synchronous refresh behavior of `swr()`, `stale()`, and `refreshAhead()` from the queue-backed `asyncSwr()` method, and corrected rollback guidance for optimized cache wrappers.
 - Corrected the full documentation's Cache DNA description from MD5 to the `xxh128` algorithm used since 1.12.1.

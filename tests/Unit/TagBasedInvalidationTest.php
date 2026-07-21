@@ -311,7 +311,6 @@ class TagBasedInvalidationTest extends TestCase
 
         $reflection = new \ReflectionClass($this->smartCache);
         $method = $reflection->getMethod('getKeysForTag');
-        $method->setAccessible(true);
 
         $keys = $method->invoke($this->smartCache, 'prune_tag');
 
