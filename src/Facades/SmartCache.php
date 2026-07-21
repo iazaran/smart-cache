@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static int|bool increment(string $key, int $value = 1)
  * @method static int|bool decrement(string $key, int $value = 1)
  * @method static bool clear()
+ * @method static bool clearManaged()
  * @method static array many(array $keys)
  * @method static bool putMany(array $values, \DateTimeInterface|\DateInterval|int|null $ttl = null)
  * @method static \SmartCache\SmartCache store(string|null $name = null)

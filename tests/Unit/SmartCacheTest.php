@@ -210,6 +210,7 @@ class SmartCacheTest extends TestCase
         foreach ($keys as $key) {
             $this->smartCache->put($key, $largeValue);
         }
+        $this->getCacheStore()->put('unmanaged-key', 'keep-me', 3600);
 
         // Verify all are stored
         foreach ($keys as $key) {
@@ -223,6 +224,18 @@ class SmartCacheTest extends TestCase
         foreach ($keys as $key) {
             $this->assertFalse($this->smartCache->has($key));
         }
+        $this->assertSame('keep-me', $this->getCacheStore()->get('unmanaged-key'));
+    }
+
+    public function test_clear_managed_preserves_unmanaged_keys()
+    {
+        $this->getCacheStore()->put('unmanaged-key', 'keep-me', 3600);
+        $this->smartCache->put('managed-key', 'remove-me', 3600);
+
+        $this->assertTrue($this->smartCache->clearManaged());
+
+        $this->assertFalse($this->smartCache->has('managed-key'));
+        $this->assertSame('keep-me', $this->getCacheStore()->get('unmanaged-key'));
     }
 
     public function test_managed_keys_tracking()

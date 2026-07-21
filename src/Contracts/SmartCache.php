@@ -7,8 +7,9 @@ use Illuminate\Contracts\Cache\Repository;
 /**
  * SmartCache Contract
  *
- * This interface extends Laravel's Repository interface to ensure full compatibility
- * with Laravel's cache system while adding SmartCache-specific optimization features.
+ * This interface extends Laravel's Repository interface to preserve its familiar
+ * cache API while adding SmartCache-specific optimization features. SmartCache 1.x
+ * intentionally gives clear() managed-only semantics; flush() clears the store.
  */
 interface SmartCache extends Repository
 {

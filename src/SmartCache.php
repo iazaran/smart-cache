@@ -823,9 +823,27 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
-     * {@inheritdoc}
+     * Clear cache entries tracked by SmartCache.
+     *
+     * SmartCache 1.x preserves its historical managed-only clear behavior.
+     * Prefer clearManaged() in application code so the scope is explicit, or
+     * use flush() when the entire underlying cache store must be cleared.
      */
     public function clear(): bool
+    {
+        return $this->clearManaged();
+    }
+
+    /**
+     * Clear cache entries tracked by SmartCache without flushing unrelated keys.
+     *
+     * This method is intentionally implemented on the concrete class rather than
+     * the public contract so existing third-party contract implementations remain
+     * backward compatible.
+     *
+     * @return bool
+     */
+    public function clearManaged(): bool
     {
         $success = true;
 
@@ -1441,16 +1459,16 @@ class SmartCache implements SmartCacheContract, Repository
                 }
             }
 
-            // If data is stale but within stale period, return stale and refresh in background
+            // If data is stale but within stale period, refresh synchronously and return stale
             if ($age <= $totalTtl) {
-                // Return stale data immediately
+                // Capture the stale value before refreshing it
                 $staleValue = $this->maybeRestoreValue($cachedValue, $namespacedKey);
 
                 if ($staleValue === $sentinel) {
                     return $this->generateAndCache($namespacedKey, $durations, $callback);
                 }
 
-                // Trigger background refresh (simplified - in real implementation would be async)
+                // Historical 1.x behavior: refresh in-process before returning stale
                 $this->refreshInBackground($namespacedKey, $durations, $callback);
 
                 return $staleValue;
@@ -1488,7 +1506,7 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
-     * Refresh cache in background.
+     * Refresh cache synchronously while retaining stale-on-error behavior.
      *
      * When `smart-cache.swr.single_flight` is enabled and the underlying
      * cache store implements `LockProvider`, only one process performs
@@ -1540,7 +1558,7 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Stale-While-Revalidate (SWR) caching pattern.
      *
-     * Returns cached data immediately, triggers background refresh if stale.
+     * Returns fresh data immediately, or refreshes synchronously before returning stale data.
      *
      * @param string $key
      * @param \Closure $callback
@@ -1556,7 +1574,7 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Stale cache pattern - allows serving stale data beyond TTL.
      *
-     * Serves stale data for extended period while attempting background refresh.
+     * Serves stale data for an extended period while attempting a synchronous refresh.
      *
      * @param string $key
      * @param \Closure $callback
