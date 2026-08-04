@@ -5,6 +5,17 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.2] - 2026-08-04
+
+### Security
+- Updated the transitive `guzzlehttp/guzzle` dependency from 7.15.1 to 7.15.2 to resolve GHSA-v5mv-p594-2x33 and GHSA-f7vp-7xgx-4w4r. SmartCache does not directly require Guzzle, `composer.json` is unchanged, and `composer audit` is clean after the lock-file update.
+
+### Changed
+- Redesigned the full documentation with a modern responsive layout, clearer navigation and content hierarchy, improved code blocks and cards, accessible active states, reduced-motion support, and better direct-link behavior.
+
+### Fixed
+- Replaced the GitHub stars badge's generic dynamic-JSON API lookup with Shields' dedicated GitHub stars endpoint to prevent intermittent invalid badge output.
+
 ## [1.13.1] - 2026-07-21
 
 ### Security
@@ -229,6 +240,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.13.2]: https://github.com/iazaran/smart-cache/compare/1.13.1...1.13.2
 [1.13.1]: https://github.com/iazaran/smart-cache/compare/1.13.0...1.13.1
 [1.13.0]: https://github.com/iazaran/smart-cache/compare/1.12.2...1.13.0
 [1.12.2]: https://github.com/iazaran/smart-cache/compare/1.12.1...1.12.2
