@@ -1,0 +1,18 @@
+tasks:
+  installDeps:
+    name: Install dependencies
+    description: Install the locked Composer dependencies for the project.
+    command: composer install --no-interaction --prefer-dist
+    triggeredBy:
+      - manual
+      - postDevcontainerStart
+      - prebuild
+
+  test:
+    name: Run tests
+    description: Run the PHPUnit test suite through the Composer script.
+    command: composer test
+    triggeredBy:
+      - manual
+    dependsOn:
+      - installDeps
