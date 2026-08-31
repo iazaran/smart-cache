@@ -4,6 +4,7 @@ namespace SmartCache\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use SmartCache\Console\Concerns\EnumeratesCacheKeys;
 use SmartCache\Contracts\SmartCache;
 
 /**
@@ -11,6 +12,8 @@ use SmartCache\Contracts\SmartCache;
  */
 class AuditCommand extends Command
 {
+    use EnumeratesCacheKeys;
+
     protected $signature = 'smart-cache:audit
                             {--format=table : Output format: table or json}
                             {--driver= : Cache store to audit, defaults to cache.default}
@@ -277,32 +280,6 @@ class AuditCommand extends Command
         }
 
         return $orphans;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    protected function getAllCacheKeys(object $store): array
-    {
-        $storeClass = \get_class($store);
-
-        if (\str_contains($storeClass, 'Redis')) {
-            return $store->connection()->keys('*');
-        }
-
-        if (\str_contains($storeClass, 'ArrayStore')) {
-            if (\method_exists($store, 'all')) {
-                return \array_keys($store->all(false));
-            }
-
-            $reflection = new \ReflectionClass($store);
-            $storageProperty = $reflection->getProperty('storage');
-            $storage = $storageProperty->getValue($store);
-
-            return \array_keys($storage ?? []);
-        }
-
-        throw new \RuntimeException('Cannot enumerate keys for this cache driver');
     }
 
     /**

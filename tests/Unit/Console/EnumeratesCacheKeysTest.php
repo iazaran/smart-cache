@@ -89,20 +89,58 @@ class EnumeratesCacheKeysTest extends TestCase
         $this->assertFalse($connection->keysCalled);
     }
 
-    public function test_cluster_connections_keep_using_keys(): void
+    public function test_scans_every_phpredis_cluster_master_without_calling_keys(): void
     {
-        // Cluster SCAN walks a single node, so it would report only part of the
-        // keyspace — a partial view is unsafe for a sweep that decides what to
-        // delete. Clusters must keep the historical behaviour.
         $connection = new PhpRedisClusterConnectionStub();
 
-        $this->assertSame(['whole-keyspace'], $this->subject()->scan($connection));
-        $this->assertFalse($connection->scanCalled, 'Cluster connections must not be SCANned.');
+        $keys = $this->subject()->scan($connection);
+
+        sort($keys);
+        $this->assertSame(['a', 'b', 'c'], $keys);
+        $this->assertSame(['node-a', 'node-b'], $connection->client->scannedNodes);
+        $this->assertFalse($connection->keysCalled);
     }
 
-    public function test_falls_back_to_keys_when_scan_returns_an_unexpected_shape(): void
+    public function test_scans_every_predis_cluster_node_without_calling_keys(): void
+    {
+        $connection = new PredisClusterConnectionStub();
+
+        $keys = $this->subject()->scan($connection);
+
+        sort($keys);
+        $this->assertSame(['a', 'b', 'c'], $keys);
+        $this->assertFalse($connection->keysCalled);
+        $this->assertFalse($connection->nodes[0]->keysCalled);
+        $this->assertFalse($connection->nodes[1]->keysCalled);
+    }
+
+    public function test_fails_safely_when_scan_is_unavailable(): void
     {
         $connection = new class {
+            public bool $keysCalled = false;
+
+            public function keys($pattern): array
+            {
+                $this->keysCalled = true;
+                return ['fallback-key'];
+            }
+        };
+
+        try {
+            $this->subject()->scan($connection);
+            $this->fail('A connection without SCAN must fail safely.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('does not support SCAN', $e->getMessage());
+        }
+
+        $this->assertFalse($connection->keysCalled);
+    }
+
+    public function test_fails_safely_when_scan_returns_an_unexpected_shape(): void
+    {
+        $connection = new class {
+            public bool $keysCalled = false;
+
             public function scan($cursor, $options = [])
             {
                 return 'nonsense';
@@ -110,16 +148,26 @@ class EnumeratesCacheKeysTest extends TestCase
 
             public function keys($pattern): array
             {
+                $this->keysCalled = true;
                 return ['fallback-key'];
             }
         };
 
-        $this->assertSame(['fallback-key'], $this->subject()->scan($connection));
+        try {
+            $this->subject()->scan($connection);
+            $this->fail('A malformed SCAN result must fail safely.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('unexpected result', $e->getMessage());
+        }
+
+        $this->assertFalse($connection->keysCalled);
     }
 
-    public function test_falls_back_to_keys_when_scan_throws(): void
+    public function test_fails_safely_when_scan_throws(): void
     {
         $connection = new class {
+            public bool $keysCalled = false;
+
             public function scan($cursor, $options = [])
             {
                 throw new \RuntimeException('SCAN unsupported');
@@ -127,11 +175,19 @@ class EnumeratesCacheKeysTest extends TestCase
 
             public function keys($pattern): array
             {
+                $this->keysCalled = true;
                 return ['fallback-key'];
             }
         };
 
-        $this->assertSame(['fallback-key'], $this->subject()->scan($connection));
+        try {
+            $this->subject()->scan($connection);
+            $this->fail('A failing SCAN must fail safely.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('SCAN unsupported', $e->getMessage());
+        }
+
+        $this->assertFalse($connection->keysCalled);
     }
 
     public function test_does_not_spin_forever_when_the_cursor_never_returns_to_zero(): void
@@ -151,10 +207,14 @@ class EnumeratesCacheKeysTest extends TestCase
             }
         };
 
-        $keys = $this->subject()->scan($connection);
+        try {
+            $this->subject()->scan($connection);
+            $this->fail('A non-terminating SCAN must fail safely.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('did not complete', $e->getMessage());
+        }
 
-        $this->assertNotEmpty($keys);
-        $this->assertLessThanOrEqual(100001, $connection->calls);
+        $this->assertSame(100000, $connection->calls);
     }
 }
 
@@ -164,17 +224,95 @@ class EnumeratesCacheKeysTest extends TestCase
  */
 class PhpRedisClusterConnectionStub
 {
-    public bool $scanCalled = false;
+    public bool $keysCalled = false;
+    public PhpRedisClusterClientStub $client;
 
-    public function scan($cursor, $options = [])
+    public function __construct()
     {
-        $this->scanCalled = true;
+        $this->client = new PhpRedisClusterClientStub();
+    }
 
-        return [0, ['only-one-node']];
+    public function isCluster(): bool
+    {
+        return true;
+    }
+
+    public function client(): object
+    {
+        return $this->client;
     }
 
     public function keys($pattern): array
     {
-        return ['whole-keyspace'];
+        $this->keysCalled = true;
+        return ['SHOULD-NOT-BE-USED'];
+    }
+}
+
+class PhpRedisClusterClientStub
+{
+    public array $scannedNodes = [];
+
+    public function _masters(): array
+    {
+        return ['node-a', 'node-b'];
+    }
+
+    public function scan(&$cursor, $node, $pattern = '*', $count = 0): array
+    {
+        $this->scannedNodes[] = $node;
+        $cursor = 0;
+
+        return $node === 'node-a' ? ['a', 'b'] : ['b', 'c'];
+    }
+}
+
+class PredisClusterConnectionStub
+{
+    public bool $keysCalled = false;
+    public array $nodes;
+
+    public function __construct()
+    {
+        $this->nodes = [
+            new PredisClusterNodeStub(['a', 'b']),
+            new PredisClusterNodeStub(['b', 'c']),
+        ];
+    }
+
+    public function isCluster(): bool
+    {
+        return true;
+    }
+
+    public function client(): \Traversable
+    {
+        return new \ArrayIterator($this->nodes);
+    }
+
+    public function keys($pattern): array
+    {
+        $this->keysCalled = true;
+        return ['SHOULD-NOT-BE-USED'];
+    }
+}
+
+class PredisClusterNodeStub
+{
+    public bool $keysCalled = false;
+
+    public function __construct(private array $keys)
+    {
+    }
+
+    public function scan($cursor, $options = [])
+    {
+        return [0, $this->keys];
+    }
+
+    public function keys($pattern): array
+    {
+        $this->keysCalled = true;
+        return ['SHOULD-NOT-BE-USED'];
     }
 }

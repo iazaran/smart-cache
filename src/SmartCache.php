@@ -199,6 +199,11 @@ class SmartCache implements SmartCacheContract, Repository
     protected float $jitterPercentage = 0.1;
 
     /**
+     * @var bool Whether the next put() receives an explicitly jittered TTL
+     */
+    protected bool $skipNextConfiguredJitter = false;
+
+    /**
      * @var CostAwareCacheManager|null Cost-aware cache manager for value scoring
      */
     protected ?CostAwareCacheManager $costAwareManager = null;
@@ -339,11 +344,31 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function put($key, $value, $ttl = null): bool
     {
+        $applyConfiguredJitter = !$this->skipNextConfiguredJitter;
+        $this->skipNextConfiguredJitter = false;
+
+        return $this->putValue($key, $value, $ttl, $applyConfiguredJitter);
+    }
+
+    /**
+     * Store a value, optionally applying the globally configured TTL jitter.
+     *
+     * The explicit *WithJitter helpers pass an already-jittered TTL here so the
+     * global setting cannot jitter it a second time.
+     *
+     * @param mixed $key
+     * @param mixed $value
+     * @param mixed $ttl
+     * @param bool $applyConfiguredJitter
+     * @return bool
+     */
+    protected function putValue($key, $value, $ttl, bool $applyConfiguredJitter): bool
+    {
         $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
         // Apply jitter to TTL when enabled (prevents thundering herd)
-        if ($this->jitterEnabled && \is_int($ttl) && $ttl > 0) {
+        if ($applyConfiguredJitter && $this->jitterEnabled && \is_int($ttl) && $ttl > 0) {
             $ttl = $this->applyJitter($ttl);
         }
 
@@ -451,7 +476,10 @@ class SmartCache implements SmartCacheContract, Repository
         $value = $this->cache->get($key);
 
         // If value is chunked, clean up all chunk keys
-        if (\is_array($value) && isset($value['_sc_chunked']) && $value['_sc_chunked'] === true) {
+        if (\is_array($value) &&
+            isset($value['_sc_chunked'], $value['chunk_keys']) &&
+            $value['_sc_chunked'] === true &&
+            \is_array($value['chunk_keys'])) {
             foreach ($value['chunk_keys'] as $chunkKey) {
                 $this->cache->forget($chunkKey);
             }
@@ -792,7 +820,13 @@ class SmartCache implements SmartCacheContract, Repository
     public function increment($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
-        return $this->cache->increment($key, $value);
+        $result = $this->cache->increment($key, $value);
+
+        if ($result !== false) {
+            $this->invalidateDnaRecord($key);
+        }
+
+        return $result;
     }
 
     /**
@@ -805,7 +839,13 @@ class SmartCache implements SmartCacheContract, Repository
     public function decrement($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
-        return $this->cache->decrement($key, $value);
+        $result = $this->cache->decrement($key, $value);
+
+        if ($result !== false) {
+            $this->invalidateDnaRecord($key);
+        }
+
+        return $result;
     }
 
     /**
@@ -2559,7 +2599,13 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function putWithJitter(string $key, mixed $value, int $ttl, float $jitterPercentage = 0.1): bool
     {
-        return $this->put($key, $value, $this->jitterTtl($ttl, $jitterPercentage));
+        $this->skipNextConfiguredJitter = true;
+
+        try {
+            return $this->put($key, $value, $this->jitterTtl($ttl, $jitterPercentage));
+        } finally {
+            $this->skipNextConfiguredJitter = false;
+        }
     }
 
     /**
@@ -2600,7 +2646,24 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function rememberWithJitter(string $key, int $ttl, float $jitterPercentage, \Closure $callback): mixed
     {
-        return $this->remember($key, $this->jitterTtl($ttl, $jitterPercentage), $callback);
+        $callbackWithPreparedTtl = function () use ($callback): mixed {
+            $value = $callback();
+            // Set this only after the user callback returns, so cache writes made
+            // inside that callback retain their normal global jitter behavior.
+            $this->skipNextConfiguredJitter = true;
+
+            return $value;
+        };
+
+        try {
+            return $this->remember(
+                $key,
+                $this->jitterTtl($ttl, $jitterPercentage),
+                $callbackWithPreparedTtl
+            );
+        } finally {
+            $this->skipNextConfiguredJitter = false;
+        }
     }
 
     /**

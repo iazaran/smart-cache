@@ -184,6 +184,32 @@ class BugFixRegressionTest extends TestCase
         $this->assertGreaterThan(1000, $remaining);
     }
 
+    public function test_increment_invalidates_the_dedup_record(): void
+    {
+        $cache = $this->makeCache(['smart-cache.deduplication.enabled' => true]);
+
+        $cache->put('counter', 1, 3600);
+        $this->assertSame(2, $cache->increment('counter'));
+
+        // The DNA record still described the original value, so this write was
+        // incorrectly skipped and left the incremented value in the store.
+        $cache->put('counter', 1, 3600);
+
+        $this->assertSame(1, $cache->get('counter'));
+    }
+
+    public function test_decrement_invalidates_the_dedup_record(): void
+    {
+        $cache = $this->makeCache(['smart-cache.deduplication.enabled' => true]);
+
+        $cache->put('counter', 2, 3600);
+        $this->assertSame(1, $cache->decrement('counter'));
+
+        $cache->put('counter', 2, 3600);
+
+        $this->assertSame(2, $cache->get('counter'));
+    }
+
     // -----------------------------------------------------------------
     // TTL jitter
     // -----------------------------------------------------------------
@@ -218,6 +244,46 @@ class BugFixRegressionTest extends TestCase
         $this->assertSame('generated', $cache->get('rj'));
     }
 
+    public function test_put_with_jitter_is_not_jittered_again_by_the_global_setting(): void
+    {
+        Carbon::setTestNow('2030-01-01 00:00:00');
+        mt_srand(1234);
+
+        $cache = $this->makeCache([
+            'smart-cache.jitter.enabled' => true,
+            'smart-cache.jitter.percentage' => 1.0,
+            'smart-cache.deduplication.enabled' => false,
+        ]);
+
+        $cache->putWithJitter('single-jitter', 'v', 1000, 0.0);
+
+        $store = $this->app['cache']->store('array')->getStore();
+        $storage = new \ReflectionProperty(get_class($store), 'storage');
+        $expiresAt = $storage->getValue($store)['single-jitter']['expiresAt'];
+
+        $this->assertSame(1000, (int) $expiresAt - Carbon::now()->timestamp);
+    }
+
+    public function test_remember_with_jitter_is_not_jittered_again_by_the_global_setting(): void
+    {
+        Carbon::setTestNow('2030-01-01 00:00:00');
+        mt_srand(1234);
+
+        $cache = $this->makeCache([
+            'smart-cache.jitter.enabled' => true,
+            'smart-cache.jitter.percentage' => 1.0,
+            'smart-cache.deduplication.enabled' => false,
+        ]);
+
+        $cache->rememberWithJitter('single-remember-jitter', 1000, 0.0, fn () => 'v');
+
+        $store = $this->app['cache']->store('array')->getStore();
+        $storage = new \ReflectionProperty(get_class($store), 'storage');
+        $expiresAt = $storage->getValue($store)['single-remember-jitter']['expiresAt'];
+
+        $this->assertSame(1000, (int) $expiresAt - Carbon::now()->timestamp);
+    }
+
     // -----------------------------------------------------------------
     // Corrupted internal metadata must not fatal
     // -----------------------------------------------------------------
@@ -229,6 +295,19 @@ class BugFixRegressionTest extends TestCase
         $cache = $this->makeCache(['smart-cache.monitoring.enabled' => true]);
 
         $this->assertNull($cache->get('anything'));
+    }
+
+    public function test_health_check_removes_a_chunk_marker_with_no_chunk_list(): void
+    {
+        $store = $this->app['cache']->store('array');
+        $store->forever('_sc_managed_keys', ['broken-chunk']);
+        $store->forever('broken-chunk', ['_sc_chunked' => true]);
+
+        $cache = $this->makeCache();
+        $result = $cache->healthCheck();
+
+        $this->assertSame(1, $result['orphaned_chunks_cleaned']);
+        $this->assertFalse($store->has('broken-chunk'));
     }
 
     // -----------------------------------------------------------------
