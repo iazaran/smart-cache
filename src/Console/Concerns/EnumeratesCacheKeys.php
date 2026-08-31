@@ -53,6 +53,14 @@ trait EnumeratesCacheKeys
             return $connection->keys('*');
         }
 
+        // Cluster SCAN walks a single node (Laravel's PhpRedisClusterConnection
+        // passes `node` through to RedisCluster::scan), so it would report only
+        // part of the keyspace. For a sweep that decides what to delete, a partial
+        // view is worse than the historical behaviour — leave clusters alone.
+        if (\str_contains(\get_class($connection), 'Cluster')) {
+            return $connection->keys('*');
+        }
+
         $keys = [];
         $cursor = 0;
         // Backstop: a driver that never returns a zero cursor must not spin forever.

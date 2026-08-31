@@ -17,6 +17,7 @@ use SmartCache\Console\Commands\AuditCommand;
 use SmartCache\Console\Commands\BenchCommand;
 use SmartCache\Console\Commands\StatusCommand;
 use SmartCache\Console\Commands\WarmCacheCommand;
+use Illuminate\Contracts\Foundation\CachesRoutes;
 
 class SmartCacheServiceProvider extends ServiceProvider
 {
@@ -223,7 +224,10 @@ class SmartCacheServiceProvider extends ServiceProvider
 
         // Mirrors ServiceProvider::loadRoutesFrom(). Cached routes replace the
         // whole collection at booted(), so registering here would be discarded.
-        if ($this->app->routesAreCached()) {
+        // routesAreCached() is not on the Application contract — it comes from
+        // CachesRoutes — so the instanceof check is required, exactly as Laravel
+        // does it. Containers without it (Lumen, custom kernels) fall through.
+        if ($this->app instanceof CachesRoutes && $this->app->routesAreCached()) {
             return;
         }
 

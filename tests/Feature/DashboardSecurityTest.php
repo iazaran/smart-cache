@@ -68,6 +68,46 @@ class DashboardSecurityTest extends TestCase
         $this->assertStringContainsString('class="value status-scriptalertscript"', $html);
     }
 
+    public function test_dashboard_renders_the_real_hit_rate(): void
+    {
+        $controller = new StatisticsController();
+
+        $render = new \ReflectionMethod($controller, 'renderDashboard');
+        $render->setAccessible(true);
+
+        // getPerformanceMetrics() nests this under cache_efficiency.hit_ratio;
+        // the card previously read a top-level 'hit_rate' that never exists and
+        // so always displayed N/A.
+        $html = $render->invoke($controller, [
+            'managed_keys' => [],
+            'performance' => ['cache_efficiency' => ['hit_ratio' => 87.5]],
+            'circuit_breaker' => ['state' => 'closed'],
+            'statistics' => [],
+            'health' => [],
+        ]);
+
+        $this->assertStringContainsString('87.50%', $html);
+        $this->assertStringNotContainsString('N/A', $html);
+    }
+
+    public function test_dashboard_hit_rate_falls_back_to_not_available(): void
+    {
+        $controller = new StatisticsController();
+
+        $render = new \ReflectionMethod($controller, 'renderDashboard');
+        $render->setAccessible(true);
+
+        $html = $render->invoke($controller, [
+            'managed_keys' => [],
+            'performance' => [],
+            'circuit_breaker' => ['state' => 'closed'],
+            'statistics' => [],
+            'health' => [],
+        ]);
+
+        $this->assertStringContainsString('N/A', $html);
+    }
+
     public function test_dashboard_tolerates_a_non_string_circuit_breaker_state(): void
     {
         $controller = new StatisticsController();

@@ -137,7 +137,13 @@ class StatisticsController extends Controller
     {
         $keysCount = \count($data['managed_keys']);
         $perf = $data['performance'];
-        $hitRate = isset($perf['hit_rate']) ? \number_format($perf['hit_rate'], 2) . '%' : 'N/A';
+
+        // getPerformanceMetrics() reports this as cache_efficiency.hit_ratio.
+        // Reading a non-existent top-level 'hit_rate' meant the card always
+        // rendered "N/A". The old key is still honoured for any caller passing
+        // a hand-built payload.
+        $hitRateValue = $perf['cache_efficiency']['hit_ratio'] ?? $perf['hit_rate'] ?? null;
+        $hitRate = \is_numeric($hitRateValue) ? \number_format((float) $hitRateValue, 2) . '%' : 'N/A';
 
         // The circuit-breaker state can originate from the cache when
         // `circuit_breaker.shared` is enabled, so it is not trusted input here.

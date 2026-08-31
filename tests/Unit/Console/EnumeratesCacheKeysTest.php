@@ -89,6 +89,17 @@ class EnumeratesCacheKeysTest extends TestCase
         $this->assertFalse($connection->keysCalled);
     }
 
+    public function test_cluster_connections_keep_using_keys(): void
+    {
+        // Cluster SCAN walks a single node, so it would report only part of the
+        // keyspace — a partial view is unsafe for a sweep that decides what to
+        // delete. Clusters must keep the historical behaviour.
+        $connection = new PhpRedisClusterConnectionStub();
+
+        $this->assertSame(['whole-keyspace'], $this->subject()->scan($connection));
+        $this->assertFalse($connection->scanCalled, 'Cluster connections must not be SCANned.');
+    }
+
     public function test_falls_back_to_keys_when_scan_returns_an_unexpected_shape(): void
     {
         $connection = new class {
@@ -144,5 +155,26 @@ class EnumeratesCacheKeysTest extends TestCase
 
         $this->assertNotEmpty($keys);
         $this->assertLessThanOrEqual(100001, $connection->calls);
+    }
+}
+
+/**
+ * Named to match the dispatch the trait performs on the connection class name,
+ * mirroring Illuminate\Redis\Connections\PhpRedisClusterConnection.
+ */
+class PhpRedisClusterConnectionStub
+{
+    public bool $scanCalled = false;
+
+    public function scan($cursor, $options = [])
+    {
+        $this->scanCalled = true;
+
+        return [0, ['only-one-node']];
+    }
+
+    public function keys($pattern): array
+    {
+        return ['whole-keyspace'];
     }
 }
