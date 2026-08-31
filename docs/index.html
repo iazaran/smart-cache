@@ -2091,12 +2091,17 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();
 ],
 
 // Access dashboard at:
-// GET /smart-cache/dashboard
+// GET /smart-cache
 
 // JSON API endpoints:
 // GET /smart-cache/statistics - Performance metrics
-// GET /smart-cache/health    - Health check
-// GET /smart-cache/keys      - Managed keys list</code></pre>
+// GET /smart-cache/health     - Health check
+// GET /smart-cache/keys       - Managed keys list
+// GET /smart-cache/commands   - Available commands</code></pre>
+
+                    <div class="alert alert-warning">
+                        <strong>Protect these routes.</strong> The shipped default is <code>['web']</code>, which provides session and CSRF handling but <strong>no authentication</strong>. These endpoints expose your managed cache key list, optimization statistics, and internal metrics — and cache keys routinely embed user, tenant, or record identifiers. Add an authentication and authorization middleware (<code>['web', 'auth']</code>, <code>['web', 'auth', 'can:viewSmartCache']</code>, or your own gate) before enabling the dashboard outside local development. The dashboard is disabled by default, and every endpoint re-checks <code>dashboard.enabled</code> at request time so a stale <code>route:cache</code> cannot keep it reachable after you switch it off.
+                    </div>
 
                     <h2>🔄 Background Refresh</h2>
                     <p>Queue-based background cache refresh:</p>
@@ -3425,7 +3430,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 486 tests, 1,976 assertions
+# 519 tests, 2,055 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

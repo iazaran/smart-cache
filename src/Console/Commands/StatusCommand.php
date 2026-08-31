@@ -6,12 +6,15 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Cache;
 use SmartCache\Contracts\SmartCache;
+use SmartCache\Console\Concerns\EnumeratesCacheKeys;
 
 /**
  * Display SmartCache status and configuration.
  */
 class StatusCommand extends Command
 {
+    use EnumeratesCacheKeys;
+
     protected $signature = 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}';
     protected $description = 'Display information about SmartCache usage and configuration.';
 
@@ -140,45 +143,5 @@ class StatusCommand extends Command
         } catch (\Exception) {
             return [];
         }
-    }
-
-    protected function getAllCacheKeys(object $store): array
-    {
-        $storeClass = \get_class($store);
-
-        if (\str_contains($storeClass, 'Redis')) {
-            return $store->connection()->keys('*');
-        }
-
-        if (\str_contains($storeClass, 'ArrayStore')) {
-            return $this->getArrayStoreKeys($store);
-        }
-
-        throw new \Exception('Cannot enumerate keys for this cache driver');
-    }
-
-    protected function getArrayStoreKeys(object $store): array
-    {
-        if (\method_exists($store, 'all')) {
-            return \array_keys($store->all(false));
-        }
-
-        try {
-            $reflection = new \ReflectionClass($store);
-            $storageProperty = $reflection->getProperty('storage');
-            $storage = $storageProperty->getValue($store);
-
-            return \array_keys($storage ?? []);
-        } catch (\ReflectionException) {
-            return [];
-        }
-    }
-
-    protected function isSmartCacheInternalKey(string $key): bool
-    {
-        return \str_contains($key, '_sc_') ||
-               \str_contains($key, '_sc_meta') ||
-               \str_contains($key, '_sc_chunk_') ||
-               $key === '_sc_managed_keys';
     }
 }

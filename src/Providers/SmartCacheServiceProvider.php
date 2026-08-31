@@ -221,6 +221,12 @@ class SmartCacheServiceProvider extends ServiceProvider
             return;
         }
 
+        // Mirrors ServiceProvider::loadRoutesFrom(). Cached routes replace the
+        // whole collection at booted(), so registering here would be discarded.
+        if ($this->app->routesAreCached()) {
+            return;
+        }
+
         $prefix = $this->app['config']->get('smart-cache.dashboard.prefix', 'smart-cache');
         $middleware = $this->app['config']->get('smart-cache.dashboard.middleware', ['web']);
 

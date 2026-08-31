@@ -326,8 +326,10 @@ SmartCache::analyzePerformance();    // health score + recommendations
 ```php
 // Enable web dashboard
 'dashboard' => ['enabled' => true, 'prefix' => 'smart-cache', 'middleware' => ['web', 'auth']],
-// GET /smart-cache/dashboard | /smart-cache/statistics | /smart-cache/health
+// GET /smart-cache | /smart-cache/statistics | /smart-cache/health | /smart-cache/keys | /smart-cache/commands
 ```
+
+> **Protect these routes.** The shipped default is `['web']`, which provides session and CSRF handling but **no authentication**. The endpoints expose your managed cache key list, optimization statistics, and internal metrics — cache keys routinely embed user, tenant, or record identifiers. Add an authentication and authorization middleware (`['web', 'auth']`, `['web', 'auth', 'can:viewSmartCache']`, or your own gate) before enabling the dashboard outside local development. It is disabled by default.
 
 ```bash
 php artisan smart-cache:status
@@ -450,7 +452,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 486 tests, 1,976 assertions
+composer test            # 519 tests, 2,055 assertions
 composer test-coverage   # with code coverage
 ```
 

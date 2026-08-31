@@ -103,7 +103,13 @@ class CircuitBreaker
             return;
         }
 
-        $this->state = $payload['state'] ?? $this->state;
+        // The shared entry lives in the application cache, which other processes
+        // can write. Only accept a known state rather than trusting the payload.
+        $sharedState = $payload['state'] ?? null;
+        if (\in_array($sharedState, [self::STATE_CLOSED, self::STATE_OPEN, self::STATE_HALF_OPEN], true)) {
+            $this->state = $sharedState;
+        }
+
         $this->failureCount = (int) ($payload['failure_count'] ?? $this->failureCount);
         $this->successCount = (int) ($payload['success_count'] ?? $this->successCount);
         $this->openedAt = isset($payload['opened_at']) ? (int) $payload['opened_at'] : $this->openedAt;

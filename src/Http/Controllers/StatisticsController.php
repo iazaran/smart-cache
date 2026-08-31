@@ -14,12 +14,31 @@ use SmartCache\Facades\SmartCache;
 class StatisticsController extends Controller
 {
     /**
+     * Refuse to serve when the dashboard is switched off.
+     *
+     * The routes are registered from the service provider, so a `route:cache`
+     * taken while the dashboard was enabled bakes them into the compiled route
+     * file. Disabling `dashboard.enabled` afterwards would otherwise leave every
+     * endpoint live until the routes were re-cached.
+     *
+     * @return void
+     */
+    protected function ensureDashboardEnabled(): void
+    {
+        if (!config('smart-cache.dashboard.enabled', false)) {
+            abort(404);
+        }
+    }
+
+    /**
      * Get cache statistics.
      *
      * @return JsonResponse
      */
     public function index(): JsonResponse
     {
+        $this->ensureDashboardEnabled();
+
         $cache = SmartCache::getFacadeRoot();
         
         return response()->json([
@@ -40,6 +59,8 @@ class StatisticsController extends Controller
      */
     public function health(): JsonResponse
     {
+        $this->ensureDashboardEnabled();
+
         $cache = SmartCache::getFacadeRoot();
         
         return response()->json([
@@ -55,6 +76,8 @@ class StatisticsController extends Controller
      */
     public function keys(): JsonResponse
     {
+        $this->ensureDashboardEnabled();
+
         $cache = SmartCache::getFacadeRoot();
         
         return response()->json([
@@ -73,6 +96,8 @@ class StatisticsController extends Controller
      */
     public function commands(): JsonResponse
     {
+        $this->ensureDashboardEnabled();
+
         $cache = SmartCache::getFacadeRoot();
         
         return response()->json([
@@ -88,6 +113,8 @@ class StatisticsController extends Controller
      */
     public function dashboard(): \Illuminate\Http\Response
     {
+        $this->ensureDashboardEnabled();
+
         $cache = SmartCache::getFacadeRoot();
         
         $data = [
@@ -111,8 +138,16 @@ class StatisticsController extends Controller
         $keysCount = \count($data['managed_keys']);
         $perf = $data['performance'];
         $hitRate = isset($perf['hit_rate']) ? \number_format($perf['hit_rate'], 2) . '%' : 'N/A';
-        $cbState = $data['circuit_breaker']['state'] ?? 'unknown';
-        
+
+        // The circuit-breaker state can originate from the cache when
+        // `circuit_breaker.shared` is enabled, so it is not trusted input here.
+        // Escape it before interpolating into the markup and the CSS class.
+        $rawState = $data['circuit_breaker']['state'] ?? 'unknown';
+        $rawState = \is_string($rawState) ? $rawState : 'unknown';
+
+        $cbClass = \preg_replace('/[^a-z_]/', '', \strtolower($rawState)) ?: 'unknown';
+        $cbState = \htmlspecialchars($rawState, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
         return <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -157,7 +192,7 @@ class StatisticsController extends Controller
             </div>
             <div class="card">
                 <h2>Circuit Breaker</h2>
-                <div class="value status-{$cbState}">{$cbState}</div>
+                <div class="value status-{$cbClass}">{$cbState}</div>
                 <div class="label">Backend status</div>
             </div>
         </div>
