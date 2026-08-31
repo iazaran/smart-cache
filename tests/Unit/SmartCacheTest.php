@@ -1224,11 +1224,14 @@ class SmartCacheTest extends TestCase
 
     public function test_cache_dna_hash_format_is_stable()
     {
-        // Locks the contract for the stored `_sc_dna:{key}` value:
-        //   - 32 lowercase hex characters (same width as md5, drop-in compatible
-        //     with any operator tooling that expects a fixed-width hash)
-        //   - deterministic for identical inputs
-        //   - sensitive to value changes (otherwise dedup would skip legitimate writes)
+        // Locks the contract for the stored `_sc_dna:{key}` record:
+        //   - 'h' is 32 lowercase hex characters (same width as md5)
+        //   - 'e' carries the absolute expiry the write was made for, so a later
+        //     put() can tell whether the stored entry still covers the requested
+        //     window (skipping that check silently shortens TTLs)
+        //   - the hash is deterministic for identical inputs
+        //   - the hash is sensitive to value changes (otherwise dedup would skip
+        //     legitimate writes)
         // Catches accidental algorithm swaps to a wider/narrower hash (e.g. sha256, crc32).
         $this->app['config']->set('smart-cache.deduplication.enabled', true);
 
@@ -1240,18 +1243,79 @@ class SmartCacheTest extends TestCase
 
         $key = 'dna-format-key';
         $smartCache->put($key, 'payload-A', 3600);
-        $hashA = $this->getCacheStore()->get("_sc_dna:{$key}");
+        $recordA = $this->getCacheStore()->get("_sc_dna:{$key}");
 
+        $this->assertIsArray($recordA);
+        $this->assertArrayHasKey('h', $recordA);
+        $this->assertArrayHasKey('e', $recordA);
+
+        $hashA = $recordA['h'];
         $this->assertIsString($hashA);
         $this->assertSame(32, \strlen($hashA));
         $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $hashA);
+        $this->assertIsInt($recordA['e']);
 
         $smartCache->forget($key);
         $smartCache->put($key, 'payload-A', 3600);
-        $this->assertSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}"));
+        $this->assertSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}")['h']);
 
         $smartCache->put($key, 'payload-B', 3600);
-        $this->assertNotSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}"));
+        $this->assertNotSame($hashA, $this->getCacheStore()->get("_sc_dna:{$key}")['h']);
+    }
+
+    public function test_cache_dna_reads_legacy_string_records()
+    {
+        // Records written by <= 1.13.x are a bare hash string. They must not be
+        // misread as a skip signal, and the next write upgrades them in place.
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-legacy-key';
+        $smartCache->put($key, 'payload-A', 3600);
+
+        // Simulate a record left behind by an older release.
+        $legacyHash = $this->getCacheStore()->get("_sc_dna:{$key}")['h'];
+        $this->getCacheStore()->put("_sc_dna:{$key}", $legacyHash, 3600);
+
+        $smartCache->put($key, 'payload-A', 3600);
+
+        $upgraded = $this->getCacheStore()->get("_sc_dna:{$key}");
+        $this->assertIsArray($upgraded, 'Legacy record should be upgraded on the next write.');
+        $this->assertSame($legacyHash, $upgraded['h']);
+        $this->assertSame('payload-A', $smartCache->get($key));
+    }
+
+    public function test_repeated_put_of_identical_value_extends_expiry()
+    {
+        // Regression: dedup previously skipped the write outright, so a caller
+        // refreshing a key with an unchanged value never moved its expiry and the
+        // entry disappeared earlier than requested.
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+
+        $smartCache = new SmartCache(
+            $this->getCacheStore(),
+            $this->getCacheManager(),
+            $this->app['config'],
+        );
+
+        $key = 'dna-ttl-refresh-key';
+        $smartCache->put($key, 'steady-value', 3600);
+
+        $record = $this->getCacheStore()->get("_sc_dna:{$key}");
+        $firstExpiry = $record['e'];
+
+        // A later write asking for the same window must push the expiry out.
+        $smartCache->put($key, 'steady-value', 7200);
+
+        $secondExpiry = $this->getCacheStore()->get("_sc_dna:{$key}")['e'];
+
+        $this->assertGreaterThan($firstExpiry, $secondExpiry);
+        $this->assertSame('steady-value', $smartCache->get($key));
     }
 
     // ---------------------------------------------------------------

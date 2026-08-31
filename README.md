@@ -141,16 +141,27 @@ SmartCache::throttle('api_call', 10, 60, fn() => expensiveApiCall());
 // TTL jitter — prevents thundering herd on expiry
 SmartCache::withJitter(0.1)->put('popular_data', $data, 3600);
 // Actual TTL: 3240–3960 s (±10 %)
+
+// Explicit per-call jitter — applies regardless of the global jitter.enabled flag
+SmartCache::putWithJitter('popular_data', $data, 3600, 0.2);
+SmartCache::rememberWithJitter('report', 3600, 0.1, fn() => Analytics::generate());
 ```
 
 ### Write Deduplication (Cache DNA)
 
-Hashes every value before writing. Identical content → cached-value rewrite skipped.
+Hashes every value before writing. When the content is unchanged **and** the cached entry already outlives the TTL being requested, the value rewrite is skipped.
 
 ```php
 SmartCache::put('app_config', Config::all(), 3600);
-SmartCache::put('app_config', Config::all(), 3600); // value rewrite skipped; metadata may refresh
+
+// Same content, and the stored entry already covers this window → rewrite skipped
+SmartCache::put('app_config', Config::all(), 60);
+
+// Same content, but this asks the entry to live longer → written, so the TTL is honoured
+SmartCache::put('app_config', Config::all(), 7200);
 ```
+
+A write that would extend the expiry is never skipped: deduplication must not shorten an entry's lifetime.
 
 ### Self-Healing Cache
 

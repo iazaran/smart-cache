@@ -41,7 +41,9 @@ class MemoizationTest extends TestCase
         $repository = $this->createMock(Repository::class);
         $repository->expects($this->once())
             ->method('get')
-            ->with('large_key', null)
+            // The driver reads through an internal sentinel default so a stored
+            // value equal to the caller's default is not mistaken for a miss.
+            ->with('large_key', $this->anything())
             ->willReturn($largeData);
 
         $memo = new MemoizedCacheDriver($repository);
@@ -146,7 +148,9 @@ class MemoizationTest extends TestCase
         $repository = $this->createMock(Repository::class);
         $repository->expects($this->once())
             ->method('get')
-            ->with('test_key', null)
+            // The driver reads through an internal sentinel default so a stored
+            // value equal to the caller's default is not mistaken for a miss.
+            ->with('test_key', $this->anything())
             ->willReturn('test_value');
 
         $memo = new MemoizedCacheDriver($repository);

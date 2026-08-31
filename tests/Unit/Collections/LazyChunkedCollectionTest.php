@@ -73,19 +73,40 @@ class LazyChunkedCollectionTest extends TestCase
     {
         $cache = $this->app['cache']->store();
         
-        $cache->put('chunk_0', ['a', 'b'], 60);
-        $cache->put('chunk_1', ['c', 'd'], 60);
-        
+        // ChunkingStrategy chunks with preserve_keys, so chunk N carries the
+        // original offsets N*size … (N+1)*size-1. Mirror that here.
+        $cache->put('chunk_0', [0 => 'a', 1 => 'b'], 60);
+        $cache->put('chunk_1', [2 => 'c', 3 => 'd'], 60);
+
         $collection = new LazyChunkedCollection(
             $cache,
             ['chunk_0', 'chunk_1'],
             2,
             4
         );
-        
+
         $array = $collection->toArray();
-        
+
         $this->assertEquals(['a', 'b', 'c', 'd'], $array);
+    }
+
+    public function test_lazy_collection_to_array_preserves_sparse_keys_like_eager_restore()
+    {
+        $cache = $this->app['cache']->store();
+
+        // Sparse integer keys survive the eager restore path; toArray() used
+        // array_merge, which renumbered them and diverged from it.
+        $cache->put('sparse_0', [5 => 'a', 99 => 'b'], 60);
+        $cache->put('sparse_1', [250 => 'c'], 60);
+
+        $collection = new LazyChunkedCollection(
+            $cache,
+            ['sparse_0', 'sparse_1'],
+            2,
+            3
+        );
+
+        $this->assertSame([5 => 'a', 99 => 'b', 250 => 'c'], $collection->toArray());
     }
 
     public function test_lazy_collection_slice()
@@ -232,9 +253,10 @@ class LazyChunkedCollectionTest extends TestCase
     {
         $cache = $this->app['cache']->store();
         
-        $cache->put('chunk_0', ['a', 'b'], 60);
-        $cache->put('chunk_1', ['c', 'd'], 60);
-        
+        // Chunks carry the original offsets (array_chunk preserve_keys).
+        $cache->put('chunk_0', [0 => 'a', 1 => 'b'], 60);
+        $cache->put('chunk_1', [2 => 'c', 3 => 'd'], 60);
+
         $lazyCollection = new LazyChunkedCollection(
             $cache,
             ['chunk_0', 'chunk_1'],
