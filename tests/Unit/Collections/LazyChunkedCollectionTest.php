@@ -73,19 +73,59 @@ class LazyChunkedCollectionTest extends TestCase
     {
         $cache = $this->app['cache']->store();
         
-        $cache->put('chunk_0', ['a', 'b'], 60);
-        $cache->put('chunk_1', ['c', 'd'], 60);
-        
+        // ChunkingStrategy chunks with preserve_keys, so chunk N carries the
+        // original offsets N*size … (N+1)*size-1. Mirror that here.
+        $cache->put('chunk_0', [0 => 'a', 1 => 'b'], 60);
+        $cache->put('chunk_1', [2 => 'c', 3 => 'd'], 60);
+
         $collection = new LazyChunkedCollection(
             $cache,
             ['chunk_0', 'chunk_1'],
             2,
             4
         );
-        
+
         $array = $collection->toArray();
-        
+
         $this->assertEquals(['a', 'b', 'c', 'd'], $array);
+    }
+
+    public function test_lazy_collection_to_array_preserves_sparse_keys_like_eager_restore()
+    {
+        $cache = $this->app['cache']->store();
+
+        // Sparse integer keys survive the eager restore path; toArray() used
+        // array_merge, which renumbered them and diverged from it.
+        $cache->put('sparse_0', [5 => 'a', 99 => 'b'], 60);
+        $cache->put('sparse_1', [250 => 'c'], 60);
+
+        $collection = new LazyChunkedCollection(
+            $cache,
+            ['sparse_0', 'sparse_1'],
+            2,
+            3
+        );
+
+        $this->assertSame([5 => 'a', 99 => 'b', 250 => 'c'], $collection->toArray());
+    }
+
+    public function test_lazy_collection_to_array_keeps_string_key_collision_behavior()
+    {
+        $cache = $this->app['cache']->store();
+
+        $cache->put('strings_0', ['name' => 'first'], 60);
+        $cache->put('strings_1', ['name' => 'second'], 60);
+
+        $collection = new LazyChunkedCollection(
+            $cache,
+            ['strings_0', 'strings_1'],
+            1,
+            2
+        );
+
+        // toArray() historically used array_merge(), where a later string key
+        // replaces the earlier value. Preserve that behavior for existing users.
+        $this->assertSame(['name' => 'second'], $collection->toArray());
     }
 
     public function test_lazy_collection_slice()
@@ -232,9 +272,10 @@ class LazyChunkedCollectionTest extends TestCase
     {
         $cache = $this->app['cache']->store();
         
-        $cache->put('chunk_0', ['a', 'b'], 60);
-        $cache->put('chunk_1', ['c', 'd'], 60);
-        
+        // Chunks carry the original offsets (array_chunk preserve_keys).
+        $cache->put('chunk_0', [0 => 'a', 1 => 'b'], 60);
+        $cache->put('chunk_1', [2 => 'c', 3 => 'd'], 60);
+
         $lazyCollection = new LazyChunkedCollection(
             $cache,
             ['chunk_0', 'chunk_1'],
@@ -281,4 +322,3 @@ class LazyChunkedCollectionTest extends TestCase
         $this->assertLessThanOrEqual(3, $stats['loaded_chunks']);
     }
 }
-

@@ -5,6 +5,50 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-09-01
+
+### Security
+- The dashboard's circuit-breaker state is now HTML-escaped before being rendered, and the CSS class derived from it is restricted to a safe character set. With `circuit_breaker.shared` enabled the state is read from the application cache, so any process able to write that entry could previously inject markup into the dashboard page.
+- `CircuitBreaker` now validates the state it hydrates from shared cache against the three known values instead of trusting the stored payload, so a corrupted or hostile entry cannot put the breaker into an unrecognised state.
+- Every dashboard endpoint re-checks `smart-cache.dashboard.enabled` at request time and returns 404 when it is off. Routes are registered from the service provider, so a `route:cache` taken while the dashboard was enabled baked them into the compiled route file and left all five endpoints live after the setting was switched back off. Dashboard route registration now also honours `routesAreCached()`, matching Laravel's own `loadRoutesFrom()`.
+- Dashboard route registration guards `routesAreCached()` behind an `instanceof CachesRoutes` check, matching Laravel's own `loadRoutesFrom()`. `routesAreCached()` is not declared on the `Application` contract, so calling it unconditionally would raise `Error: Call to undefined method` on any container that does not implement `CachesRoutes` (Lumen, custom kernels).
+- `smart-cache:clear --force`, `smart-cache:status --force`, and `smart-cache:audit` enumerate Redis keys with `SCAN` instead of `KEYS *`. `KEYS` is O(N) and runs to completion on Redis' single-threaded event loop, stalling every other client for the duration of the sweep. PhpRedis and Predis cluster connections scan every exposed node and merge the results. If a driver cannot provide a complete, usable `SCAN`, the command fails that optional enumeration safely and keeps its existing managed-key behavior; it never falls back to `KEYS` or acts on a partial result.
+- Documented that `dashboard.middleware` ships as `['web']` — session and CSRF handling, but **no authentication** — in the README, the full documentation, and the published config file. The endpoints expose the managed cache key list and internal metrics. The default is unchanged so existing deployments keep working; add `auth` (and a gate) before exposing the dashboard.
+
+### Fixed
+- Write deduplication (Cache DNA, enabled by default) no longer shortens an entry's lifetime. Re-writing a key with unchanged content skipped the store write entirely, so the expiry was never extended and the value disappeared at the *first* write's TTL — breaking every "refresh this key on each pass" pattern. The `_sc_dna:{key}` record now stores the absolute expiry alongside the `xxh128` hash, and a write is skipped only when the stored entry provably outlives the newly requested window. Records written by earlier releases are a bare hash string; they are read safely, never treated as a skip signal, and are upgraded in place on the next write.
+- Write deduplication could serve a stale value. `forever()`, `add()`, `increment()`, `decrement()`, `touch()`, and the SWR regeneration path (`flexible()`, `swr()`, `stale()`, `refreshAhead()`) changed a value or its expiry without maintaining the deduplication record, so a later `put()` compared against content or an expiry that was no longer in the store and skipped a write that was genuinely required. Writing value `Y`, then `forever()`-ing `X`, then writing `Y` again left `X` in the cache while `put()` reported success. All of these paths now invalidate the record.
+- `put()` with a TTL of zero, a negative TTL, or a past `DateTimeInterface` is a delete in Laravel, but deduplication skipped it — any live entry trivially satisfies a past expiry — so the value survived. Non-positive expiries are now never deduplicated.
+- Deduplication expiry maths now uses the framework clock (`Carbon::now()`) rather than `time()`, matching how the underlying store computes expiries and making the behavior testable with `Carbon::setTestNow()`.
+- `SmartCache::clear()` / `clearManaged()` removed nothing when a namespace was active. Managed keys are stored fully qualified, but the namespace was applied to them a second time on the way out, so the delete targeted `tenant:tenant:key`.
+- `cleanupExpiredManagedKeys()` had the same double-prefixing defect and therefore classified *every* live namespaced key as expired, silently emptying the managed-key index. Because `healthCheck()` calls it, a single health check could destroy the index that pattern invalidation, audits, and the dashboard depend on.
+- `CacheInvalidationService` re-applied the active namespace to already-qualified managed keys, making `flushPatterns()`, `invalidateModel()`, `getCacheStatistics()`, and `healthCheckAndCleanup()` silent no-ops for namespaced callers.
+- `LazyChunkedCollection` returned `null` for every item outside the first chunk. Chunks are written with `array_chunk(..., preserve_keys: true)`, so chunk *N* is keyed by the original offsets, but the collection indexed each chunk by a chunk-relative position. Iteration, `offsetGet()`, `slice()`, `each()`, `filter()`, and `map()` were all affected whenever `strategies.chunking.lazy_loading` was enabled.
+- `LazyChunkedCollection::toArray()` used `array_merge()`, which renumbered integer keys and diverged from the eager restore path for sparse or non-sequential integer keys. Keys are now preserved, and an item whose key collides with one already collected is appended rather than overwriting it, so a collection assembled by hand from chunk-relative (0-based) chunks still yields every item.
+- Model wildcard invalidation never matched. `CacheInvalidation::matchesPattern()` replaced the bare `*` after `preg_quote()` had already escaped it, compiling `user_*` to `/^user_\.*$/` — a literal dot — so `invalidatesPatterns(['user_*'])` matched nothing and stale entries survived indefinitely. Now mirrors the correct implementation in `CacheInvalidationService`.
+- `CompressionStrategy::restore()` corrupted the process-wide error-handler stack. `set_error_handler($previous)` pushes a frame rather than popping one, so two handlers leaked per call; the application's own `restore_error_handler()` then popped the wrong frame and left SmartCache's error-swallowing closure active, silently discarding application warnings. Now uses `restore_error_handler()`.
+- `SmartCache::memo()` could return the wrong value. `MemoizedCacheDriver::get()` detected a miss by comparing the fetched value against the caller's `$default`, so reading a stored `false`/`0`/`''`/`[]` with a matching default recorded a hit as a miss and poisoned `has()`/`get()` for the rest of the request. Reads now go through an internal sentinel.
+- `MemoizedCacheDriver` leaked memory in long-running workers (Octane, queue workers). `evictIfNeeded()` only measured the value map, leaving the `accessOrder` and negative-lookup maps unbounded; `accessOrder` entries were also never released by the write paths.
+- `SmartCache::__destruct()` and `CostAwareCacheManager::__destruct()` persisted to the cache without a guard. A backend failure during PHP shutdown — a torn-down connection, a Redis timeout, a read-only replica — turned a successfully served request into an uncatchable fatal error.
+- `CostAwareCacheManager::persist()` skipped writing an emptied metadata map, so forgetting the last tracked key left the previous entry in cache and the metadata reappeared on the next load.
+- A foreign or corrupted entry stored under `_sc_performance_metrics` or `_sc_cost_metadata` raised a `TypeError` on read instead of being ignored.
+- `healthCheckAndCleanup()` no longer iterates a key list captured before the expiry sweep, and malformed chunk wrappers can now be removed without `forget()` trying to iterate a missing or non-array `chunk_keys` value.
+- The dashboard's "Hit Rate" card always displayed `N/A`. It read a top-level `hit_rate` key, but `getPerformanceMetrics()` reports the value as `cache_efficiency.hit_ratio`. The card now shows the real figure; the old key is still honoured for hand-built payloads.
+
+### Changed
+- Expect the `cache_write_dedup` performance counter to fall sharply after upgrading. Writes are now skipped only when the stored entry already outlives the requested TTL, instead of on any content match, so far fewer writes qualify. This is the intended trade-off: the previous counter was inflated by skips that were silently shortening cache lifetimes. Existing `_sc_dna:*` entries mismatch once after upgrade and are transparently rewritten; during a rolling deploy old and new code interoperate safely, with deduplication simply disabled for keys whose record was last written by the other version.
+- `putWithJitter()` and `rememberWithJitter()` now always apply the percentage they are given exactly once. They previously routed through `applyJitter()`, which is gated on `smart-cache.jitter.enabled` — disabled by default — so both methods silently stored values with an unmodified TTL when global jitter was off and applied jitter twice when it was on. Calling them is the opt-in; `applyJitter()` keeps its existing flag-gated behavior for direct callers, and the fluent `withJitter()` modifier is unchanged.
+
+### Changed (internal)
+- `ClearCommand`, `StatusCommand`, and `AuditCommand` now share a `SmartCache\Console\Concerns\EnumeratesCacheKeys` trait instead of carrying separate key-enumeration helpers. No command signature or output changed.
+- New implementation-only helpers are private rather than extending the subclass API, avoiding method or property collisions in applications that already extend SmartCache internals. Existing public and protected signatures are unchanged.
+
+### Documentation
+- Corrected the documented dashboard URL: the dashboard is served at `GET /smart-cache` (the route is registered at `/` under the configured prefix), not `GET /smart-cache/dashboard`. Also documented the `/commands` endpoint.
+- Corrected the Cache DNA description in the README and full documentation: deduplication skips a write only when the content is unchanged *and* the stored entry already outlives the requested TTL.
+- Fixed the documented `rememberWithJitter()` example, which passed the callback and the jitter percentage in the wrong order and would raise a `TypeError`.
+- Documented that the explicit `putWithJitter()` / `rememberWithJitter()` methods do not depend on the global `jitter.enabled` flag.
+
 ## [1.13.2] - 2026-08-04
 
 ### Security
@@ -240,6 +284,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.14.0]: https://github.com/iazaran/smart-cache/compare/1.13.2...1.14.0
 [1.13.2]: https://github.com/iazaran/smart-cache/compare/1.13.1...1.13.2
 [1.13.1]: https://github.com/iazaran/smart-cache/compare/1.13.0...1.13.1
 [1.13.0]: https://github.com/iazaran/smart-cache/compare/1.12.2...1.13.0

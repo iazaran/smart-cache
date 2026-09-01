@@ -7,6 +7,7 @@ use Illuminate\Contracts\Cache\Store;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
@@ -198,6 +199,11 @@ class SmartCache implements SmartCacheContract, Repository
     protected float $jitterPercentage = 0.1;
 
     /**
+     * @var bool Whether the next put() receives an explicitly jittered TTL
+     */
+    private bool $skipNextConfiguredJitter = false;
+
+    /**
      * @var CostAwareCacheManager|null Cost-aware cache manager for value scoring
      */
     protected ?CostAwareCacheManager $costAwareManager = null;
@@ -338,11 +344,31 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function put($key, $value, $ttl = null): bool
     {
+        $applyConfiguredJitter = !$this->skipNextConfiguredJitter;
+        $this->skipNextConfiguredJitter = false;
+
+        return $this->putValue($key, $value, $ttl, $applyConfiguredJitter);
+    }
+
+    /**
+     * Store a value, optionally applying the globally configured TTL jitter.
+     *
+     * The explicit *WithJitter helpers pass an already-jittered TTL here so the
+     * global setting cannot jitter it a second time.
+     *
+     * @param mixed $key
+     * @param mixed $value
+     * @param mixed $ttl
+     * @param bool $applyConfiguredJitter
+     * @return bool
+     */
+    private function putValue($key, $value, $ttl, bool $applyConfiguredJitter): bool
+    {
         $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
         // Apply jitter to TTL when enabled (prevents thundering herd)
-        if ($this->jitterEnabled && \is_int($ttl) && $ttl > 0) {
+        if ($applyConfiguredJitter && $this->jitterEnabled && \is_int($ttl) && $ttl > 0) {
             $ttl = $this->applyJitter($ttl);
         }
 
@@ -359,12 +385,19 @@ class SmartCache implements SmartCacheContract, Repository
             $this->associateTagsWithKey($key, $this->activeTags);
         }
 
-        // Cache DNA — skip write when content is identical and the value still exists.
+        // Cache DNA — skip the write when the content is identical AND the entry
+        // already on the store is guaranteed to outlive the window the caller is
+        // asking for. Skipping a write whose TTL would have pushed the expiry out
+        // makes the entry vanish earlier than the caller asked for, so the expiry
+        // is part of the dedup decision, not just the content hash.
         $newHash = null;
+        $requestedExpiry = false;
         if ($this->deduplicationEnabled) {
             $newHash = $this->contentHash($optimizedValue);
-            $storedHash = $this->cache->get("_sc_dna:{$key}");
-            if ($storedHash === $newHash && $this->cache->has($key)) {
+            $requestedExpiry = $this->resolveDedupExpiry($ttl);
+            $stored = $this->cache->get("_sc_dna:{$key}");
+
+            if ($this->canSkipDuplicateWrite($stored, $newHash, $requestedExpiry) && $this->cache->has($key)) {
                 // Content unchanged — record a deduplicated write metric and return early
                 if ($this->enablePerformanceMonitoring) {
                     $this->recordPerformanceMetric('cache_write_dedup', $key, $startTime);
@@ -378,7 +411,12 @@ class SmartCache implements SmartCacheContract, Repository
         // Persist content hash for future deduplication
         if ($this->deduplicationEnabled && $result) {
             $hashTtl = \is_int($ttl) && $ttl > 0 ? $ttl : 86400;
-            $this->cache->put("_sc_dna:{$key}", $newHash, $hashTtl);
+            // 'e' stays false when the TTL shape could not be resolved, which keeps
+            // canSkipDuplicateWrite() from ever skipping against this record.
+            $this->cache->put("_sc_dna:{$key}", [
+                'h' => $newHash,
+                'e' => $requestedExpiry,
+            ], $hashTtl);
         }
 
         if ($this->enablePerformanceMonitoring) {
@@ -438,7 +476,10 @@ class SmartCache implements SmartCacheContract, Repository
         $value = $this->cache->get($key);
 
         // If value is chunked, clean up all chunk keys
-        if (\is_array($value) && isset($value['_sc_chunked']) && $value['_sc_chunked'] === true) {
+        if (\is_array($value) &&
+            isset($value['_sc_chunked'], $value['chunk_keys']) &&
+            $value['_sc_chunked'] === true &&
+            \is_array($value['chunk_keys'])) {
             foreach ($value['chunk_keys'] as $chunkKey) {
                 $this->cache->forget($chunkKey);
             }
@@ -481,6 +522,10 @@ class SmartCache implements SmartCacheContract, Repository
         if (!empty($this->activeTags)) {
             $this->associateTagsWithKey($key, $this->activeTags);
         }
+
+        // forever() does not maintain a DNA record; a stale one left over from an
+        // earlier put() would let the next put() skip a needed write.
+        $this->invalidateDnaRecord($key);
 
         return $this->cache->forever($key, $optimizedValue);
     }
@@ -657,9 +702,11 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $success = $this->touchOptionalRawKey("_sc_meta:{$namespacedKey}", $ttl);
 
-        if ($this->deduplicationEnabled) {
-            $success = $this->touchOptionalRawKey("_sc_dna:{$namespacedKey}", $ttl) && $success;
-        }
+        // The DNA record stores the absolute expiry the value was written for, and
+        // touch() has just moved that expiry. Re-TTLing the record would leave a
+        // stale expiry behind, so drop it instead: the next put() then writes
+        // through rather than skipping against outdated bookkeeping.
+        $this->invalidateDnaRecord($namespacedKey);
 
         if (!\is_array($rawValue) || !isset($rawValue['_sc_chunked']) || $rawValue['_sc_chunked'] !== true) {
             return $success;
@@ -742,6 +789,7 @@ class SmartCache implements SmartCacheContract, Repository
 
             if ($result) {
                 $this->trackKey($namespacedKey);
+                $this->invalidateDnaRecord($namespacedKey);
 
                 if (!empty($tags)) {
                     $this->associateTagsWithKey($namespacedKey, $tags);
@@ -772,7 +820,13 @@ class SmartCache implements SmartCacheContract, Repository
     public function increment($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
-        return $this->cache->increment($key, $value);
+        $result = $this->cache->increment($key, $value);
+
+        if ($result !== false) {
+            $this->invalidateDnaRecord($key);
+        }
+
+        return $result;
     }
 
     /**
@@ -785,7 +839,13 @@ class SmartCache implements SmartCacheContract, Repository
     public function decrement($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
-        return $this->cache->decrement($key, $value);
+        $result = $this->cache->decrement($key, $value);
+
+        if ($result !== false) {
+            $this->invalidateDnaRecord($key);
+        }
+
+        return $result;
     }
 
     /**
@@ -854,7 +914,9 @@ class SmartCache implements SmartCacheContract, Repository
         $keys = $this->getManagedKeys();
 
         foreach ($keys as $key) {
-            $success = $this->forget($key) && $success;
+            // Managed keys are stored fully qualified, so the active namespace
+            // must not be applied a second time here.
+            $success = $this->forgetStoredKey($key) && $success;
         }
 
         // Clear managed keys tracking
@@ -994,6 +1056,120 @@ class SmartCache implements SmartCacheContract, Repository
     protected function contentHash(mixed $value): string
     {
         return \hash('xxh128', \serialize($value));
+    }
+
+    /**
+     * Drop the deduplication record for a key.
+     *
+     * Any write path that changes a value or its expiry without going through
+     * put() must call this. A stale record makes the next put() compare against
+     * content or an expiry that is no longer in the store — which would skip a
+     * write that is genuinely needed, serving the older value or letting the
+     * entry expire early.
+     *
+     * @param string $namespacedKey
+     * @return void
+     */
+    private function invalidateDnaRecord(string $namespacedKey): void
+    {
+        if ($this->deduplicationEnabled) {
+            $this->cache->forget("_sc_dna:{$namespacedKey}");
+        }
+    }
+
+    /**
+     * Resolve a TTL into the absolute timestamp the caller expects the entry to
+     * survive until.
+     *
+     * @param mixed $ttl
+     * @return int|null|false Timestamp, null for "forever", or false when the
+     *                        TTL shape cannot be resolved (never dedup then).
+     */
+    private function resolveDedupExpiry(mixed $ttl): int|null|false
+    {
+        if ($ttl === null) {
+            return null;
+        }
+
+        if (\is_int($ttl) || \is_float($ttl)) {
+            return $this->currentTimestamp() + (int) $ttl;
+        }
+
+        if ($ttl instanceof \DateInterval) {
+            try {
+                return Carbon::now()->add($ttl)->getTimestamp();
+            } catch (\Throwable $e) {
+                return false;
+            }
+        }
+
+        if ($ttl instanceof \DateTimeInterface) {
+            return $ttl->getTimestamp();
+        }
+
+        if (\is_numeric($ttl)) {
+            return $this->currentTimestamp() + (int) $ttl;
+        }
+
+        return false;
+    }
+
+    /**
+     * Current time, taken from the framework clock so it matches the expiry maths
+     * the underlying store performs (and so Carbon::setTestNow() drives it).
+     */
+    private function currentTimestamp(): int
+    {
+        return Carbon::now()->getTimestamp();
+    }
+
+    /**
+     * Decide whether a write can be skipped because an identical value is already
+     * stored with an expiry that covers the newly requested window.
+     *
+     * Legacy v1 records (a bare hash string) carry no expiry, so they always fall
+     * through to a real write — that both refreshes the TTL and upgrades the
+     * record to the current format.
+     *
+     * @param mixed $stored The persisted `_sc_dna:` record.
+     * @param string $newHash Content hash of the value about to be written.
+     * @param int|null|false $requestedExpiry Result of resolveDedupExpiry().
+     * @return bool
+     */
+    private function canSkipDuplicateWrite(mixed $stored, string $newHash, int|null|false $requestedExpiry): bool
+    {
+        if ($requestedExpiry === false) {
+            return false;
+        }
+
+        // Laravel treats a TTL of zero, a negative TTL, or a past date as a delete.
+        // Any live entry trivially "covers" a past expiry, so without this guard
+        // deduplication would swallow the delete and leave the value in place.
+        if (\is_int($requestedExpiry) && $requestedExpiry <= $this->currentTimestamp()) {
+            return false;
+        }
+
+        if (!\is_array($stored)
+            || !\array_key_exists('h', $stored)
+            || $stored['h'] !== $newHash
+            || !\array_key_exists('e', $stored)) {
+            return false;
+        }
+
+        $storedExpiry = $stored['e'];
+
+        // Stored forever — outlives anything the caller can ask for.
+        if ($storedExpiry === null) {
+            return true;
+        }
+
+        // Caller wants it forever but the stored entry expires, or the stored
+        // expiry is unusable: write through.
+        if ($requestedExpiry === null || !\is_int($storedExpiry)) {
+            return false;
+        }
+
+        return $storedExpiry >= $requestedExpiry;
     }
 
     /**
@@ -1225,7 +1401,14 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function __destruct()
     {
-        $this->persistManagedKeys();
+        // Runs during shutdown, when the store connection may already be gone.
+        // An exception escaping a destructor is fatal and cannot be caught by
+        // the application, so persistence here is strictly best-effort.
+        try {
+            $this->persistManagedKeys();
+        } catch (\Throwable $e) {
+            // Best-effort persist on shutdown.
+        }
 
         if ($this->chunkCleanupService !== null) {
             try {
@@ -1362,7 +1545,10 @@ class SmartCache implements SmartCacheContract, Repository
         $validKeys = [];
 
         foreach ($this->managedKeys as $key => $flag) {
-            if ($this->has($key)) {
+            // Managed keys are already fully qualified. Going through has() would
+            // re-apply the active namespace and mark every live key as expired,
+            // silently destroying the index.
+            if ($this->cache->has($key)) {
                 $validKeys[$key] = true;
             } else {
                 $cleaned++;
@@ -1499,6 +1685,8 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Store data and metadata with consistent meta key format
         $metaKey = "_sc_meta:{$key}";
+        // This writes straight to the store, bypassing put()'s DNA bookkeeping.
+        $this->invalidateDnaRecord($key);
         $this->cache->put($key, $optimizedValue, $totalTtl);
         $this->cache->put($metaKey, ['stored_at' => time(), 'created_at' => time(), 'fresh_ttl' => $freshTtl], $totalTtl);
 
@@ -2411,7 +2599,40 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function putWithJitter(string $key, mixed $value, int $ttl, float $jitterPercentage = 0.1): bool
     {
-        return $this->put($key, $value, $this->applyJitter($ttl, $jitterPercentage));
+        $this->skipNextConfiguredJitter = true;
+
+        try {
+            return $this->put($key, $value, $this->jitterTtl($ttl, $jitterPercentage));
+        } finally {
+            $this->skipNextConfiguredJitter = false;
+        }
+    }
+
+    /**
+     * Compute a jittered TTL for the explicit *WithJitter helpers.
+     *
+     * Calling these methods is itself the opt-in, so the global
+     * `smart-cache.jitter.enabled` flag (off by default) must not suppress it.
+     * applyJitter() keeps its flag-gated behaviour for existing callers.
+     *
+     * @param int $ttl
+     * @param float $jitterPercentage
+     * @return int
+     */
+    private function jitterTtl(int $ttl, float $jitterPercentage): int
+    {
+        if ($ttl <= 0) {
+            return $ttl;
+        }
+
+        $percentage = \max(0.0, \min(1.0, $jitterPercentage));
+        $jitterRange = (int) ($ttl * $percentage);
+
+        if ($jitterRange <= 0) {
+            return $ttl;
+        }
+
+        return \max(1, $ttl + \mt_rand(-$jitterRange, $jitterRange));
     }
 
     /**
@@ -2425,7 +2646,24 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function rememberWithJitter(string $key, int $ttl, float $jitterPercentage, \Closure $callback): mixed
     {
-        return $this->remember($key, $this->applyJitter($ttl, $jitterPercentage), $callback);
+        $callbackWithPreparedTtl = function () use ($callback): mixed {
+            $value = $callback();
+            // Set this only after the user callback returns, so cache writes made
+            // inside that callback retain their normal global jitter behavior.
+            $this->skipNextConfiguredJitter = true;
+
+            return $value;
+        };
+
+        try {
+            return $this->remember(
+                $key,
+                $this->jitterTtl($ttl, $jitterPercentage),
+                $callbackWithPreparedTtl
+            );
+        } finally {
+            $this->skipNextConfiguredJitter = false;
+        }
     }
 
     /**
@@ -2570,7 +2808,8 @@ class SmartCache implements SmartCacheContract, Repository
         if ($force) {
             $missingKeys = [];
             foreach ($managedKeys as $key) {
-                if (!$this->has($key)) {
+                // Managed keys are already namespaced; read the store directly.
+                if (!$this->cache->has($key)) {
                     $missingKeys[] = $key;
                 }
             }
@@ -2713,7 +2952,9 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function loadPerformanceMetrics(): void
     {
-        $this->performanceMetrics = $this->cache->get('_sc_performance_metrics', []);
+        $metrics = $this->cache->get('_sc_performance_metrics', []);
+        // A foreign or corrupted entry under this key must not fatal the request.
+        $this->performanceMetrics = \is_array($metrics) ? $metrics : [];
     }
 
     /**

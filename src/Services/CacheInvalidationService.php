@@ -15,6 +15,42 @@ class CacheInvalidationService
     }
 
     /**
+     * Run a callback with the SmartCache namespace suspended.
+     *
+     * getManagedKeys() returns fully qualified keys, but forget()/has()/getRaw()
+     * apply the active namespace to whatever they are given. Feeding one to the
+     * other double-prefixes the key, so every lookup in this service misses and
+     * invalidation silently becomes a no-op for namespaced callers.
+     *
+     * @template TReturn
+     * @param callable(): TReturn $callback
+     * @return TReturn
+     */
+    private function withoutNamespace(callable $callback): mixed
+    {
+        // getNamespace() is deliberately not on the SmartCache contract, so a
+        // third-party implementation may not expose it. Fall back to the historical
+        // behaviour rather than fataling on it.
+        if (!\is_callable([$this->smartCache, 'getNamespace'])) {
+            return $callback();
+        }
+
+        $saved = $this->smartCache->getNamespace();
+
+        if (!\is_string($saved)) {
+            return $callback();
+        }
+
+        $this->smartCache->withoutNamespace();
+
+        try {
+            return $callback();
+        } finally {
+            $this->smartCache->namespace($saved);
+        }
+    }
+
+    /**
      * Flush cache by multiple patterns with advanced matching.
      *
      * @param array $patterns
@@ -22,21 +58,23 @@ class CacheInvalidationService
      */
     public function flushPatterns(array $patterns): int
     {
-        $invalidated = 0;
-        $managedKeys = $this->smartCache->getManagedKeys();
+        return $this->withoutNamespace(function () use ($patterns): int {
+            $invalidated = 0;
+            $managedKeys = $this->smartCache->getManagedKeys();
 
-        foreach ($patterns as $pattern) {
-            foreach ($managedKeys as $key) {
-                if ($this->matchesAdvancedPattern($key, $pattern)) {
-                    $result = $this->smartCache->forget($key);
-                    if ($result) {
-                        $invalidated++;
+            foreach ($patterns as $pattern) {
+                foreach ($managedKeys as $key) {
+                    if ($this->matchesAdvancedPattern($key, $pattern)) {
+                        $result = $this->smartCache->forget($key);
+                        if ($result) {
+                            $invalidated++;
+                        }
                     }
                 }
             }
-        }
 
-        return $invalidated;
+            return $invalidated;
+        });
     }
 
     /**
@@ -154,7 +192,7 @@ class CacheInvalidationService
 
         // Analyze optimization usage (use getRaw to see optimization markers)
         foreach ($managedKeys as $key) {
-            $value = $this->smartCache->getRaw($key);
+            $value = $this->withoutNamespace(fn () => $this->smartCache->getRaw($key));
             if (\is_array($value)) {
                 if (isset($value['_sc_compressed'])) {
                     $stats['optimization_stats']['compressed']++;
@@ -186,31 +224,47 @@ class CacheInvalidationService
             'total_keys_checked' => 0,
         ];
 
-        $managedKeys = $this->smartCache->getManagedKeys();
-        $results['total_keys_checked'] = count($managedKeys);
+        $results['total_keys_checked'] = count($this->smartCache->getManagedKeys());
 
         // Clean up expired managed keys first
         $results['expired_keys_cleaned'] = $this->smartCache->cleanupExpiredManagedKeys();
 
-        // Check for orphaned chunks (use getRaw to see optimization markers)
-        foreach ($managedKeys as $key) {
-            $value = $this->smartCache->getRaw($key);
-            if (\is_array($value) && isset($value['_sc_chunked'])) {
+        return $this->withoutNamespace(function () use ($results): array {
+            // Re-read after the expiry sweep so the scan below does not walk keys
+            // that were just dropped from the index.
+            $managedKeys = $this->smartCache->getManagedKeys();
+
+            // Check for orphaned chunks (use getRaw to see optimization markers)
+            foreach ($managedKeys as $key) {
+                $value = $this->smartCache->getRaw($key);
+
+                if (!\is_array($value) || !isset($value['_sc_chunked'])) {
+                    continue;
+                }
+
+                // A truncated or legacy wrapper may carry the marker without the
+                // chunk list; treat it as broken rather than iterating null.
+                if (!isset($value['chunk_keys']) || !\is_array($value['chunk_keys'])) {
+                    $this->smartCache->forget($key);
+                    $results['orphaned_chunks_cleaned']++;
+                    continue;
+                }
+
                 $missingChunks = 0;
                 foreach ($value['chunk_keys'] as $chunkKey) {
                     if (!$this->smartCache->has($chunkKey)) {
                         $missingChunks++;
                     }
                 }
-                
+
                 if ($missingChunks > 0) {
                     // Key has missing chunks, remove it
                     $this->smartCache->forget($key);
                     $results['orphaned_chunks_cleaned']++;
                 }
             }
-        }
 
-        return $results;
+            return $results;
+        });
     }
 }

@@ -212,7 +212,16 @@ class CostAwareCacheManager
      */
     public function persist(): void
     {
-        if (!$this->dirty || empty($this->metadata)) {
+        if (!$this->dirty) {
+            return;
+        }
+
+        // An emptied map must still be written through, otherwise forget()ting the
+        // last tracked key leaves the previous entry in cache and the metadata
+        // reappears on the next load.
+        if ($this->metadata === []) {
+            $this->cache->forget('_sc_cost_metadata');
+            $this->dirty = false;
             return;
         }
 
@@ -229,7 +238,9 @@ class CostAwareCacheManager
             return;
         }
 
-        $this->metadata = $this->cache->get('_sc_cost_metadata', []);
+        $metadata = $this->cache->get('_sc_cost_metadata', []);
+        // A foreign or corrupted entry under this key must not fatal the request.
+        $this->metadata = \is_array($metadata) ? $metadata : [];
         $this->loaded = true;
     }
 
@@ -266,6 +277,13 @@ class CostAwareCacheManager
      */
     public function __destruct()
     {
-        $this->persist();
+        // Runs during shutdown, when the cache connection may already be torn down.
+        // An exception escaping a destructor is fatal and turns a successfully
+        // served request into a 500, so persistence here is best-effort.
+        try {
+            $this->persist();
+        } catch (\Throwable $e) {
+            // Best-effort persist on shutdown.
+        }
     }
 }

@@ -4,12 +4,15 @@ namespace SmartCache\Console\Commands;
 
 use Illuminate\Console\Command;
 use SmartCache\Contracts\SmartCache;
+use SmartCache\Console\Concerns\EnumeratesCacheKeys;
 
 /**
  * Clear SmartCache managed items.
  */
 class ClearCommand extends Command
 {
+    use EnumeratesCacheKeys;
+
     protected $signature = 'smart-cache:clear {key? : The specific cache key to clear} {--force : Force clear keys even if not managed by SmartCache}';
     protected $description = 'Clear SmartCache managed items. Optionally specify a key to clear only that item.';
 
@@ -139,45 +142,5 @@ class ClearCommand extends Command
             $this->warn('Could not scan for non-managed keys with this cache driver. Only managed keys were cleared.');
             return self::SUCCESS;
         }
-    }
-
-    protected function getAllCacheKeys(object $store): array
-    {
-        $storeClass = \get_class($store);
-
-        if (\str_contains($storeClass, 'Redis')) {
-            return $store->connection()->keys('*');
-        }
-
-        if (\str_contains($storeClass, 'ArrayStore')) {
-            return $this->getArrayStoreKeys($store);
-        }
-
-        throw new \Exception('Cannot enumerate keys for this cache driver');
-    }
-
-    protected function getArrayStoreKeys(object $store): array
-    {
-        if (\method_exists($store, 'all')) {
-            return \array_keys($store->all(false));
-        }
-
-        try {
-            $reflection = new \ReflectionClass($store);
-            $storageProperty = $reflection->getProperty('storage');
-            $storage = $storageProperty->getValue($store);
-
-            return \array_keys($storage ?? []);
-        } catch (\ReflectionException) {
-            return [];
-        }
-    }
-
-    protected function isSmartCacheInternalKey(string $key): bool
-    {
-        return \str_contains($key, '_sc_') ||
-               \str_contains($key, '_sc_meta') ||
-               \str_contains($key, '_sc_chunk_') ||
-               $key === '_sc_managed_keys';
     }
 }

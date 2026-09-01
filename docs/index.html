@@ -1964,12 +1964,17 @@ SmartCache::withoutNamespace()->put('global_key', $value, 3600);</code></pre>
 SmartCache::withJitter(0.15)->put('key', $value, 3600);
 // TTL will be 3060-3540 seconds (±15%)
 
-// Use jitter-specific methods
+// Use jitter-specific methods — calling these is the opt-in, so they apply
+// jitter whether or not 'jitter.enabled' is set in config
 SmartCache::putWithJitter('key', $value, 3600, 0.2);
-SmartCache::rememberWithJitter('key', 3600, fn() => $value, 0.1);</code></pre>
+SmartCache::rememberWithJitter('key', 3600, 0.1, fn() => $value);</code></pre>
 
                     <div class="alert alert-info">
                         <strong>Why Jitter?</strong> When many cache entries expire at the same time, they all try to regenerate simultaneously (thundering herd). Jitter spreads out expirations to prevent this.
+                    </div>
+
+                    <div class="alert alert-warning">
+                        <strong>Scope.</strong> The global <code>jitter.enabled</code> flag and the fluent <code>withJitter()</code> modifier govern ordinary <code>put()</code> calls. <code>putWithJitter()</code> and <code>rememberWithJitter()</code> take an explicit percentage and always apply it, since the call itself is the opt-in.
                     </div>
 
                     <h2>🔌 Circuit Breaker</h2>
@@ -2086,12 +2091,17 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();
 ],
 
 // Access dashboard at:
-// GET /smart-cache/dashboard
+// GET /smart-cache
 
 // JSON API endpoints:
 // GET /smart-cache/statistics - Performance metrics
-// GET /smart-cache/health    - Health check
-// GET /smart-cache/keys      - Managed keys list</code></pre>
+// GET /smart-cache/health     - Health check
+// GET /smart-cache/keys       - Managed keys list
+// GET /smart-cache/commands   - Available commands</code></pre>
+
+                    <div class="alert alert-warning">
+                        <strong>Protect these routes.</strong> The shipped default is <code>['web']</code>, which provides session and CSRF handling but <strong>no authentication</strong>. These endpoints expose your managed cache key list, optimization statistics, and internal metrics — and cache keys routinely embed user, tenant, or record identifiers. Add an authentication and authorization middleware (<code>['web', 'auth']</code>, <code>['web', 'auth', 'can:viewSmartCache']</code>, or your own gate) before enabling the dashboard outside local development. The dashboard is disabled by default, and every endpoint re-checks <code>dashboard.enabled</code> at request time so a stale <code>route:cache</code> cannot keep it reachable after you switch it off.
+                    </div>
 
                     <h2>🔄 Background Refresh</h2>
                     <p>Queue-based background cache refresh:</p>
@@ -2145,19 +2155,27 @@ $evictable = SmartCache::suggestEvictions(5);
                     </div>
 
                     <h2>🧬 Write Deduplication (Cache DNA)</h2>
-                    <p>SmartCache hashes every value before writing. When the stored content is identical to what is already cached, the write is skipped entirely — eliminating redundant I/O for frequently refreshed but rarely changing data such as configuration, feature flags, and rate-limit counters.</p>
+                    <p>SmartCache hashes every value before writing. When the content is unchanged <em>and</em> the entry already in the store outlives the TTL being requested, the value rewrite is skipped — eliminating redundant I/O for frequently refreshed but rarely changing data such as configuration, feature flags, and rate-limit counters.</p>
 
-                    <pre><code class="language-php">// Frequent cron refreshes? Only the first write hits the store.
+                    <pre><code class="language-php">// Frequent refreshes with unchanged content
 SmartCache::put('app_config', Config::all(), 3600);
 
-// Second call with the same data skips the value rewrite; metadata may refresh
-SmartCache::put('app_config', Config::all(), 3600);
+// Same content, and the stored entry already covers this window → rewrite skipped
+SmartCache::put('app_config', Config::all(), 60);
+
+// Same content, but this asks the entry to live longer than it currently will
+// → written, so the requested TTL is honoured
+SmartCache::put('app_config', Config::all(), 7200);
 
 // When data actually changes, the write proceeds normally
 SmartCache::put('app_config', $updatedConfig, 3600); // written</code></pre>
 
                     <div class="alert alert-info">
-                        <strong>How it works:</strong> A non-cryptographic <code>xxh128</code> hash of the serialized value is stored alongside each entry as <code>_sc_dna:{key}</code>. On subsequent writes, SmartCache compares the hash — if identical, the value rewrite is skipped. The DNA metadata may still be refreshed, shares the data TTL, and is cleaned up on <code>forget()</code>.
+                        <strong>How it works:</strong> A non-cryptographic <code>xxh128</code> hash of the serialized value is stored alongside each entry as <code>_sc_dna:{key}</code>, together with the absolute expiry that write was made for. On subsequent writes SmartCache compares the hash and the expiry; the value rewrite is skipped only when the content matches <em>and</em> the stored entry already outlives the newly requested window. The record shares the data TTL and is cleaned up on <code>forget()</code>.
+                    </div>
+
+                    <div class="alert alert-warning">
+                        <strong>Deduplication never shortens a lifetime.</strong> A write that would push the expiry further out is always performed, so <code>put()</code> keeps its TTL semantics. Skipping such a write would make the entry disappear earlier than the caller asked for.
                     </div>
 
                     <pre><code class="language-php">// Enable/disable in config/smart-cache.php
@@ -3412,7 +3430,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 486 tests, 1,976 assertions
+# 531 tests, 2,078 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

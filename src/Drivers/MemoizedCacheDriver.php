@@ -81,6 +81,59 @@ class MemoizedCacheDriver implements Repository
     }
 
     /**
+     * Sentinel used to tell "not in the underlying store" apart from a stored
+     * value that happens to equal the caller's default.
+     */
+    private static function sentinel(): object
+    {
+        static $sentinel = null;
+
+        if ($sentinel === null) {
+            $sentinel = new \stdClass();
+        }
+
+        return $sentinel;
+    }
+
+    /**
+     * Drop every trace of a key from the memoization state.
+     *
+     * accessOrder must be cleared alongside the value maps; leaving entries behind
+     * leaks memory in long-running workers (the map is never bounded by
+     * evictIfNeeded(), which only measures $memoized) and makes eviction walk
+     * stale keys.
+     *
+     * @param string $key
+     * @return void
+     */
+    private function forgetMemoized(string $key): void
+    {
+        unset($this->memoized[$key], $this->memoizedMissing[$key], $this->accessOrder[$key]);
+    }
+
+    /**
+     * Bound the negative-lookup map.
+     *
+     * evictIfNeeded() only counts $memoized, so a workload of repeated misses
+     * (per-entity lookups in a queue worker) would otherwise grow this map without
+     * limit for the life of the process.
+     *
+     * @return void
+     */
+    private function evictMissingIfNeeded(): void
+    {
+        while (count($this->memoizedMissing) > $this->maxSize) {
+            $oldest = array_key_first($this->memoizedMissing);
+
+            if ($oldest === null) {
+                break;
+            }
+
+            unset($this->memoizedMissing[$oldest]);
+        }
+    }
+
+    /**
      * Evict least recently used items if over capacity.
      * Sorts by counter value and removes the lowest (oldest) entries.
      *
@@ -145,17 +198,23 @@ class MemoizedCacheDriver implements Repository
             return value($default);
         }
 
-        // Get from underlying cache
-        $value = $this->repository->get($key, $default);
+        // Read through a sentinel rather than the caller's default: comparing the
+        // stored value against $default would record a genuine hit as a miss
+        // whenever they coincide (e.g. get('flag', false) on a stored false),
+        // poisoning has()/get() for the rest of the request.
+        $sentinel = self::sentinel();
+        $value = $this->repository->get($key, $sentinel);
 
-        // Memoize the result
-        if ($value !== $default) {
-            $this->memoized[$key] = $value;
-            $this->touchKey($key);
-            $this->evictIfNeeded();
-        } else {
+        if ($value === $sentinel) {
             $this->memoizedMissing[$key] = true;
+            $this->evictMissingIfNeeded();
+
+            return value($default);
         }
+
+        $this->memoized[$key] = $value;
+        $this->touchKey($key);
+        $this->evictIfNeeded();
 
         return $value;
     }
@@ -202,7 +261,7 @@ class MemoizedCacheDriver implements Repository
     public function put($key, $value, $ttl = null): bool
     {
         // Clear memoization for this key
-        unset($this->memoized[$key], $this->memoizedMissing[$key]);
+        $this->forgetMemoized($key);
 
         return $this->repository->put($key, $value, $ttl);
     }
@@ -217,7 +276,7 @@ class MemoizedCacheDriver implements Repository
     public function putMany(array $values, $ttl = null): bool
     {
         foreach (array_keys($values) as $key) {
-            unset($this->memoized[$key], $this->memoizedMissing[$key]);
+            $this->forgetMemoized($key);
         }
 
         return $this->repository->putMany($values, $ttl);
@@ -236,7 +295,7 @@ class MemoizedCacheDriver implements Repository
         $result = $this->repository->add($key, $value, $ttl);
 
         if ($result) {
-            unset($this->memoized[$key], $this->memoizedMissing[$key]);
+            $this->forgetMemoized($key);
         }
 
         return $result;
@@ -251,7 +310,7 @@ class MemoizedCacheDriver implements Repository
      */
     public function increment($key, $value = 1): int|bool
     {
-        unset($this->memoized[$key], $this->memoizedMissing[$key]);
+        $this->forgetMemoized($key);
         return $this->repository->increment($key, $value);
     }
 
@@ -264,7 +323,7 @@ class MemoizedCacheDriver implements Repository
      */
     public function decrement($key, $value = 1): int|bool
     {
-        unset($this->memoized[$key], $this->memoizedMissing[$key]);
+        $this->forgetMemoized($key);
         return $this->repository->decrement($key, $value);
     }
 
@@ -277,7 +336,7 @@ class MemoizedCacheDriver implements Repository
      */
     public function forever($key, $value): bool
     {
-        unset($this->memoized[$key], $this->memoizedMissing[$key]);
+        $this->forgetMemoized($key);
         return $this->repository->forever($key, $value);
     }
 
@@ -525,4 +584,3 @@ class MemoizedCacheDriver implements Repository
         return true;
     }
 }
-

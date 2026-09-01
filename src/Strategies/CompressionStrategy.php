@@ -119,13 +119,18 @@ class CompressionStrategy implements OptimizationStrategy
             return $decompressed;
         }
 
-        $previous = \set_error_handler(static function (): bool {
+        // set_error_handler() pushes onto a stack; passing the previous handler back
+        // to it pushes a second frame instead of popping ours. Left unbalanced, the
+        // stack grows on every restore() and the application's own
+        // restore_error_handler() pops the wrong frame — leaving this
+        // error-swallowing closure active and silently discarding app warnings.
+        \set_error_handler(static function (): bool {
             return true;
         });
         try {
             $restored = \unserialize($decompressed);
         } finally {
-            \set_error_handler($previous);
+            \restore_error_handler();
         }
 
         if ($restored === false && $decompressed !== \serialize(false)) {

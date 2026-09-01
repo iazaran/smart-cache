@@ -220,9 +220,36 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         
         foreach ($this->chunkKeys as $chunkKey) {
             $chunk = $this->cache->get($chunkKey, []);
-            $result = array_merge($result, $chunk);
+
+            if (!\is_array($chunk)) {
+                continue;
+            }
+
+            // Chunks preserve the original keys (ChunkingStrategy has always used
+            // array_chunk(..., preserve_keys: true)). array_merge would renumber the
+            // integer ones, so sparse int keys came back renumbered here while the
+            // eager path returned them intact.
+            //
+            // Keys are appended rather than overwritten when they collide, so a
+            // collection assembled by hand from chunk-relative (0-based) chunks
+            // still yields every item instead of keeping only the last chunk.
+            foreach ($chunk as $itemKey => $itemValue) {
+                // Preserve array_merge()'s established behavior for string-key
+                // collisions: the later chunk replaces the earlier value.
+                if (\is_string($itemKey)) {
+                    $result[$itemKey] = $itemValue;
+                    continue;
+                }
+
+                if (\array_key_exists($itemKey, $result)) {
+                    $result[] = $itemValue;
+                    continue;
+                }
+
+                $result[$itemKey] = $itemValue;
+            }
         }
-        
+
         return $result;
     }
 
@@ -329,9 +356,15 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         
         // Load the chunk
         if (isset($this->chunkKeys[$chunkIndex])) {
-            $this->currentChunk = $this->cache->get($this->chunkKeys[$chunkIndex], []);
+            $chunk = $this->cache->get($this->chunkKeys[$chunkIndex], []);
+
+            // ChunkingStrategy chunks with preserve_keys, so chunk N is keyed by
+            // the original offsets N*size … (N+1)*size-1 (or by the original string
+            // keys). Access here is purely positional — key() yields the ordinal
+            // position — so index the chunk by position, not by original key.
+            $this->currentChunk = \is_array($chunk) ? \array_values($chunk) : [];
             $this->currentChunkIndex = $chunkIndex;
-            
+
             // Cache the loaded chunk
             $this->loadedChunks[$chunkIndex] = $this->currentChunk;
             
@@ -363,4 +396,3 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         ];
     }
 }
-

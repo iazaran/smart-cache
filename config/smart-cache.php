@@ -341,11 +341,18 @@ return [
     |
     | Configure the web dashboard for viewing cache statistics.
     |
+    | SECURITY: the default middleware is ['web'], which gives you session and
+    | CSRF handling but NO authentication. These routes expose the managed cache
+    | key list, optimization statistics, and internal metrics, and cache keys
+    | commonly embed user, tenant, or record identifiers. Before enabling the
+    | dashboard outside local development, add authentication and authorization
+    | middleware, e.g. ['web', 'auth'] or ['web', 'auth', 'can:viewSmartCache'].
+    |
     */
     'dashboard' => [
         'enabled' => false, // Disabled by default for security
         'prefix' => 'smart-cache', // URL prefix for dashboard routes
-        'middleware' => ['web'], // Middleware to apply to dashboard routes
+        'middleware' => ['web'], // Add 'auth' (and a gate) before exposing this
     ],
 
     /*

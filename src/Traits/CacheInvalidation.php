@@ -242,8 +242,14 @@ trait CacheInvalidation
      */
     protected function matchesPattern(string $key, string $pattern): bool
     {
-        // Convert simple wildcard pattern to regex
-        $regexPattern = str_replace(['*', '?'], ['.*', '.'], preg_quote($pattern, '/'));
+        // Convert simple wildcard pattern to regex. preg_quote() has already escaped
+        // the wildcards, so the escaped forms are what must be replaced — matching on
+        // the bare '*' rewrites the backslash pair into '\.', turning 'user_*' into
+        // '/^user_\.*$/' (a literal dot, repeated), which matches nothing.
+        // Mirrors CacheInvalidationService::matchesPattern().
+        $regexPattern = preg_quote($pattern, '/');
+        $regexPattern = str_replace(['\*', '\?'], ['.*', '.'], $regexPattern);
+
         return (bool) preg_match("/^{$regexPattern}$/", $key);
     }
 
