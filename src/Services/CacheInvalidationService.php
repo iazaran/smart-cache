@@ -26,18 +26,18 @@ class CacheInvalidationService
      * @param callable(): TReturn $callback
      * @return TReturn
      */
-    protected function withoutNamespace(callable $callback): mixed
+    private function withoutNamespace(callable $callback): mixed
     {
         // getNamespace() is deliberately not on the SmartCache contract, so a
         // third-party implementation may not expose it. Fall back to the historical
         // behaviour rather than fataling on it.
-        if (!\method_exists($this->smartCache, 'getNamespace')) {
+        if (!\is_callable([$this->smartCache, 'getNamespace'])) {
             return $callback();
         }
 
         $saved = $this->smartCache->getNamespace();
 
-        if ($saved === null) {
+        if (!\is_string($saved)) {
             return $callback();
         }
 

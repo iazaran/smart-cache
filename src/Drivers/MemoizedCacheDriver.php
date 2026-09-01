@@ -84,7 +84,7 @@ class MemoizedCacheDriver implements Repository
      * Sentinel used to tell "not in the underlying store" apart from a stored
      * value that happens to equal the caller's default.
      */
-    protected static function sentinel(): object
+    private static function sentinel(): object
     {
         static $sentinel = null;
 
@@ -106,7 +106,7 @@ class MemoizedCacheDriver implements Repository
      * @param string $key
      * @return void
      */
-    protected function forgetMemoized(string $key): void
+    private function forgetMemoized(string $key): void
     {
         unset($this->memoized[$key], $this->memoizedMissing[$key], $this->accessOrder[$key]);
     }
@@ -120,7 +120,7 @@ class MemoizedCacheDriver implements Repository
      *
      * @return void
      */
-    protected function evictMissingIfNeeded(): void
+    private function evictMissingIfNeeded(): void
     {
         while (count($this->memoizedMissing) > $this->maxSize) {
             $oldest = array_key_first($this->memoizedMissing);
@@ -202,7 +202,7 @@ class MemoizedCacheDriver implements Repository
         // stored value against $default would record a genuine hit as a miss
         // whenever they coincide (e.g. get('flag', false) on a stored false),
         // poisoning has()/get() for the rest of the request.
-        $sentinel = static::sentinel();
+        $sentinel = self::sentinel();
         $value = $this->repository->get($key, $sentinel);
 
         if ($value === $sentinel) {
@@ -584,4 +584,3 @@ class MemoizedCacheDriver implements Repository
         return true;
     }
 }
-

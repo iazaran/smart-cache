@@ -201,7 +201,7 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * @var bool Whether the next put() receives an explicitly jittered TTL
      */
-    protected bool $skipNextConfiguredJitter = false;
+    private bool $skipNextConfiguredJitter = false;
 
     /**
      * @var CostAwareCacheManager|null Cost-aware cache manager for value scoring
@@ -362,7 +362,7 @@ class SmartCache implements SmartCacheContract, Repository
      * @param bool $applyConfiguredJitter
      * @return bool
      */
-    protected function putValue($key, $value, $ttl, bool $applyConfiguredJitter): bool
+    private function putValue($key, $value, $ttl, bool $applyConfiguredJitter): bool
     {
         $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
@@ -1070,7 +1070,7 @@ class SmartCache implements SmartCacheContract, Repository
      * @param string $namespacedKey
      * @return void
      */
-    protected function invalidateDnaRecord(string $namespacedKey): void
+    private function invalidateDnaRecord(string $namespacedKey): void
     {
         if ($this->deduplicationEnabled) {
             $this->cache->forget("_sc_dna:{$namespacedKey}");
@@ -1085,7 +1085,7 @@ class SmartCache implements SmartCacheContract, Repository
      * @return int|null|false Timestamp, null for "forever", or false when the
      *                        TTL shape cannot be resolved (never dedup then).
      */
-    protected function resolveDedupExpiry(mixed $ttl): int|null|false
+    private function resolveDedupExpiry(mixed $ttl): int|null|false
     {
         if ($ttl === null) {
             return null;
@@ -1118,7 +1118,7 @@ class SmartCache implements SmartCacheContract, Repository
      * Current time, taken from the framework clock so it matches the expiry maths
      * the underlying store performs (and so Carbon::setTestNow() drives it).
      */
-    protected function currentTimestamp(): int
+    private function currentTimestamp(): int
     {
         return Carbon::now()->getTimestamp();
     }
@@ -1136,7 +1136,7 @@ class SmartCache implements SmartCacheContract, Repository
      * @param int|null|false $requestedExpiry Result of resolveDedupExpiry().
      * @return bool
      */
-    protected function canSkipDuplicateWrite(mixed $stored, string $newHash, int|null|false $requestedExpiry): bool
+    private function canSkipDuplicateWrite(mixed $stored, string $newHash, int|null|false $requestedExpiry): bool
     {
         if ($requestedExpiry === false) {
             return false;
@@ -2619,7 +2619,7 @@ class SmartCache implements SmartCacheContract, Repository
      * @param float $jitterPercentage
      * @return int
      */
-    protected function jitterTtl(int $ttl, float $jitterPercentage): int
+    private function jitterTtl(int $ttl, float $jitterPercentage): int
     {
         if ($ttl <= 0) {
             return $ttl;

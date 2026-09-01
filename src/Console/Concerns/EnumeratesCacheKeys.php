@@ -46,7 +46,7 @@ trait EnumeratesCacheKeys
      * @param object $connection
      * @return array
      */
-    protected function scanRedisKeys(object $connection): array
+    private function scanRedisKeys(object $connection): array
     {
         if ($this->isRedisClusterConnection($connection)) {
             return $this->scanRedisClusterKeys($connection);
@@ -61,7 +61,7 @@ trait EnumeratesCacheKeys
      * @param object $connection
      * @return bool
      */
-    protected function isRedisClusterConnection(object $connection): bool
+    private function isRedisClusterConnection(object $connection): bool
     {
         if (\method_exists($connection, 'isCluster')) {
             return (bool) $connection->isCluster();
@@ -76,7 +76,7 @@ trait EnumeratesCacheKeys
      * @param object $connection
      * @return array
      */
-    protected function scanRedisClusterKeys(object $connection): array
+    private function scanRedisClusterKeys(object $connection): array
     {
         if (!\method_exists($connection, 'client')) {
             throw new \RuntimeException('Cannot safely enumerate this Redis cluster connection');
@@ -86,7 +86,8 @@ trait EnumeratesCacheKeys
             $client = $connection->client();
             $keys = [];
 
-            // PhpRedisClusterConnection accepts a master node in the SCAN options.
+            // Scan the PhpRedis client directly so this also works on Laravel 8,
+            // whose cluster connection inherited a non-node-aware scan() wrapper.
             if (\is_object($client) && \method_exists($client, '_masters')) {
                 $masters = $client->_masters();
 
@@ -155,7 +156,7 @@ trait EnumeratesCacheKeys
      * @param array $options
      * @return array
      */
-    protected function scanRedisConnection(object $connection, array $options = []): array
+    private function scanRedisConnection(object $connection, array $options = []): array
     {
         if (!\method_exists($connection, 'scan') && !\method_exists($connection, '__call')) {
             throw new \RuntimeException('Redis connection does not support SCAN');
@@ -177,7 +178,7 @@ trait EnumeratesCacheKeys
      * @param \Closure $scanner
      * @return array
      */
-    protected function scanRedisUsing(\Closure $scanner): array
+    private function scanRedisUsing(\Closure $scanner): array
     {
         $keys = [];
         $cursor = 0;

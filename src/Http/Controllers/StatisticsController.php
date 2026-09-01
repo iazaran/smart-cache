@@ -23,7 +23,7 @@ class StatisticsController extends Controller
      *
      * @return void
      */
-    protected function ensureDashboardEnabled(): void
+    private function ensureDashboardEnabled(): void
     {
         if (!config('smart-cache.dashboard.enabled', false)) {
             abort(404);
@@ -208,4 +208,3 @@ class StatisticsController extends Controller
 HTML;
     }
 }
-

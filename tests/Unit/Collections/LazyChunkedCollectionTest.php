@@ -109,6 +109,25 @@ class LazyChunkedCollectionTest extends TestCase
         $this->assertSame([5 => 'a', 99 => 'b', 250 => 'c'], $collection->toArray());
     }
 
+    public function test_lazy_collection_to_array_keeps_string_key_collision_behavior()
+    {
+        $cache = $this->app['cache']->store();
+
+        $cache->put('strings_0', ['name' => 'first'], 60);
+        $cache->put('strings_1', ['name' => 'second'], 60);
+
+        $collection = new LazyChunkedCollection(
+            $cache,
+            ['strings_0', 'strings_1'],
+            1,
+            2
+        );
+
+        // toArray() historically used array_merge(), where a later string key
+        // replaces the earlier value. Preserve that behavior for existing users.
+        $this->assertSame(['name' => 'second'], $collection->toArray());
+    }
+
     public function test_lazy_collection_slice()
     {
         $cache = $this->app['cache']->store();
@@ -303,4 +322,3 @@ class LazyChunkedCollectionTest extends TestCase
         $this->assertLessThanOrEqual(3, $stats['loaded_chunks']);
     }
 }
-

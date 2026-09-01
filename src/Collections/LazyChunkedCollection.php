@@ -234,6 +234,13 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
             // collection assembled by hand from chunk-relative (0-based) chunks
             // still yields every item instead of keeping only the last chunk.
             foreach ($chunk as $itemKey => $itemValue) {
+                // Preserve array_merge()'s established behavior for string-key
+                // collisions: the later chunk replaces the earlier value.
+                if (\is_string($itemKey)) {
+                    $result[$itemKey] = $itemValue;
+                    continue;
+                }
+
                 if (\array_key_exists($itemKey, $result)) {
                     $result[] = $itemValue;
                     continue;
@@ -389,4 +396,3 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         ];
     }
 }
-

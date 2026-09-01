@@ -12,7 +12,11 @@ use SmartCache\Contracts\SmartCache;
  */
 class AuditCommand extends Command
 {
-    use EnumeratesCacheKeys;
+    use EnumeratesCacheKeys {
+        // These helpers were not part of AuditCommand's previous subclass API.
+        getArrayStoreKeys as private;
+        isSmartCacheInternalKey as private;
+    }
 
     protected $signature = 'smart-cache:audit
                             {--format=table : Output format: table or json}

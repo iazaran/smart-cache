@@ -5,7 +5,7 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.13.3] - 2026-08-31
+## [1.14.0] - 2026-09-01
 
 ### Security
 - The dashboard's circuit-breaker state is now HTML-escaped before being rendered, and the CSS class derived from it is restricted to a safe character set. With `circuit_breaker.shared` enabled the state is read from the application cache, so any process able to write that entry could previously inject markup into the dashboard page.
@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (internal)
 - `ClearCommand`, `StatusCommand`, and `AuditCommand` now share a `SmartCache\Console\Concerns\EnumeratesCacheKeys` trait instead of carrying separate key-enumeration helpers. No command signature or output changed.
+- New implementation-only helpers are private rather than extending the subclass API, avoiding method or property collisions in applications that already extend SmartCache internals. Existing public and protected signatures are unchanged.
 
 ### Documentation
 - Corrected the documented dashboard URL: the dashboard is served at `GET /smart-cache` (the route is registered at `/` under the configured prefix), not `GET /smart-cache/dashboard`. Also documented the `/commands` endpoint.
@@ -283,6 +284,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.14.0]: https://github.com/iazaran/smart-cache/compare/1.13.2...1.14.0
 [1.13.2]: https://github.com/iazaran/smart-cache/compare/1.13.1...1.13.2
 [1.13.1]: https://github.com/iazaran/smart-cache/compare/1.13.0...1.13.1
 [1.13.0]: https://github.com/iazaran/smart-cache/compare/1.12.2...1.13.0

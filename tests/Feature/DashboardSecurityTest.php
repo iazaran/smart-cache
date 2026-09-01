@@ -51,7 +51,6 @@ class DashboardSecurityTest extends TestCase
         $controller = new StatisticsController();
 
         $render = new \ReflectionMethod($controller, 'renderDashboard');
-        $render->setAccessible(true);
 
         $html = $render->invoke($controller, [
             'managed_keys' => [],
@@ -73,7 +72,6 @@ class DashboardSecurityTest extends TestCase
         $controller = new StatisticsController();
 
         $render = new \ReflectionMethod($controller, 'renderDashboard');
-        $render->setAccessible(true);
 
         // getPerformanceMetrics() nests this under cache_efficiency.hit_ratio;
         // the card previously read a top-level 'hit_rate' that never exists and
@@ -95,7 +93,6 @@ class DashboardSecurityTest extends TestCase
         $controller = new StatisticsController();
 
         $render = new \ReflectionMethod($controller, 'renderDashboard');
-        $render->setAccessible(true);
 
         $html = $render->invoke($controller, [
             'managed_keys' => [],
@@ -113,7 +110,6 @@ class DashboardSecurityTest extends TestCase
         $controller = new StatisticsController();
 
         $render = new \ReflectionMethod($controller, 'renderDashboard');
-        $render->setAccessible(true);
 
         $html = $render->invoke($controller, [
             'managed_keys' => [],

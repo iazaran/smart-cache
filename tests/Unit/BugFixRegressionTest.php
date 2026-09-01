@@ -94,7 +94,6 @@ class BugFixRegressionTest extends TestCase
 
         $store = $this->app['cache']->store('array')->getStore();
         $storage = new \ReflectionProperty(get_class($store), 'storage');
-        $storage->setAccessible(true);
 
         $cache->put('heartbeat', 'alive', 3600);
         $first = $storage->getValue($store)['heartbeat']['expiresAt'];
@@ -173,7 +172,6 @@ class BugFixRegressionTest extends TestCase
         $cache = $this->makeCache(['smart-cache.deduplication.enabled' => true]);
         $store = $this->app['cache']->store('array')->getStore();
         $storage = new \ReflectionProperty(get_class($store), 'storage');
-        $storage->setAccessible(true);
 
         $cache->put('t', 'v', 3600);
         $cache->touch('t', 30);        // expiry moved; the recorded expiry is now stale
@@ -210,6 +208,33 @@ class BugFixRegressionTest extends TestCase
         $this->assertSame(2, $cache->get('counter'));
     }
 
+    public function test_new_internal_helpers_do_not_expand_the_subclass_contract(): void
+    {
+        $cache = new class(
+            $this->app['cache']->store('array'),
+            $this->app['cache'],
+            $this->app['config'],
+            []
+        ) extends SmartCache {
+            // Existing downstream subclasses may already use generic helper
+            // names. Private implementation details in the parent must not
+            // impose signature or property compatibility on them.
+            protected string $skipNextConfiguredJitter = 'downstream';
+
+            protected function putValue(): string
+            {
+                return 'downstream';
+            }
+
+            protected function currentTimestamp(): string
+            {
+                return 'downstream';
+            }
+        };
+
+        $this->assertTrue($cache->put('subclass-safe', 'value', 60));
+    }
+
     // -----------------------------------------------------------------
     // TTL jitter
     // -----------------------------------------------------------------
@@ -223,7 +248,6 @@ class BugFixRegressionTest extends TestCase
 
         $store = $this->app['cache']->store('array')->getStore();
         $storage = new \ReflectionProperty(get_class($store), 'storage');
-        $storage->setAccessible(true);
 
         $expiries = [];
         for ($i = 0; $i < 25; $i++) {
@@ -367,7 +391,6 @@ class BugFixRegressionTest extends TestCase
         }
 
         $order = new \ReflectionProperty(MemoizedCacheDriver::class, 'accessOrder');
-        $order->setAccessible(true);
 
         // accessOrder was never cleared on write, so it grew unbounded in
         // long-running workers.
@@ -383,7 +406,6 @@ class BugFixRegressionTest extends TestCase
         }
 
         $missing = new \ReflectionProperty(MemoizedCacheDriver::class, 'memoizedMissing');
-        $missing->setAccessible(true);
 
         $this->assertLessThanOrEqual(10, count($missing->getValue($memo)));
     }
