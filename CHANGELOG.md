@@ -5,6 +5,44 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-10-05
+
+### Added
+- `SmartCache::rememberWithLock($key, $ttl, $callback, $lockSeconds = 10, $waitSeconds = 10)` — single-flight regeneration for cold or freshly invalidated keys. On a cache miss the callback runs under an atomic lock, so one process rebuilds the value while concurrent requests wait and then read it, instead of every request hitting the database or upstream API at once. Waiting requests re-check the cache every 100 ms and return as soon as the value is stored. Cache hits never touch the lock. When the store does not implement `LockProvider`, the lock backend is unavailable, or the wait times out, the callback runs without the lock, so the method never fails where `remember()` would succeed. The method is added to the concrete class and facade only; the `SmartCache` contract is unchanged.
+- The `OptimizationApplied` event is now dispatched when a compression, chunking, encryption, or serialization strategy is applied. It was documented and configurable (`events.dispatch.optimization_applied`) but never fired. Events stay disabled by default (`events.enabled = false`), and the two sizes are only measured when a listener for the event is registered.
+
+### Security
+- Values matched by the encryption strategy are now always encrypted. Only one strategy is applied per value and encryption was registered after chunking and compression, so a matching value large enough to be chunked or compressed was stored as plain chunks or plain gzip, readable without the application key. Encryption is now tried first.
+- Encryption `keys` and `patterns` now match keys written under a namespace. The strategy compared them against the namespaced key (`tenant:user_token_1`), so `namespace()` silently disabled encryption for every configured key.
+- `asyncSwr()` / `refreshAsync()` no longer write a tenant's refreshed value to the global key. The queued job received the key without its namespace and the queue worker has none, so `namespace('tenant')->asyncSwr('feed', ...)` refreshed `feed` instead of `tenant:feed`. The job now carries the namespace and restores the caller's namespace afterwards, including on the sync queue.
+- `memo()` now keeps the active namespace (and the jitter, circuit-breaker, and cost-aware settings), matching `store()`. `namespace('tenant')->memo()->get('key')` previously read the global `key`.
+
+### Fixed
+- Redis key enumeration for `smart-cache:clear --force`, `smart-cache:status --force`, and `smart-cache:audit` returned no keys on phpredis, a regression in 1.14.0. phpredis treats an integer `0` cursor as "iteration finished", so the scan stopped before it started. The scan now starts from the same cursor Laravel's own `RedisStore` uses (`null` on phpredis 6.1+, `'0'` otherwise).
+- Arrays with only a few top-level keys are compressed once they pass the compression threshold. `CompressionStrategy` estimated an array's size as 50 bytes per top-level item, so a typical API payload such as `['data' => $rows, 'meta' => $meta]`, or a model's `toArray()` with a large relation, was never compressed however large it was, while long lists of tiny scalars below the threshold were. Arrays with up to 50 top-level items are now measured exactly; longer lists are estimated from the serialized size of a few sample items, as `ChunkingStrategy` has done since 1.11.0. A value that cannot be serialized is no longer compressed instead of throwing from the size check.
+- A failed `add()` no longer corrupts an existing chunked entry. Chunk keys are derived from the cache key and were written before the atomic add was attempted, so `add()` on a live chunked key overwrote part of its data even though it returned `false`. For array and collection values, `add()` now returns `false` before optimizing when the key already exists. This adds one existence check to `add()` calls with an array or collection value; scalar values are unaffected.
+- An entry that can no longer be decrypted (for example after an `APP_KEY` rotation) is treated as corrupted: self-healing evicts it and `remember()` regenerates it. It was previously served as a cached `null`, permanently for `rememberForever()` entries.
+- A corrupted adaptive-compression entry is treated as corrupted too, instead of being served as `false` or garbage. `AdaptiveCompressionStrategy` now uses the validated decoder of `CompressionStrategy`, which shares its storage format.
+- Chunked collections keep their class. An `Eloquent\Collection` large enough to be chunked came back as a plain `Support\Collection`, so `load()`, `modelKeys()`, and type hints broke above roughly 1,000 rows. Entries written by earlier releases still restore as `Support\Collection`. With `strategies.chunking.lazy_loading` enabled, chunked values are still returned as a `LazyChunkedCollection`.
+- Model wildcard invalidation (`invalidatesPatterns()` / `cacheInvalidation()['patterns']`) no longer applies the active namespace twice, the same defect 1.14.0 fixed in `CacheInvalidationService`.
+- `withFallback()` now calls a `Closure` fallback and returns its result, as documented, instead of returning the `Closure` itself. The public `CircuitBreaker::execute()` and `executeWithFallback()` methods resolve a `Closure` fallback the same way; any other fallback value is still returned as-is.
+- `get()` and `pull()` now call a `Closure` default on a miss, like Laravel's `Repository`. `get(array)` and `put(array, $ttl)` now behave like `many()` and `putMany()` instead of raising "Array to string conversion", and `many()` accepts `['key' => $default]` pairs. `MemoizedCacheDriver::getMultiple()` now honours its `$default`.
+- `asyncSwr()` queues one refresh per stale window. The freshness timestamp was not updated after a refresh was queued, so every request between `$ttl` and `$staleTtl` queued another job.
+- `monitoring.recent_entries_limit` is now honoured; the recent-operations list was hard-coded to 100 entries (still the default).
+
+### Changed
+- **Upgrade note — encryption.** If encryption is enabled, matching values that used to be compressed or chunked are now stored as one encrypted entry, which is larger than the compressed form. Check payload sizes on stores with item limits (Memcached 1 MB, DynamoDB 400 KB). Existing entries remain readable and are encrypted on their next write. Installations without encryption are unaffected.
+- **Upgrade note — compression.** Large arrays with few top-level keys are now compressed on write, and small many-item arrays below the threshold no longer are. Existing entries are read unchanged; older releases can read entries written by this one.
+- With `self_healing.enabled = false`, a failed decrypt now follows the same `fallback` path as the other strategies instead of returning `null`: with `fallback.enabled = true` (the default) the stored `['_sc_encrypted' => true, ...]` wrapper is returned to the caller, and with `fallback.enabled = false` the exception is thrown. Keep self-healing enabled (the default) to have such entries evicted and regenerated.
+
+### Documentation
+- Documented `rememberWithLock()` in the README and full documentation.
+- The full documentation listed `SmartCache::getCompressionStats()`, `SmartCache::getSerializationStats()`, and `SmartCache::optimize()`, which do not exist on SmartCache and threw `BadMethodCallException`. The examples now call the statistics methods on the strategy instances that provide them.
+- The README advised disabling compression "for those specific cache keys", which has no setting. It now points to `SmartCache::repository()`, which bypasses optimization.
+- Documented encryption precedence, namespace matching, and that `withFallback()` needs the circuit breaker enabled.
+- Added `touch()` and `reset()` to the facade's `@method` annotations.
+- `SECURITY.md` now lists 1.15.x as the maintained release line.
+
 ## [1.14.0] - 2026-09-01
 
 ### Security
