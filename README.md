@@ -464,7 +464,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 602 tests, 2,247 assertions
+composer test            # 605 tests, 2,251 assertions
 composer test-coverage   # with code coverage
 ```
 

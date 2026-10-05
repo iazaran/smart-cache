@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cache calls inside a `remember*()` callback do not use up the outer tags.
   - `swr()` / `stale()` / `refreshAhead()` / `flexible()` tag the key they regenerate.
   - `store()` / `memo()` called right after `tags()` hand the tags to the instance they return.
-  In this mode, compute a value before calling `tags()`: a cache lookup inside `tags('t')->put('k', $service->build())` runs after `tags()` and would keep `k` from being tagged. Alternatively, use `tags('t')->remember()`. Tags that a subclass assigns to the protected `$activeTags` directly always keep the 1.14 behavior.
+  In this mode, compute a value before calling `tags()`: a cache lookup inside `tags('t')->put('k', $service->build())` runs after `tags()` and would keep `k` from being tagged. Alternatively, use `tags('t')->remember()`. Tags that a subclass assigns to the protected `$activeTags` directly keep the 1.14 behavior, unless the list equals one that a pending `tags()` call set.
 - The `OptimizationApplied` event is now dispatched when a compression, chunking, encryption, or serialization strategy is applied. It was documented and configurable (`events.dispatch.optimization_applied`) but never fired. Events stay disabled by default (`events.enabled = false`). Because measuring the two sizes costs a `serialize()` each, the event is only built and dispatched when a listener for it is registered or events are faked with `Event::fake()`; an application test that mocks the `Event` facade sees no new calls.
 
 ### Security

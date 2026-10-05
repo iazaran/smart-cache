@@ -128,8 +128,9 @@ class SmartCache implements SmartCacheContract, Repository
      * Scope of the active tags, maintained by tags().
      *
      * - tags:  the list tags() set. If $activeTags no longer equals it, for
-     *          example because a subclass assigned $activeTags directly, the
-     *          tags apply to the next write, as they did before 1.15.0.
+     *          example because a subclass assigned a different list to
+     *          $activeTags directly, the tags apply to the next write, as they
+     *          did before 1.15.0.
      * - fresh: no tagged lookup has happened since tags(); the next write is
      *          tagged whatever its key.
      * - keys:  keys looked up under these tags. After a lookup, the tags only
@@ -344,7 +345,7 @@ class SmartCache implements SmartCacheContract, Repository
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
             $this->bindActiveTags($key);
-            return static::resolveDefault($default);
+            return $this->resolveDefault($default);
         }
 
         $restoredValue = $this->maybeRestoreValue($value, $key);
@@ -352,7 +353,7 @@ class SmartCache implements SmartCacheContract, Repository
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
             $this->bindActiveTags($key);
-            return static::resolveDefault($default);
+            return $this->resolveDefault($default);
         }
 
         $this->recordPerformanceMetric('cache_hit', $key, $startTime);
@@ -370,10 +371,26 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Resolve a default value the way Laravel's Repository does: a Closure
      * default is called on a miss instead of being returned as-is.
+     *
+     * Cache calls inside the Closure must not take or clear the caller's tags,
+     * which belong to the key being looked up.
      */
-    private static function resolveDefault(mixed $default): mixed
+    private function resolveDefault(mixed $default): mixed
     {
-        return $default instanceof \Closure ? $default() : $default;
+        if (!$default instanceof \Closure) {
+            return $default;
+        }
+
+        $tags = $this->activeTags;
+        $scope = $this->activeTagsScope;
+        $this->clearActiveTags();
+
+        try {
+            return $default();
+        } finally {
+            $this->activeTags = $tags;
+            $this->activeTagsScope = $scope;
+        }
     }
 
     /**
@@ -430,6 +447,10 @@ class SmartCache implements SmartCacheContract, Repository
             $ttl = $this->applyJitter($ttl);
         }
 
+        // Take this write's tags before optimizing: an OptimizationApplied
+        // listener that uses the cache must not take or clear them.
+        $tags = $this->takeActiveTags($key);
+
         // Wrap null so the underlying store can distinguish it from a cache miss
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
@@ -439,7 +460,6 @@ class SmartCache implements SmartCacheContract, Repository
         // metadata indexes can survive invalidation indefinitely.
         $this->trackKey($key);
 
-        $tags = $this->takeActiveTags($key);
         if ($tags !== []) {
             $this->associateTagsWithKey($key, $tags);
         }
@@ -573,6 +593,8 @@ class SmartCache implements SmartCacheContract, Repository
     public function forever($key, $value): bool
     {
         $key = $this->applyNamespace((string) $key);
+        // Taken before optimizing, as in put()
+        $tags = $this->takeActiveTags($key);
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, null);
 
@@ -580,7 +602,6 @@ class SmartCache implements SmartCacheContract, Repository
         $this->trackKey($key);
 
         // Handle active tags
-        $tags = $this->takeActiveTags($key);
         if ($tags !== []) {
             $this->associateTagsWithKey($key, $tags);
         }
@@ -1363,7 +1384,8 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         try {
-            return Event::hasListeners(OptimizationApplied::class);
+            // Event::spy() returns null rather than a bool.
+            return (bool) Event::hasListeners(OptimizationApplied::class);
         } catch (\BadMethodCallException $e) {
             // Mockery records unexpected calls even when caught.
             if (\method_exists($e, 'dismiss')) {

@@ -77,6 +77,19 @@ class V115FixesTest extends TestCase
         }));
     }
 
+    public function test_closure_default_does_not_clear_the_callers_tags(): void
+    {
+        $this->smartCache->put('source', 'value', 60);
+
+        $cache = $this->smartCache->tags(['users']);
+        $cache->get('user_1', fn () => $this->smartCache->get('source'));
+        $cache->put('user_1', 'cached', 60);
+
+        $this->smartCache->flushTags(['users']);
+
+        $this->assertFalse($this->smartCache->has('user_1'));
+    }
+
     public function test_pull_calls_a_closure_default_on_a_miss(): void
     {
         $this->assertSame('computed', $this->smartCache->pull('missing', fn () => 'computed'));
@@ -497,6 +510,28 @@ class V115FixesTest extends TestCase
         $this->smartCache->put('compressible', str_repeat('compress me ', 500), 60);
 
         Event::assertDispatched(OptimizationApplied::class, fn (OptimizationApplied $event) => $event->key === 'compressible');
+    }
+
+    public function test_optimization_listener_writing_to_the_cache_does_not_take_the_write_tags(): void
+    {
+        $this->app['config']->set('smart-cache.events.enabled', true);
+        Event::listen(OptimizationApplied::class, function () {
+            $this->smartCache->put('last_optimization', time(), 60);
+        });
+
+        $this->smartCache->tags(['reports'])->put('big', str_repeat('compress me ', 500), 60);
+        $this->smartCache->flushTags(['reports']);
+
+        $this->assertFalse($this->smartCache->has('big'));
+        $this->assertTrue($this->smartCache->has('last_optimization'));
+    }
+
+    public function test_event_spy_does_not_break_optimized_writes(): void
+    {
+        $this->app['config']->set('smart-cache.events.enabled', true);
+        Event::spy();
+
+        $this->assertTrue($this->smartCache->put('compressible', str_repeat('compress me ', 500), 60));
     }
 
     public function test_recent_entries_limit_is_honoured(): void
