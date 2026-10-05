@@ -99,14 +99,12 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            // Resolve the callback
-            $value = $this->resolveCallback();
-
-            // Store the refreshed value
             if ($this->namespace === null) {
-                $this->storeValue($value);
+                $this->storeValue($this->resolveCallback());
             } else {
-                $this->storeValueInNamespace($value);
+                // The callback may itself read through SmartCache, so it runs
+                // inside the namespace too, not just the write.
+                $this->inNamespace(fn () => $this->storeValue($this->resolveCallback()));
             }
         } catch (\Throwable $e) {
             // Log the error but don't fail the job if it's a transient issue
@@ -131,23 +129,23 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     }
 
     /**
-     * Write the refreshed value under the namespace it was queued from.
+     * Run the refresh under the namespace it was queued from.
      *
      * A queue worker has no active namespace, and a sync-queue job runs inside a
      * request that may have a different one, so the namespace is set for the
-     * write and the previous one restored afterwards.
+     * refresh and the previous one restored afterwards.
      *
-     * @param mixed $value
+     * @param \Closure $refresh
      * @return void
      */
-    protected function storeValueInNamespace(mixed $value): void
+    protected function inNamespace(\Closure $refresh): void
     {
         $cache = SmartCache::getFacadeRoot();
         $previous = $cache->getNamespace();
         $cache->namespace($this->namespace);
 
         try {
-            $this->storeValue($value);
+            $refresh();
         } finally {
             if ($previous === null) {
                 $cache->withoutNamespace();

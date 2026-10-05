@@ -63,19 +63,21 @@ class CompressionStrategy implements OptimizationStrategy
         try {
             // Arrays with few top-level items, such as ['data' => $rows, 'meta' => $meta]
             // or a model's toArray(), are measured exactly: one large value can sit
-            // anywhere among them. Longer lists are estimated from the serialized size
-            // of a few sample items.
+            // anywhere among them. Longer arrays are estimated from the serialized size
+            // of a few sample entries.
             if (is_array($value) && count($value) > self::EXACT_SIZE_MAX_ITEMS) {
                 $count = count($value);
                 $sampleSize = min(5, $count);
                 $sampleBytes = 0;
                 $sampled = 0;
 
-                foreach ($value as $item) {
+                // Each entry serializes as its key followed by its value; long keys
+                // with small values would otherwise be badly underestimated.
+                foreach ($value as $itemKey => $item) {
                     if ($sampled >= $sampleSize) {
                         break;
                     }
-                    $sampleBytes += strlen(serialize($item));
+                    $sampleBytes += strlen(serialize($itemKey)) + strlen(serialize($item));
                     $sampled++;
                 }
 

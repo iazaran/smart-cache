@@ -1905,7 +1905,15 @@ class SmartCache implements SmartCacheContract, Repository
                     $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
 
                     // Value is stale, queue background refresh
-                    $this->refreshAsync($key, $callback, $staleTtl, $queue);
+                    try {
+                        $this->refreshAsync($key, $callback, $staleTtl, $queue);
+                    } catch (\Throwable $e) {
+                        // Nothing was queued: put the stale timestamp back so the
+                        // next request retries instead of waiting out $ttl.
+                        $this->cache->put("_sc_meta:{$namespacedKey}", $metadata, $staleTtl);
+
+                        throw $e;
+                    }
                 }
             }
             return $value;

@@ -173,6 +173,37 @@ class V115FixesTest extends TestCase
         $this->assertSame('fresh', $this->smartCache->namespace('tenant1')->get('feed'));
     }
 
+    public function test_async_refresh_callback_reads_within_the_captured_namespace(): void
+    {
+        $this->smartCache->put('source', 'global data', 60);
+        $this->smartCache->namespace('tenant1')->put('source', 'tenant data', 60);
+
+        $job = new BackgroundCacheRefreshJob('report', RefreshFromSource::class, 600, [], 'tenant1');
+
+        // A queue worker runs the job without any namespace.
+        $this->smartCache->withoutNamespace();
+        $job->handle();
+
+        $this->assertSame('tenant data', $this->smartCache->namespace('tenant1')->get('report'));
+    }
+
+    public function test_async_swr_retries_when_queueing_the_refresh_fails(): void
+    {
+        $staleMeta = ['created_at' => time() - 1000, 'stored_at' => time() - 1000];
+        $this->smartCache->put('feed', 'stale', 900);
+        $this->rawStore()->put('_sc_meta:feed', $staleMeta, 900);
+
+        try {
+            // Closures cannot be queued, so building the refresh job throws.
+            $this->smartCache->asyncSwr('feed', fn () => 'fresh', 300, 900);
+            $this->fail('Queueing a Closure refresh should throw.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('Closure', $e->getMessage());
+        }
+
+        $this->assertSame($staleMeta, $this->rawStore()->get('_sc_meta:feed'));
+    }
+
     public function test_async_swr_queues_one_refresh_per_stale_window(): void
     {
         Bus::fake();
@@ -363,6 +394,17 @@ class V115FixesTest extends TestCase
         $recent = $this->smartCache->getPerformanceMetrics()['metrics']['cache_miss']['recent'];
         $this->assertCount(3, $recent);
         $this->assertSame('missing_5', end($recent)['key']);
+    }
+}
+
+/**
+ * Refresh callback that builds its value from another cached key.
+ */
+class RefreshFromSource
+{
+    public function __invoke(): mixed
+    {
+        return \SmartCache\Facades\SmartCache::get('source');
     }
 }
 

@@ -242,6 +242,19 @@ class CompressionStrategyTest extends TestCase
         $this->assertTrue($strategy->shouldApply($payload));
     }
 
+    public function test_should_apply_counts_long_keys_in_the_size_estimate()
+    {
+        // Small values under long keys: the keys make up nearly all the bytes.
+        $strategy = new CompressionStrategy(51200, 6);
+        $payload = [];
+        foreach (range(1, 6000) as $i) {
+            $payload[str_pad("metric_{$i}_", 180, 'x')] = 0;
+        }
+
+        $this->assertGreaterThan(1000000, strlen(serialize($payload)));
+        $this->assertTrue($strategy->shouldApply($payload));
+    }
+
     public function test_should_apply_returns_false_for_many_small_items_below_threshold()
     {
         $strategy = new CompressionStrategy(51200, 6);
