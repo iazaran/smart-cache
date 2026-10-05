@@ -229,8 +229,13 @@ class MemoizedCacheDriver implements Repository
     {
         $results = [];
 
-        foreach ($keys as $key) {
-            $results[$key] = $this->get($key);
+        // Like Laravel's Repository, accept a list of keys or ['key' => default].
+        foreach ($keys as $key => $default) {
+            if (is_string($key)) {
+                $results[$key] = $this->get($key, $default);
+            } else {
+                $results[$default] = $this->get($default);
+            }
         }
 
         return $results;
@@ -480,6 +485,17 @@ class MemoizedCacheDriver implements Repository
     }
 
     /**
+     * Drop one key from the in-request memory so the next read goes to the store.
+     *
+     * @param string $key
+     * @return void
+     */
+    public function forgetMemoizedKey(string $key): void
+    {
+        $this->forgetMemoized($key);
+    }
+
+    /**
      * Clear the memoization cache.
      *
      * @return void
@@ -550,8 +566,13 @@ class MemoizedCacheDriver implements Repository
      */
     public function getMultiple($keys, $default = null): iterable
     {
-        $keys = is_array($keys) ? $keys : iterator_to_array($keys);
-        return $this->many($keys);
+        $results = [];
+
+        foreach ($keys as $key) {
+            $results[$key] = $this->get($key, $default);
+        }
+
+        return $results;
     }
 
     /**

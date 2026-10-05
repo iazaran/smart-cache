@@ -190,6 +190,32 @@ class EnumeratesCacheKeysTest extends TestCase
         $this->assertFalse($connection->keysCalled);
     }
 
+    public function test_does_not_start_the_scan_from_an_integer_zero_cursor(): void
+    {
+        // phpredis treats an integer 0 cursor as "iteration finished" and returns
+        // false straight away, so a scan started from 0 enumerated no keys at all.
+        $connection = new class {
+            public array $cursors = [];
+
+            public function scan($cursor, $options = [])
+            {
+                $this->cursors[] = $cursor;
+
+                if ($cursor === 0) {
+                    return false;
+                }
+
+                return $cursor === 9 ? [0, ['c']] : [9, ['a', 'b']];
+            }
+        };
+
+        $keys = $this->subject()->scan($connection);
+
+        sort($keys);
+        $this->assertSame(['a', 'b', 'c'], $keys);
+        $this->assertNotSame(0, $connection->cursors[0]);
+    }
+
     public function test_does_not_spin_forever_when_the_cursor_never_returns_to_zero(): void
     {
         $connection = new class {

@@ -162,17 +162,10 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
      */
     public function restore(mixed $value, array $context = []): mixed
     {
-        if (!is_array($value) || !isset($value['_sc_compressed']) || $value['_sc_compressed'] !== true) {
-            return $value;
-        }
-        
-        $decompressed = gzdecode(base64_decode($value['data']));
-        
-        if ($value['is_string']) {
-            return $decompressed;
-        }
-        
-        return unserialize($decompressed);
+        // Adaptive entries use the fixed-level wire format, so share its validated
+        // decoder: a corrupted payload must throw (and self-heal) instead of
+        // being served as a false or garbage cache hit.
+        return (new CompressionStrategy())->restore($value, $context);
     }
 
     /**

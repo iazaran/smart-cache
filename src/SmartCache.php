@@ -4,13 +4,17 @@ namespace SmartCache;
 
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Cache\Store;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
+use SmartCache\Drivers\MemoizedCacheDriver;
+use SmartCache\Events\OptimizationApplied;
 use SmartCache\Services\CacheInvalidationService;
 use SmartCache\Services\CostAwareCacheManager;
 use SmartCache\Services\OrphanChunkCleanupService;
@@ -23,6 +27,12 @@ use SmartCache\Traits\DispatchesCacheEvents;
 class SmartCache implements SmartCacheContract, Repository
 {
     use HasLocks, DispatchesCacheEvents;
+
+    /**
+     * How often rememberWithLock() re-checks the cache while another process
+     * holds the regeneration lock.
+     */
+    private const REGENERATION_LOCK_POLL_MICROSECONDS = 100000;
 
     /**
      * Sentinel object used to distinguish between a cache miss and a stored null value.
@@ -292,6 +302,11 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function get($key, $default = null): mixed
     {
+        // Laravel's Repository treats an array of keys as many().
+        if (\is_array($key)) {
+            return $this->many($key);
+        }
+
         $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
@@ -301,14 +316,14 @@ class SmartCache implements SmartCacheContract, Repository
         if ($value === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
-            return $default;
+            return static::resolveDefault($default);
         }
 
         $restoredValue = $this->maybeRestoreValue($value, $key);
         if ($restoredValue === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
-            return $default;
+            return static::resolveDefault($default);
         }
 
         $this->recordPerformanceMetric('cache_hit', $key, $startTime);
@@ -321,6 +336,15 @@ class SmartCache implements SmartCacheContract, Repository
         $this->activeTags = [];
 
         return $restoredValue;
+    }
+
+    /**
+     * Resolve a default value the way Laravel's Repository does: a Closure
+     * default is called on a miss instead of being returned as-is.
+     */
+    private static function resolveDefault(mixed $default): mixed
+    {
+        return $default instanceof \Closure ? $default() : $default;
     }
 
     /**
@@ -344,6 +368,11 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function put($key, $value, $ttl = null): bool
     {
+        // Laravel's Repository treats put(array, $ttl) as putMany().
+        if (\is_array($key)) {
+            return $this->putMany($key, $value);
+        }
+
         $applyConfiguredJitter = !$this->skipNextConfiguredJitter;
         $this->skipNextConfiguredJitter = false;
 
@@ -780,6 +809,16 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $namespacedKey = $this->applyNamespace((string) $key);
         $tags = $this->activeTags;
+
+        // Chunking writes chunk keys straight to the store, and those keys are
+        // derived from the cache key. Bail out before that when the entry already
+        // exists, so a failing add() cannot overwrite the live entry's chunks.
+        // Only arrays and collections can be chunked, so scalar flags and
+        // idempotency markers keep their single round trip.
+        if ((\is_array($value) || $value instanceof \Traversable) && $this->cache->has($namespacedKey)) {
+            $this->activeTags = [];
+            return false;
+        }
 
         // Use the underlying cache's atomic add() if available
         $storable = static::wrapNullValue($value);
@@ -1226,6 +1265,7 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $context = [
             'key' => $key,
+            'namespace' => $this->activeNamespace,
             'ttl' => $ttl,
             'driver' => $this->driver,
             'cache' => $this->cache,
@@ -1237,7 +1277,7 @@ class SmartCache implements SmartCacheContract, Repository
         foreach ($this->strategies as $strategy) {
             if ($strategy->shouldApply($value, $context)) {
                 try {
-                    return $strategy->optimize($value, $context);
+                    $optimized = $strategy->optimize($value, $context);
                 } catch (\Throwable $e) {
                     if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                         Log::warning("SmartCache optimization failed for {$key}: " . $e->getMessage());
@@ -1249,6 +1289,20 @@ class SmartCache implements SmartCacheContract, Repository
 
                     throw $e;
                 }
+
+                // Sizes cost a serialize() each, so only measure them for a listener.
+                if ($this->shouldDispatchEvent('optimization_applied')
+                    && Event::hasListeners(OptimizationApplied::class)
+                ) {
+                    $this->dispatchOptimizationApplied(
+                        $key,
+                        $strategy->getIdentifier(),
+                        $this->calculateDataSize($value),
+                        $this->calculateDataSize($optimized)
+                    );
+                }
+
+                return $optimized;
             }
         }
 
@@ -1810,7 +1864,8 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function refreshAsync(string $key, callable|string $callback, ?int $ttl = null, ?string $queue = null): void
     {
-        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $this->activeTags);
+        // The queue worker has no active namespace, so the job carries it along.
+        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $this->activeTags, $this->activeNamespace);
 
         if ($queue !== null) {
             $job->onQueue($queue);
@@ -1844,6 +1899,11 @@ class SmartCache implements SmartCacheContract, Repository
             if ($metadata && isset($metadata['created_at'])) {
                 $age = time() - $metadata['created_at'];
                 if ($age > $ttl) {
+                    // Restart the freshness window first so the requests that arrive
+                    // before the job finishes keep serving stale instead of each
+                    // queueing another refresh job.
+                    $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
+
                     // Value is stale, queue background refresh
                     $this->refreshAsync($key, $callback, $staleTtl, $queue);
                 }
@@ -2535,6 +2595,148 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
+     * Remember a value, letting only one process regenerate it on a cache miss.
+     *
+     * On a miss the callback runs under an atomic lock, so a cold or freshly
+     * invalidated key is rebuilt once instead of by every concurrent request.
+     * Processes that arrive while the lock is held wait up to $waitSeconds and
+     * then read the value the lock holder stored. Cache hits never touch the lock.
+     *
+     * When the store does not support locks, the lock backend fails, or the wait
+     * times out, the callback runs without the lock, so this method never fails
+     * where remember() would succeed.
+     *
+     * @param string $key
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @param \Closure $callback
+     * @param int $lockSeconds Maximum seconds the lock is held; keep it above the regeneration time
+     * @param int $waitSeconds Seconds a waiting process blocks before regenerating without the lock
+     * @return mixed
+     */
+    public function rememberWithLock(
+        string $key,
+        mixed $ttl,
+        \Closure $callback,
+        int $lockSeconds = 10,
+        int $waitSeconds = 10
+    ): mixed {
+        $sentinel = static::sentinel();
+        $value = $this->get($key, $sentinel);
+
+        if ($value !== $sentinel) {
+            if ($this->costAwareManager !== null) {
+                $this->costAwareManager->recordAccess($this->applyNamespace($key));
+            }
+            return $value;
+        }
+
+        $lock = $this->acquireRegenerationLock($key, $lockSeconds, $waitSeconds);
+
+        try {
+            // Another process may have stored the value while we waited, or just
+            // before we took the lock. has() keeps this re-check out of the
+            // hit/miss metrics.
+            if ($this->existsInStore($key)) {
+                $value = $this->get($key, $sentinel);
+
+                if ($value !== $sentinel) {
+                    return $value;
+                }
+            }
+
+            $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
+            $value = $callback();
+            $this->put($key, $value, $ttl);
+
+            if ($this->costAwareManager !== null && $startTime !== null) {
+                $costMs = (\microtime(true) - $startTime) * 1000;
+                $size = $this->calculateDataSize($value);
+                $this->costAwareManager->recordCost($this->applyNamespace($key), $costMs, $size);
+            }
+
+            return $value;
+        } finally {
+            if ($lock !== null) {
+                try {
+                    $lock->release();
+                } catch (\Throwable $releaseError) {
+                    // Best-effort release; the lock expires on its own TTL.
+                }
+            }
+        }
+    }
+
+    /**
+     * Acquire the lock that serialises regeneration of a missing key.
+     *
+     * While another process holds the lock, this polls the cache and stops
+     * waiting as soon as the value appears, so waiters do not queue for the lock
+     * just to read it.
+     *
+     * Returns null when the value appeared, the store has no lock support, the
+     * lock backend fails (for example a database store without the cache_locks
+     * table), or the wait times out. The caller then re-checks the cache and
+     * regenerates without the lock only if the value is still missing.
+     *
+     * @param string $key
+     * @param int $lockSeconds
+     * @param int $waitSeconds
+     * @return Lock|null
+     */
+    private function acquireRegenerationLock(string $key, int $lockSeconds, int $waitSeconds): ?Lock
+    {
+        $store = $this->cache->getStore();
+
+        if (!$store instanceof LockProvider) {
+            return null;
+        }
+
+        $namespacedKey = $this->applyNamespace($key);
+
+        try {
+            // Hashed so a long key cannot push the lock name past a store's key-length limit.
+            $lock = $store->lock('_sc_remember_lock:' . \sha1($namespacedKey), \max(1, $lockSeconds));
+            $deadline = \microtime(true) + \max(0, $waitSeconds);
+
+            while (!$lock->get()) {
+                if ($this->existsInStore($key) || \microtime(true) >= $deadline) {
+                    return null;
+                }
+
+                \usleep(self::REGENERATION_LOCK_POLL_MICROSECONDS);
+            }
+
+            return $lock;
+        } catch (\Throwable $e) {
+            if ($this->config->get('smart-cache.fallback.log_errors', true)) {
+                Log::warning("SmartCache could not lock regeneration of {$namespacedKey}: " . $e->getMessage());
+            }
+
+            return null;
+        }
+    }
+
+    /**
+     * Whether the key exists in the store right now.
+     *
+     * memo() remembers misses for the rest of the request, which would hide a
+     * value another process stored meanwhile, so that memory is dropped first.
+     *
+     * @param string $key
+     * @return bool
+     */
+    private function existsInStore(string $key): bool
+    {
+        $namespacedKey = $this->applyNamespace($key);
+
+        if ($this->cache instanceof MemoizedCacheDriver) {
+            $this->cache->forgetMemoizedKey($namespacedKey);
+        }
+
+        return $this->cache->has($namespacedKey);
+    }
+
+    /**
      * Enable TTL jitter.
      *
      * @param float $percentage Jitter percentage (0.0 to 1.0, default: 0.1 = 10%)
@@ -2862,8 +3064,9 @@ class SmartCache implements SmartCacheContract, Repository
             'metadata' => $metadata
         ];
 
-        if (\count($metrics['recent']) > 100) {
-            $metrics['recent'] = \array_slice($metrics['recent'], -100);
+        $recentLimit = \max(1, (int) $this->config->get('smart-cache.monitoring.recent_entries_limit', 100));
+        if (\count($metrics['recent']) > $recentLimit) {
+            $metrics['recent'] = \array_slice($metrics['recent'], -$recentLimit);
         }
 
         if ($metrics['count'] % 50 === 0) {
@@ -3048,8 +3251,13 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $results = [];
 
-        foreach ($keys as $key) {
-            $results[$key] = $this->get($key);
+        // Like Laravel's Repository, accept a list of keys or ['key' => default].
+        foreach ($keys as $key => $default) {
+            if (\is_string($key)) {
+                $results[$key] = $this->get($key, $default);
+            } else {
+                $results[$default] = $this->get($default);
+            }
         }
 
         return $results;
@@ -3109,12 +3317,22 @@ class SmartCache implements SmartCacheContract, Repository
         $memoizedRepository = new \SmartCache\Drivers\MemoizedCacheDriver($repository);
 
         // Create a new SmartCache instance with the memoized repository
-        return new static(
+        $instance = new static(
             $memoizedRepository,
             $this->cacheManager,
             $this->config,
             $this->strategies
         );
+
+        // Preserve runtime configuration, as store() does. Dropping the namespace
+        // would make a tenant-scoped memo() read and write global keys.
+        $instance->jitterEnabled = $this->jitterEnabled;
+        $instance->jitterPercentage = $this->jitterPercentage;
+        $instance->activeNamespace = $this->activeNamespace;
+        $instance->circuitBreakerEnabled = $this->circuitBreakerEnabled;
+        $instance->costAwareManager = $this->costAwareManager;
+
+        return $instance;
     }
 
     /**

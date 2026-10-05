@@ -37,9 +37,24 @@ class SmartCacheServiceProvider extends ServiceProvider
             $config = $app['config'];
             
             // Create strategies based on config
-            // Order matters: more specific strategies (chunking) should be tried first
+            // Order matters: the first strategy that applies to a value wins.
             $strategies = [];
 
+            // Encryption goes first. Only one strategy is applied per value, so a
+            // size strategy ahead of it would store large matching values as
+            // plain compressed or chunked data instead of encrypting them.
+            if ($config->get('smart-cache.strategies.encryption.enabled', false)) {
+                $strategies[] = new EncryptionStrategy(
+                    $app['encrypter'],
+                    [
+                        'keys' => $config->get('smart-cache.strategies.encryption.keys', []),
+                        'patterns' => $config->get('smart-cache.strategies.encryption.patterns', []),
+                        'encrypt_all' => $config->get('smart-cache.strategies.encryption.encrypt_all', false),
+                    ]
+                );
+            }
+
+            // Chunking before compression: more specific strategies are tried first
             if ($config->get('smart-cache.strategies.chunking.enabled', true)) {
                 $strategies[] = new ChunkingStrategy(
                     $config->get('smart-cache.thresholds.chunking', 102400),
@@ -69,18 +84,6 @@ class SmartCacheServiceProvider extends ServiceProvider
                         $config->get('smart-cache.strategies.compression.level', 6)
                     );
                 }
-            }
-
-            // Add encryption strategy if enabled
-            if ($config->get('smart-cache.strategies.encryption.enabled', false)) {
-                $strategies[] = new EncryptionStrategy(
-                    $app['encrypter'],
-                    [
-                        'keys' => $config->get('smart-cache.strategies.encryption.keys', []),
-                        'patterns' => $config->get('smart-cache.strategies.encryption.patterns', []),
-                        'encrypt_all' => $config->get('smart-cache.strategies.encryption.encrypt_all', false),
-                    ]
-                );
             }
 
             // Add smart serialization strategy if enabled

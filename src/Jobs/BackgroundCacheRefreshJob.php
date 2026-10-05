@@ -40,6 +40,15 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     protected array $tags;
 
     /**
+     * Namespace that was active when the refresh was queued.
+     *
+     * Defaults to null so jobs serialized by earlier releases still unserialize.
+     *
+     * @var string|null
+     */
+    protected ?string $namespace = null;
+
+    /**
      * The number of times the job may be attempted.
      *
      * @var int
@@ -60,8 +69,9 @@ class BackgroundCacheRefreshJob implements ShouldQueue
      * @param callable|string $callback Serializable callback (class@method or invokable class)
      * @param int|null $ttl
      * @param array $tags
+     * @param string|null $namespace Namespace to write the key under
      */
-    public function __construct(string $key, callable|string $callback, ?int $ttl = null, array $tags = [])
+    public function __construct(string $key, callable|string $callback, ?int $ttl = null, array $tags = [], ?string $namespace = null)
     {
         // Closures cannot be safely serialized by Laravel's queue drivers,
         // so reject them early with a clear, actionable error rather than
@@ -78,6 +88,7 @@ class BackgroundCacheRefreshJob implements ShouldQueue
         $this->callback = $callback;
         $this->ttl = $ttl;
         $this->tags = $tags;
+        $this->namespace = $namespace;
     }
 
     /**
@@ -92,15 +103,57 @@ class BackgroundCacheRefreshJob implements ShouldQueue
             $value = $this->resolveCallback();
 
             // Store the refreshed value
-            if (!empty($this->tags)) {
-                SmartCache::tags($this->tags)->put($this->key, $value, $this->ttl);
+            if ($this->namespace === null) {
+                $this->storeValue($value);
             } else {
-                SmartCache::put($this->key, $value, $this->ttl);
+                $this->storeValueInNamespace($value);
             }
         } catch (\Throwable $e) {
             // Log the error but don't fail the job if it's a transient issue
             \Illuminate\Support\Facades\Log::warning("Background cache refresh failed for key '{$this->key}': " . $e->getMessage());
             throw $e;
+        }
+    }
+
+    /**
+     * Write the refreshed value.
+     *
+     * @param mixed $value
+     * @return void
+     */
+    protected function storeValue(mixed $value): void
+    {
+        if (!empty($this->tags)) {
+            SmartCache::tags($this->tags)->put($this->key, $value, $this->ttl);
+        } else {
+            SmartCache::put($this->key, $value, $this->ttl);
+        }
+    }
+
+    /**
+     * Write the refreshed value under the namespace it was queued from.
+     *
+     * A queue worker has no active namespace, and a sync-queue job runs inside a
+     * request that may have a different one, so the namespace is set for the
+     * write and the previous one restored afterwards.
+     *
+     * @param mixed $value
+     * @return void
+     */
+    protected function storeValueInNamespace(mixed $value): void
+    {
+        $cache = SmartCache::getFacadeRoot();
+        $previous = $cache->getNamespace();
+        $cache->namespace($this->namespace);
+
+        try {
+            $this->storeValue($value);
+        } finally {
+            if ($previous === null) {
+                $cache->withoutNamespace();
+            } else {
+                $cache->namespace($previous);
+            }
         }
     }
 

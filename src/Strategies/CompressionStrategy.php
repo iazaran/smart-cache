@@ -7,6 +7,11 @@ use SmartCache\Contracts\OptimizationStrategy;
 class CompressionStrategy implements OptimizationStrategy
 {
     /**
+     * Arrays with at most this many top-level items are measured exactly.
+     */
+    private const EXACT_SIZE_MAX_ITEMS = 50;
+
+    /**
      * @var int
      */
     protected int $threshold;
@@ -55,24 +60,42 @@ class CompressionStrategy implements OptimizationStrategy
             return strlen($value) > $this->threshold;
         }
 
-        // For arrays, use a quick estimate: count * average-item-size
-        // Only serialize if the estimate is close to the threshold
-        if (is_array($value)) {
-            $count = count($value);
-            // Rough estimate: each item ~50 bytes on average
-            $estimate = $count * 50;
-            // If clearly below threshold, skip
-            if ($estimate < $this->threshold / 2) {
-                return false;
-            }
-            // If clearly above threshold, apply
-            if ($estimate > $this->threshold * 2) {
-                return true;
-            }
-        }
+        try {
+            // Arrays with few top-level items, such as ['data' => $rows, 'meta' => $meta]
+            // or a model's toArray(), are measured exactly: one large value can sit
+            // anywhere among them. Longer lists are estimated from the serialized size
+            // of a few sample items.
+            if (is_array($value) && count($value) > self::EXACT_SIZE_MAX_ITEMS) {
+                $count = count($value);
+                $sampleSize = min(5, $count);
+                $sampleBytes = 0;
+                $sampled = 0;
 
-        // Fall back to serialize for borderline cases and objects
-        return strlen(serialize($value)) > $this->threshold;
+                foreach ($value as $item) {
+                    if ($sampled >= $sampleSize) {
+                        break;
+                    }
+                    $sampleBytes += strlen(serialize($item));
+                    $sampled++;
+                }
+
+                $estimate = (int) ceil($sampleBytes / $sampleSize) * $count;
+                // If clearly below threshold, skip
+                if ($estimate < $this->threshold / 2) {
+                    return false;
+                }
+                // If clearly above threshold, apply
+                if ($estimate > $this->threshold * 2) {
+                    return true;
+                }
+            }
+
+            // Serialize small arrays, borderline cases, and objects
+            return strlen(serialize($value)) > $this->threshold;
+        } catch (\Throwable $e) {
+            // Values that cannot be serialized cannot be compressed either.
+            return false;
+        }
     }
 
     /**

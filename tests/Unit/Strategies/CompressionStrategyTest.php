@@ -215,6 +215,54 @@ class CompressionStrategyTest extends TestCase
         $this->assertTrue($strategy->shouldApply($largeData));
     }
 
+    public function test_should_apply_returns_true_for_large_array_with_few_top_level_keys()
+    {
+        // A typical API payload: two top-level keys wrapping a large row set.
+        $strategy = new CompressionStrategy(51200, 6);
+        $payload = [
+            'data' => $this->createLargeTestData(200),
+            'meta' => ['total' => 200],
+        ];
+
+        $this->assertGreaterThan(51200, strlen(serialize($payload)));
+        $this->assertTrue($strategy->shouldApply($payload));
+    }
+
+    public function test_should_apply_returns_true_when_a_large_value_follows_small_ones()
+    {
+        // e.g. a model's toArray() with a large relation as its last key
+        $strategy = new CompressionStrategy(51200, 6);
+        $payload = [];
+        foreach (range(1, 9) as $i) {
+            $payload["attribute_{$i}"] = "value {$i}";
+        }
+        $payload['comments'] = $this->createLargeTestData(200);
+
+        $this->assertGreaterThan(51200, strlen(serialize($payload)));
+        $this->assertTrue($strategy->shouldApply($payload));
+    }
+
+    public function test_should_apply_returns_false_for_many_small_items_below_threshold()
+    {
+        $strategy = new CompressionStrategy(51200, 6);
+        $ints = range(1, 2500);
+
+        $this->assertLessThan(51200, strlen(serialize($ints)));
+        $this->assertFalse($strategy->shouldApply($ints));
+    }
+
+    public function test_should_apply_returns_false_for_empty_array()
+    {
+        $this->assertFalse($this->strategy->shouldApply([]));
+    }
+
+    public function test_should_apply_returns_false_instead_of_throwing_for_unserializable_values()
+    {
+        $value = ['callback' => fn () => 'not serializable', 'padding' => str_repeat('a', 4000)];
+
+        $this->assertFalse($this->strategy->shouldApply($value));
+    }
+
     public function test_round_trip_compression_preserves_data_integrity()
     {
         $testCases = [

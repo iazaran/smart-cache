@@ -221,14 +221,41 @@ trait CacheInvalidation
      */
     protected function invalidatePattern(string $pattern): void
     {
-        // This is a simplified pattern matching
-        // In a real implementation, you might want to use the cache store's
-        // native pattern matching capabilities (like Redis KEYS command)
-        $managedKeys = SmartCache::getManagedKeys();
-        
-        foreach ($managedKeys as $key) {
-            if ($this->matchesPattern($key, $pattern)) {
-                SmartCache::forget($key);
+        $matchedKeys = \array_filter(
+            SmartCache::getManagedKeys(),
+            fn ($key) => \is_string($key) && $this->matchesPattern($key, $pattern)
+        );
+
+        if ($matchedKeys === []) {
+            return;
+        }
+
+        // Managed keys are stored fully qualified, so forget() must not apply the
+        // active namespace a second time. Mirrors CacheInvalidationService.
+        $cache = SmartCache::getFacadeRoot();
+        $namespace = null;
+
+        // getNamespace() is not on the contract, and a facade mock in an
+        // application's test suite may not expect it; both mean "no namespace".
+        if (\method_exists($cache, 'getNamespace')) {
+            try {
+                $namespace = $cache->getNamespace();
+            } catch (\BadMethodCallException $e) {
+                $namespace = null;
+            }
+        }
+
+        if ($namespace !== null) {
+            $cache->withoutNamespace();
+        }
+
+        try {
+            foreach ($matchedKeys as $key) {
+                $cache->forget($key);
+            }
+        } finally {
+            if ($namespace !== null) {
+                $cache->namespace($namespace);
             }
         }
     }
