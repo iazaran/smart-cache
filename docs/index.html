@@ -1296,7 +1296,7 @@ SmartCache::flushTags(['users']); // Clears both user_1 and user_2
 SmartCache::flushTags(['users', 'profiles']);</code></pre>
 
                     <div class="alert alert-info">
-                        <strong>Use <code>flushTags()</code>, not <code>flush()</code>.</strong> <code>flush()</code> clears the entire cache store. Tags set with <code>tags()</code> apply to the next write. If a tagged <code>get()</code> misses (or after a tagged <code>has()</code>), they still apply to a later write of that key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key.
+                        <strong>Use <code>flushTags()</code>, not <code>flush()</code>.</strong> <code>flush()</code> clears the entire cache store. By default, tags set with <code>tags()</code> stay active until a write uses them, so after a tagged <code>get()</code> that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set <code>smart-cache.tags.scoped = true</code> (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling <code>tags()</code>, or use <code>tags()-&gt;remember()</code>.
                     </div>
 
                     <h2>Cache Locking</h2>
@@ -1451,6 +1451,10 @@ return [
 
     'model_invalidation' => [
         'after_commit' => true,      // Flush after DB commit when inside a transaction
+    ],
+
+    'tags' => [
+        'scoped' => false,           // v1.15.0: opt-in scoped tags (recommended for new apps)
     ],
 
     'monitoring' => [
@@ -2343,6 +2347,9 @@ return [
 
     'model_invalidation' => [
         'after_commit' => true,         // Defer model invalidation until DB commit
+    ],
+    'tags' => [
+        'scoped' => false,              // v1.15.0: opt-in scoped tags (recommended for new apps)
     ],
 
     'dashboard' => [
@@ -3488,7 +3495,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 598 tests, 2,242 assertions
+# 602 tests, 2,247 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

@@ -244,7 +244,7 @@ SmartCache::tags(['users'])->put('user_1', $user, 3600);
 SmartCache::flushTags(['users']);
 ```
 
-Tags set with `tags()` apply to the next write. If a tagged `get()` misses (or after a tagged `has()`), they still apply to a later write of that key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key. Use `flushTags()` to invalidate by tag; `flush()` clears the entire store.
+Use `flushTags()` to invalidate by tag; `flush()` clears the entire store. By default, tags set with `tags()` stay active until a write uses them, so after a tagged `get()` that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set `smart-cache.tags.scoped = true` (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling `tags()`, or use `tags()->remember()`.
 
 ### Model Auto-Invalidation
 
@@ -420,6 +420,7 @@ return [
     'managed_keys'    => ['max_tracked' => 0],       // v1.12.0: 0 = unlimited (default)
     'metadata_lock'   => ['enabled' => true, 'ttl' => 5, 'wait' => 1],
     'model_invalidation' => ['after_commit' => true],
+    'tags'            => ['scoped' => false],        // v1.15.0: opt-in scoped tags (recommended for new apps)
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
     'warmers'         => [],                    // Cache warmer classes for smart-cache:warm
 ];
@@ -463,7 +464,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 598 tests, 2,242 assertions
+composer test            # 602 tests, 2,247 assertions
 composer test-coverage   # with code coverage
 ```
 

@@ -249,6 +249,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Tags
+    |--------------------------------------------------------------------------
+    |
+    | By default, tags set with tags() stay active until a write uses them, as
+    | in 1.14, so a tagged get() that misses also tags the next write, whatever
+    | its key. That only causes extra invalidation, never stale data.
+    |
+    | 'scoped' => true (since 1.15.0, recommended for new applications) limits
+    | them: after a tagged lookup, the tags only apply to a later write of a key
+    | looked up while they were pending. In that mode, compute a value before
+    | calling tags(): a cache lookup inside tags('t')->put('k', $service->build())
+    | runs after tags(). Or use tags('t')->remember().
+    |
+    */
+    'tags' => [
+        'scoped' => false,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Chunk Registry
     |--------------------------------------------------------------------------
     |
