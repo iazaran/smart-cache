@@ -145,6 +145,18 @@ class V115FixesTest extends TestCase
         $this->assertSame([3, 4], $this->smartCache->get('list'));
     }
 
+    public function test_nested_memo_add_is_not_rejected_by_a_stale_inner_hit(): void
+    {
+        $this->smartCache->put('list', [1, 2], 60);
+        $memo = $this->smartCache->memo()->memo();
+        $this->assertSame([1, 2], $memo->get('list'));
+
+        $this->smartCache->forget('list');
+
+        $this->assertTrue($memo->add('list', [3, 4], 60));
+        $this->assertSame([3, 4], $this->smartCache->get('list'));
+    }
+
     // -----------------------------------------------------------------
     // Namespaces
     // -----------------------------------------------------------------

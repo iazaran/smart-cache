@@ -2843,8 +2843,9 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Whether the key exists in the store right now.
      *
-     * memo() remembers misses for the rest of the request, which would hide a
-     * value another process stored meanwhile, so that memory is dropped first.
+     * memo() remembers hits and misses for the rest of the request, which could
+     * hide a change another process made meanwhile, so that memory is dropped
+     * first, in every layer when memo() instances are nested.
      *
      * @param string $key
      * @return bool
@@ -2853,8 +2854,8 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $namespacedKey = $this->applyNamespace($key);
 
-        if ($this->cache instanceof MemoizedCacheDriver) {
-            $this->cache->forgetMemoizedKey($namespacedKey);
+        for ($layer = $this->cache; $layer instanceof MemoizedCacheDriver; $layer = $layer->getRepository()) {
+            $layer->forgetMemoizedKey($namespacedKey);
         }
 
         return $this->cache->has($namespacedKey);

@@ -116,6 +116,26 @@ class RememberWithLockTest extends TestCase
         $this->assertSame(0, $calls);
     }
 
+    public function test_nested_memo_waiter_reads_the_value_stored_by_the_lock_holder(): void
+    {
+        $holder = $this->makeSmartCache($this->store);
+        $memo = $this->smartCache->memo()->memo();
+
+        $this->store->nextLock = new ScriptedLock(function () use ($holder) {
+            $holder->put('report', 'from-lock-holder', 60);
+            return false;
+        });
+
+        $calls = 0;
+        $value = $memo->rememberWithLock('report', 60, function () use (&$calls) {
+            $calls++;
+            return 'regenerated';
+        }, 10, 1);
+
+        $this->assertSame('from-lock-holder', $value);
+        $this->assertSame(0, $calls);
+    }
+
     public function test_waiter_takes_the_lock_once_it_is_released_and_regenerates(): void
     {
         $attempt = 0;
