@@ -462,6 +462,41 @@ class V115FixesTest extends TestCase
     }
 
     // -----------------------------------------------------------------
+    // Driver detection and the drivers config
+    // -----------------------------------------------------------------
+
+    public function test_driver_names_match_laravel_driver_names(): void
+    {
+        $detect = new \ReflectionMethod(SmartCache::class, 'determineCacheDriver');
+
+        $this->assertSame('array', $detect->invoke($this->smartCache, new \Illuminate\Cache\ArrayStore()));
+        $this->assertSame('null', $detect->invoke($this->smartCache, new \Illuminate\Cache\NullStore()));
+        $this->assertSame('dynamodb', $detect->invoke($this->smartCache, new DynamoDbStore()));
+    }
+
+    public function test_drivers_config_is_applied(): void
+    {
+        $this->app['config']->set('smart-cache.drivers.array', ['compression' => false]);
+        $cache = new SmartCache($this->rawStore(), $this->app['cache'], $this->app['config'], [
+            new CompressionStrategy(1024, 6),
+        ]);
+        $text = str_repeat('compress me ', 500);
+
+        $cache->put('text', $text, 60);
+
+        $this->assertSame($text, $this->rawStore()->get('text'));
+    }
+
+    public function test_shipped_memcached_default_keeps_smartcache_compression(): void
+    {
+        // Memcached values were always gzip-compressed by SmartCache, because the
+        // drivers config never applied; the shipped default keeps that behaviour.
+        $shipped = require __DIR__ . '/../../config/smart-cache.php';
+
+        $this->assertTrue($shipped['drivers']['memcached']['compression']);
+    }
+
+    // -----------------------------------------------------------------
     // Fallback, events, and monitoring
     // -----------------------------------------------------------------
 
@@ -517,6 +552,13 @@ class V115FixesTest extends TestCase
         $this->assertCount(3, $recent);
         $this->assertSame('missing_5', end($recent)['key']);
     }
+}
+
+/**
+ * Stand-in named like Laravel's DynamoDB store, for driver-name detection.
+ */
+class DynamoDbStore
+{
 }
 
 /**

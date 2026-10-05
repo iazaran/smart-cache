@@ -1675,6 +1675,10 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Determines the cache driver from the store instance.
      *
+     * Returns Laravel's driver name (RedisStore => redis, DynamoDbStore =>
+     * dynamodb), which is how the smart-cache.drivers config is keyed. Earlier
+     * releases produced "redis_", so that config never applied.
+     *
      * @param mixed $store
      * @return string|null
      */
@@ -1684,7 +1688,7 @@ class SmartCache implements SmartCacheContract, Repository
         $parts = \explode('\\', $class);
         $storeName = \end($parts);
 
-        return \strtolower(\preg_replace('/Store$/', '', \preg_replace('/(?<!^)[A-Z]/', '_$0', $storeName)));
+        return \strtolower((string) \preg_replace('/Store$/', '', $storeName));
     }
 
     /**

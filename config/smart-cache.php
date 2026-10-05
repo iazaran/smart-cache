@@ -298,7 +298,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Configure which cache drivers should use which optimization strategies.
-    | Set to null to use the global strategies configuration.
+    | Set to null to use the global strategies configuration. Keys are Laravel
+    | driver names (redis, memcached, file, database, dynamodb, array); these
+    | settings apply since 1.15.0.
     |
     */
     'drivers' => [
@@ -308,7 +310,7 @@ return [
             'chunking' => true,
         ],
         'memcached' => [
-            'compression' => false, // Memcached has its own compression
+            'compression' => true, // false = rely on php-memcached's own (weaker) compression
             'chunking' => true,
         ],
     ],
