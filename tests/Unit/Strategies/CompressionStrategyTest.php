@@ -255,6 +255,18 @@ class CompressionStrategyTest extends TestCase
         $this->assertTrue($strategy->shouldApply($payload));
     }
 
+    public function test_should_apply_is_not_misled_by_small_leading_items()
+    {
+        $strategy = new CompressionStrategy(51200, 6);
+        $payload = array_merge(
+            array_fill(0, 5, null),
+            array_fill(0, 795, str_repeat('repetitive payload ', 110))
+        );
+
+        $this->assertGreaterThan(1000000, strlen(serialize($payload)));
+        $this->assertTrue($strategy->shouldApply($payload));
+    }
+
     public function test_should_apply_returns_false_for_many_small_items_below_threshold()
     {
         $strategy = new CompressionStrategy(51200, 6);

@@ -814,8 +814,9 @@ class SmartCache implements SmartCacheContract, Repository
         // derived from the cache key. Bail out before that when the entry already
         // exists, so a failing add() cannot overwrite the live entry's chunks.
         // Only arrays and collections can be chunked, so scalar flags and
-        // idempotency markers keep their single round trip.
-        if ((\is_array($value) || $value instanceof \Traversable) && $this->cache->has($namespacedKey)) {
+        // idempotency markers keep their single round trip. existsInStore()
+        // reads past memo(), whose remembered hit may be stale.
+        if ((\is_array($value) || $value instanceof \Traversable) && $this->existsInStore((string) $key)) {
             $this->activeTags = [];
             return false;
         }

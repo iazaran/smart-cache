@@ -221,9 +221,10 @@ trait CacheInvalidation
      */
     protected function invalidatePattern(string $pattern): void
     {
+        // Numeric keys such as '123' come back as integers from the index.
         $matchedKeys = \array_filter(
-            SmartCache::getManagedKeys(),
-            fn ($key) => \is_string($key) && $this->matchesPattern($key, $pattern)
+            \array_map('strval', SmartCache::getManagedKeys()),
+            fn (string $key) => $this->matchesPattern($key, $pattern)
         );
 
         if ($matchedKeys === []) {

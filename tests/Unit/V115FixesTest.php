@@ -132,6 +132,19 @@ class V115FixesTest extends TestCase
         $this->assertSame($original, $this->smartCache->get('big'));
     }
 
+    public function test_memoized_add_is_not_rejected_by_a_stale_memoized_hit(): void
+    {
+        $this->smartCache->put('list', [1, 2], 60);
+        $memo = $this->smartCache->memo();
+        $this->assertSame([1, 2], $memo->get('list'));
+
+        // Another instance removes the entry; the memo still remembers the hit.
+        $this->smartCache->forget('list');
+
+        $this->assertTrue($memo->add('list', [3, 4], 60));
+        $this->assertSame([3, 4], $this->smartCache->get('list'));
+    }
+
     // -----------------------------------------------------------------
     // Namespaces
     // -----------------------------------------------------------------
@@ -233,6 +246,23 @@ class V115FixesTest extends TestCase
 
         $this->assertSame('tenant1', $this->smartCache->getNamespace());
         $this->assertFalse($this->smartCache->has('users_list_1'));
+    }
+
+    public function test_model_pattern_invalidation_matches_numeric_keys(): void
+    {
+        $this->smartCache->put('123', 'cached', 60);
+
+        $model = new class {
+            use CacheInvalidation;
+
+            public function flushPattern(string $pattern): void
+            {
+                $this->invalidatePattern($pattern);
+            }
+        };
+        $model->flushPattern('1*');
+
+        $this->assertFalse($this->smartCache->has('123'));
     }
 
     // -----------------------------------------------------------------
