@@ -244,7 +244,7 @@ SmartCache::tags(['users'])->put('user_1', $user, 3600);
 SmartCache::flushTags(['users']);
 ```
 
-Tags set with `tags()` apply to the next write. After a tagged read such as `get()` or `has()`, they still apply to a write of the same key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key. Use `flushTags()` to invalidate by tag; `flush()` clears the entire store.
+Tags set with `tags()` apply to the next write. If a tagged `get()` misses (or after a tagged `has()`), they still apply to a later write of that key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key. Use `flushTags()` to invalidate by tag; `flush()` clears the entire store.
 
 ### Model Auto-Invalidation
 
@@ -463,7 +463,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 595 tests, 2,236 assertions
+composer test            # 598 tests, 2,242 assertions
 composer test-coverage   # with code coverage
 ```
 

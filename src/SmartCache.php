@@ -125,16 +125,21 @@ class SmartCache implements SmartCacheContract, Repository
     protected array $activeTags = [];
 
     /**
-     * Keys that tagged reads were made for since tags() was called.
+     * Scope of the active tags, maintained by tags().
      *
-     * Null means the active tags apply to the next write, whatever its key.
-     * Otherwise they only apply to a write of one of these keys, so a tagged
-     * miss still tags the remember()-style write that follows it, but never
-     * an unrelated write.
+     * - tags:  the list tags() set. If $activeTags no longer equals it, for
+     *          example because a subclass assigned $activeTags directly, the
+     *          tags apply to the next write, as they did before 1.15.0.
+     * - fresh: no tagged lookup has happened since tags(); the next write is
+     *          tagged whatever its key.
+     * - keys:  keys looked up under these tags. After a lookup, the tags only
+     *          apply to a write of one of these keys, so a tagged miss still
+     *          tags the remember()-style write that follows it, but never an
+     *          unrelated write.
      *
-     * @var array<string, true>|null
+     * @var array{tags: array, fresh: bool, keys: array<string, true>}|null
      */
-    private ?array $activeTagsKeys = null;
+    private ?array $activeTagsScope = null;
 
     /**
      * @var array
@@ -2006,24 +2011,38 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function tags(string|array $tags): static
     {
-        $this->activeTags = \is_array($tags) ? $tags : [$tags];
-        $this->activeTagsKeys = null;
+        $tags = \is_array($tags) ? $tags : [$tags];
+
+        // Calling tags() again with the same list keeps the keys already looked
+        // up, so "look up several keys, then write the misses" stays tagged.
+        $keys = $this->activeTagsScope !== null && $this->activeTagsScope['tags'] === $tags
+            ? $this->activeTagsScope['keys']
+            : [];
+
+        $this->activeTags = $tags;
+        $this->activeTagsScope = ['tags' => $tags, 'fresh' => true, 'keys' => $keys];
+
         return $this;
     }
 
     /**
-     * Record that a tagged read was made for this key, so the active tags still
-     * apply to a later write of it (the remember() pattern), but not to writes
-     * of other keys.
+     * Record a tagged lookup of this key, so the active tags still apply to a
+     * later write of it (the remember() pattern), but not to writes of other keys.
      *
      * @param string $namespacedKey
      * @return void
      */
     private function bindActiveTags(string $namespacedKey): void
     {
-        if ($this->activeTags !== []) {
-            $this->activeTagsKeys[$namespacedKey] = true;
+        if ($this->activeTags === []
+            || $this->activeTagsScope === null
+            || $this->activeTagsScope['tags'] !== $this->activeTags
+        ) {
+            return;
         }
+
+        $this->activeTagsScope['fresh'] = false;
+        $this->activeTagsScope['keys'][$namespacedKey] = true;
     }
 
     /**
@@ -2035,14 +2054,15 @@ class SmartCache implements SmartCacheContract, Repository
     private function takeActiveTags(string $namespacedKey): array
     {
         $tags = $this->activeTags;
-        $boundKeys = $this->activeTagsKeys;
+        $scope = $this->activeTagsScope;
         $this->clearActiveTags();
 
-        if ($boundKeys !== null && !isset($boundKeys[$namespacedKey])) {
-            return [];
+        // Tags that tags() did not set keep the pre-1.15 behaviour.
+        if ($scope === null || $scope['tags'] !== $tags) {
+            return $tags;
         }
 
-        return $tags;
+        return $scope['fresh'] || isset($scope['keys'][$namespacedKey]) ? $tags : [];
     }
 
     /**
@@ -2051,7 +2071,7 @@ class SmartCache implements SmartCacheContract, Repository
     private function clearActiveTags(): void
     {
         $this->activeTags = [];
-        $this->activeTagsKeys = null;
+        $this->activeTagsScope = null;
     }
 
     /**
@@ -2064,7 +2084,7 @@ class SmartCache implements SmartCacheContract, Repository
     private function moveActiveTagsTo(SmartCache $instance): void
     {
         $instance->activeTags = $this->activeTags;
-        $instance->activeTagsKeys = $this->activeTagsKeys;
+        $instance->activeTagsScope = $this->activeTagsScope;
         $this->clearActiveTags();
     }
 

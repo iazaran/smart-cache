@@ -314,6 +314,46 @@ class V115FixesTest extends TestCase
         $this->assertFalse($this->smartCache->has('user_2'));
     }
 
+    public function test_repeated_tags_calls_keep_every_looked_up_key_tagged(): void
+    {
+        // Look up several keys through the facade, then write the misses.
+        $this->assertNull($this->smartCache->tags(['users'])->get('user_a'));
+        $this->assertNull($this->smartCache->tags(['users'])->get('user_b'));
+        $this->smartCache->put('user_a', 'cached', 60);
+
+        $this->smartCache->flushTags(['users']);
+
+        $this->assertFalse($this->smartCache->has('user_a'));
+    }
+
+    public function test_explicit_tags_before_a_write_always_apply(): void
+    {
+        $this->smartCache->tags(['users'])->get('missing');
+        $this->smartCache->tags(['users'])->put('user_5', 'cached', 60);
+
+        $this->smartCache->flushTags(['users']);
+
+        $this->assertFalse($this->smartCache->has('user_5'));
+    }
+
+    public function test_subclass_setting_active_tags_directly_keeps_the_previous_behaviour(): void
+    {
+        $cache = new class($this->rawStore(), $this->app['cache'], $this->app['config']) extends SmartCache {
+            public function withTags(array $tags): static
+            {
+                $this->activeTags = $tags;
+                return $this;
+            }
+        };
+
+        $this->assertNull($cache->withTags(['t'])->get('a'));
+        $cache->withTags(['t'])->put('b', 'cached', 60);
+
+        $cache->flushTags(['t']);
+
+        $this->assertFalse($cache->has('b'));
+    }
+
     public function test_rejected_remember_if_does_not_tag_the_next_write(): void
     {
         $this->smartCache->tags(['users'])->rememberIf('empty_result', 60, fn () => [], fn ($value) => $value !== []);
