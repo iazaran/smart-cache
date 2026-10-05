@@ -139,8 +139,11 @@ class ChunkingStrategy implements OptimizationStrategy
     public function optimize(mixed $value, array $context = []): mixed
     {
         // Convert to array if it's a collection
+        $collectionClass = null;
         if (\class_exists('\Illuminate\Support\Collection') && $value instanceof \Illuminate\Support\Collection) {
             $isCollection = true;
+            // Remember subclasses such as Eloquent\Collection so restore() can rebuild them.
+            $collectionClass = \get_class($value);
             $value = $value->all();
         } else {
             $isCollection = false;
@@ -181,6 +184,7 @@ class ChunkingStrategy implements OptimizationStrategy
             'chunk_keys' => $chunkKeys,
             'total_items' => count($value),
             'is_collection' => $isCollection,
+            'collection_class' => $collectionClass,
             'original_key' => $prefix,
             'driver' => $driver,
             'lazy_loading' => $this->lazyLoading,
@@ -235,10 +239,39 @@ class ChunkingStrategy implements OptimizationStrategy
 
         // Convert back to collection if needed
         if ($value['is_collection'] && \class_exists('\Illuminate\Support\Collection')) {
-            return new \Illuminate\Support\Collection($result);
+            return $this->restoreCollection($result, $value['collection_class'] ?? null);
         }
 
         return $result;
+    }
+
+    /**
+     * Rebuild the original collection class, e.g. Eloquent\Collection, so methods
+     * like load() and modelKeys() keep working on large chunked results.
+     *
+     * Entries written before the class was recorded, unknown classes, and
+     * subclasses that cannot be built from an items array fall back to a plain
+     * Support\Collection, which is what every earlier release returned.
+     *
+     * @param array $items
+     * @param mixed $class
+     * @return \Illuminate\Support\Collection
+     */
+    protected function restoreCollection(array $items, mixed $class): \Illuminate\Support\Collection
+    {
+        if (\is_string($class)
+            && $class !== \Illuminate\Support\Collection::class
+            && \class_exists($class)
+            && \is_subclass_of($class, \Illuminate\Support\Collection::class)
+        ) {
+            try {
+                return new $class($items);
+            } catch (\Throwable $e) {
+                // Fall through to a plain collection.
+            }
+        }
+
+        return new \Illuminate\Support\Collection($items);
     }
 
     /**

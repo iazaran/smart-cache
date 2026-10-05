@@ -5,11 +5,12 @@ namespace SmartCache\Facades;
 use Illuminate\Support\Facades\Facade;
 
 /**
- * @method static mixed get(string $key, mixed $default = null)
- * @method static bool put(string $key, mixed $value, \DateTimeInterface|\DateInterval|int|null $ttl = null)
+ * @method static mixed get(string|array $key, mixed $default = null)
+ * @method static bool put(string|array $key, mixed $value, \DateTimeInterface|\DateInterval|int|null $ttl = null)
  * @method static bool has(string $key)
  * @method static bool forget(string $key)
  * @method static bool forever(string $key, mixed $value)
+ * @method static bool touch(string $key, \DateTimeInterface|\DateInterval|int $ttl)
  * @method static mixed remember(string $key, \DateTimeInterface|\DateInterval|int|null $ttl, \Closure $callback)
  * @method static mixed rememberForever(string $key, \Closure $callback)
  * @method static mixed pull(string $key, mixed $default = null)
@@ -31,6 +32,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static mixed asyncSwr(string $key, callable|string $callback, int $ttl = 3600, int $staleTtl = 7200, ?string $queue = null)
  * @method static mixed rememberIf(string $key, mixed $ttl, \Closure $callback, callable $condition)
  * @method static mixed rememberWithStampedeProtection(string $key, int $ttl, \Closure $callback, float $beta = 1.0)
+ * @method static mixed rememberWithLock(string $key, \DateTimeInterface|\DateInterval|int|null $ttl, \Closure $callback, int $lockSeconds = 10, int $waitSeconds = 10)
  * @method static \SmartCache\SmartCache memo(?string $store = null)
  * @method static \SmartCache\SmartCache namespace(string $namespace)
  * @method static \SmartCache\SmartCache withoutNamespace()
@@ -87,6 +89,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static self addStrategy(\SmartCache\Contracts\OptimizationStrategy $strategy)
  * @method static array getStrategies()
  * @method static \SmartCache\Services\CostAwareCacheManager|null getCostAwareManager()
+ * @method static void reset()
  *
  * @see \SmartCache\SmartCache
  */

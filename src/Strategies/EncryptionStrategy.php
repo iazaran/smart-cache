@@ -3,7 +3,6 @@
 namespace SmartCache\Strategies;
 
 use Illuminate\Contracts\Encryption\Encrypter;
-use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
 
 /**
@@ -36,19 +35,41 @@ class EncryptionStrategy implements OptimizationStrategy
             return true;
         }
 
-        $key = $context['key'] ?? '';
-
-        if (\in_array($key, $this->encryptedKeys, true)) {
-            return true;
-        }
-
-        foreach ($this->encryptedPatterns as $pattern) {
-            if (@preg_match($pattern, $key)) {
+        foreach ($this->candidateKeys($context) as $key) {
+            if (\in_array($key, $this->encryptedKeys, true)) {
                 return true;
+            }
+
+            foreach ($this->encryptedPatterns as $pattern) {
+                if (@preg_match($pattern, $key)) {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    /**
+     * Keys to match against the configured keys and patterns.
+     *
+     * The context key carries the active namespace ("tenant:user_token_1"), while
+     * configured keys and patterns are written without it. Matching both forms
+     * keeps namespaced writes encrypted.
+     *
+     * @param array $context
+     * @return array<int, string>
+     */
+    protected function candidateKeys(array $context): array
+    {
+        $key = (string) ($context['key'] ?? '');
+        $namespace = $context['namespace'] ?? null;
+
+        if (\is_string($namespace) && $namespace !== '' && \str_starts_with($key, $namespace . ':')) {
+            return [$key, \substr($key, \strlen($namespace) + 1)];
+        }
+
+        return [$key];
     }
 
     /**
@@ -74,16 +95,16 @@ class EncryptionStrategy implements OptimizationStrategy
             return $value;
         }
 
+        // Throwing (rather than returning null) lets SmartCache treat the entry as
+        // corrupted: self-healing evicts it and remember() regenerates it, instead
+        // of serving null as a cache hit — e.g. after an APP_KEY rotation.
         try {
             $decrypted = $this->encrypter->decrypt($value['data']);
-            return \unserialize($decrypted);
         } catch (\Throwable $e) {
-            Log::warning('SmartCache: Failed to decrypt cached value', [
-                'key' => $context['key'] ?? 'unknown',
-                'error' => $e->getMessage(),
-            ]);
-            return null;
+            throw new \RuntimeException('SmartCache encrypted payload could not be decrypted: ' . $e->getMessage(), 0, $e);
         }
+
+        return \unserialize($decrypted);
     }
 
     /**

@@ -55,24 +55,39 @@ class CompressionStrategy implements OptimizationStrategy
             return strlen($value) > $this->threshold;
         }
 
-        // For arrays, use a quick estimate: count * average-item-size
-        // Only serialize if the estimate is close to the threshold
-        if (is_array($value)) {
-            $count = count($value);
-            // Rough estimate: each item ~50 bytes on average
-            $estimate = $count * 50;
-            // If clearly below threshold, skip
-            if ($estimate < $this->threshold / 2) {
-                return false;
-            }
-            // If clearly above threshold, apply
-            if ($estimate > $this->threshold * 2) {
-                return true;
-            }
-        }
+        try {
+            // A sample of a few entries can confirm that a long array is large, which
+            // saves a full serialize. It is never trusted to skip compression: one
+            // large value can sit anywhere, as in ['data' => $rows, 'meta' => $meta],
+            // a model's toArray(), or a list that starts with small items.
+            if (is_array($value) && $value !== []) {
+                $count = count($value);
+                $sampleSize = min(5, $count);
+                $sampleBytes = 0;
+                $sampled = 0;
 
-        // Fall back to serialize for borderline cases and objects
-        return strlen(serialize($value)) > $this->threshold;
+                // Each entry serializes as its key followed by its value; long keys
+                // with small values would otherwise be underestimated.
+                foreach ($value as $itemKey => $item) {
+                    if ($sampled >= $sampleSize) {
+                        break;
+                    }
+                    $sampleBytes += strlen(serialize($itemKey)) + strlen(serialize($item));
+                    $sampled++;
+                }
+
+                // If clearly above threshold, apply
+                if ((int) ceil($sampleBytes / $sampleSize) * $count > $this->threshold * 2) {
+                    return true;
+                }
+            }
+
+            // Measure everything else exactly
+            return strlen(serialize($value)) > $this->threshold;
+        } catch (\Throwable $e) {
+            // Values that cannot be serialized cannot be compressed either.
+            return false;
+        }
     }
 
     /**

@@ -4,13 +4,18 @@ namespace SmartCache;
 
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Cache\Store;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Factory as CacheManager;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Testing\Fakes\EventFake;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
+use SmartCache\Drivers\MemoizedCacheDriver;
+use SmartCache\Events\OptimizationApplied;
 use SmartCache\Services\CacheInvalidationService;
 use SmartCache\Services\CostAwareCacheManager;
 use SmartCache\Services\OrphanChunkCleanupService;
@@ -23,6 +28,12 @@ use SmartCache\Traits\DispatchesCacheEvents;
 class SmartCache implements SmartCacheContract, Repository
 {
     use HasLocks, DispatchesCacheEvents;
+
+    /**
+     * How often rememberWithLock() re-checks the cache while another process
+     * holds the regeneration lock.
+     */
+    private const REGENERATION_LOCK_POLL_MICROSECONDS = 100000;
 
     /**
      * Sentinel object used to distinguish between a cache miss and a stored null value.
@@ -112,6 +123,30 @@ class SmartCache implements SmartCacheContract, Repository
      * @var array
      */
     protected array $activeTags = [];
+
+    /**
+     * Scope of the active tags, maintained by tags().
+     *
+     * - tags:  the list tags() set. If $activeTags no longer equals it, for
+     *          example because a subclass assigned a different list to
+     *          $activeTags directly, the tags apply to the next write, as they
+     *          did before 1.15.0.
+     * - fresh: no tagged lookup has happened since tags(); the next write is
+     *          tagged whatever its key.
+     * - keys:  keys looked up under these tags. After a lookup, the tags only
+     *          apply to a write of one of these keys, so a tagged miss still
+     *          tags the remember()-style write that follows it, but never an
+     *          unrelated write.
+     *
+     * @var array{tags: array, fresh: bool, keys: array<string, true>}|null
+     */
+    private ?array $activeTagsScope = null;
+
+    /**
+     * Whether active tags are scoped to the keys looked up under them
+     * (smart-cache.tags.scoped, opt-in). When false, tags behave as in 1.14.
+     */
+    private bool $scopedTags = false;
 
     /**
      * @var array
@@ -255,6 +290,9 @@ class SmartCache implements SmartCacheContract, Repository
         // Initialize self-healing cache
         $this->selfHealingEnabled = (bool) $config->get('smart-cache.self_healing.enabled', true);
 
+        // Opt-in tag scoping; off keeps the 1.14 tag behaviour for existing apps
+        $this->scopedTags = (bool) $config->get('smart-cache.tags.scoped', false);
+
         // Initialize circuit breaker from config
         $this->circuitBreakerEnabled = (bool) $config->get('smart-cache.circuit_breaker.enabled', false);
 
@@ -292,6 +330,11 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function get($key, $default = null): mixed
     {
+        // Laravel's Repository treats an array of keys as many().
+        if (\is_array($key)) {
+            return $this->many($key);
+        }
+
         $key = $this->applyNamespace((string) $key);
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
@@ -301,14 +344,16 @@ class SmartCache implements SmartCacheContract, Repository
         if ($value === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
-            return $default;
+            $this->bindActiveTags($key);
+            return $this->resolveDefault($default);
         }
 
         $restoredValue = $this->maybeRestoreValue($value, $key);
         if ($restoredValue === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
-            return $default;
+            $this->bindActiveTags($key);
+            return $this->resolveDefault($default);
         }
 
         $this->recordPerformanceMetric('cache_hit', $key, $startTime);
@@ -318,9 +363,34 @@ class SmartCache implements SmartCacheContract, Repository
         $this->trackAccessFrequency($key);
 
         // Reset active tags to prevent leaking into next operation
-        $this->activeTags = [];
+        $this->clearActiveTags();
 
         return $restoredValue;
+    }
+
+    /**
+     * Resolve a default value the way Laravel's Repository does: a Closure
+     * default is called on a miss instead of being returned as-is.
+     *
+     * Cache calls inside the Closure must not take or clear the caller's tags,
+     * which belong to the key being looked up.
+     */
+    private function resolveDefault(mixed $default): mixed
+    {
+        if (!$default instanceof \Closure) {
+            return $default;
+        }
+
+        $tags = $this->activeTags;
+        $scope = $this->activeTagsScope;
+        $this->clearActiveTags();
+
+        try {
+            return $default();
+        } finally {
+            $this->activeTags = $tags;
+            $this->activeTagsScope = $scope;
+        }
     }
 
     /**
@@ -344,6 +414,11 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function put($key, $value, $ttl = null): bool
     {
+        // Laravel's Repository treats put(array, $ttl) as putMany().
+        if (\is_array($key)) {
+            return $this->putMany($key, $value);
+        }
+
         $applyConfiguredJitter = !$this->skipNextConfiguredJitter;
         $this->skipNextConfiguredJitter = false;
 
@@ -372,6 +447,10 @@ class SmartCache implements SmartCacheContract, Repository
             $ttl = $this->applyJitter($ttl);
         }
 
+        // Take this write's tags before optimizing: an OptimizationApplied
+        // listener that uses the cache must not take or clear them.
+        $tags = $this->takeActiveTags($key);
+
         // Wrap null so the underlying store can distinguish it from a cache miss
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
@@ -381,8 +460,8 @@ class SmartCache implements SmartCacheContract, Repository
         // metadata indexes can survive invalidation indefinitely.
         $this->trackKey($key);
 
-        if (!empty($this->activeTags)) {
-            $this->associateTagsWithKey($key, $this->activeTags);
+        if ($tags !== []) {
+            $this->associateTagsWithKey($key, $tags);
         }
 
         // Cache DNA — skip the write when the content is identical AND the entry
@@ -453,6 +532,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function has($key): bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         return $this->cache->has($key);
     }
 
@@ -473,6 +553,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function forget($key): bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $value = $this->cache->get($key);
 
         // If value is chunked, clean up all chunk keys
@@ -512,6 +593,8 @@ class SmartCache implements SmartCacheContract, Repository
     public function forever($key, $value): bool
     {
         $key = $this->applyNamespace((string) $key);
+        // Taken before optimizing, as in put()
+        $tags = $this->takeActiveTags($key);
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, null);
 
@@ -519,8 +602,8 @@ class SmartCache implements SmartCacheContract, Repository
         $this->trackKey($key);
 
         // Handle active tags
-        if (!empty($this->activeTags)) {
-            $this->associateTagsWithKey($key, $this->activeTags);
+        if ($tags !== []) {
+            $this->associateTagsWithKey($key, $tags);
         }
 
         // forever() does not maintain a DNA record; a stale one left over from an
@@ -548,7 +631,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Measure regeneration cost for cost-aware caching
         $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
-        $value = $callback();
+        $value = $this->callKeepingActiveTags($callback);
         $this->put($key, $value, $ttl);
 
         // Record regeneration cost and value size
@@ -592,7 +675,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Measure regeneration cost for cost-aware caching
         $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
-        $value = $callback();
+        $value = $this->callKeepingActiveTags($callback);
         $this->forever($key, $value);
 
         // Record regeneration cost and value size
@@ -629,6 +712,7 @@ class SmartCache implements SmartCacheContract, Repository
         $instance->activeNamespace = $this->activeNamespace;
         $instance->circuitBreakerEnabled = $this->circuitBreakerEnabled;
         $instance->costAwareManager = $this->costAwareManager;
+        $this->moveActiveTagsTo($instance);
 
         return $instance;
     }
@@ -672,6 +756,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function touch($key, $ttl): bool
     {
         $namespacedKey = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($namespacedKey);
 
         $sentinel = static::sentinel();
         $rawValue = $this->cache->get($namespacedKey, $sentinel);
@@ -779,7 +864,17 @@ class SmartCache implements SmartCacheContract, Repository
     public function add($key, $value, $ttl = null): bool
     {
         $namespacedKey = $this->applyNamespace((string) $key);
-        $tags = $this->activeTags;
+        $tags = $this->takeActiveTags($namespacedKey);
+
+        // Chunking writes chunk keys straight to the store, and those keys are
+        // derived from the cache key. Bail out before that when the entry already
+        // exists, so a failing add() cannot overwrite the live entry's chunks.
+        // Only arrays and collections can be chunked, so scalar flags and
+        // idempotency markers keep their single round trip. existsInStore()
+        // reads past memo(), whose remembered hit may be stale.
+        if ((\is_array($value) || $value instanceof \Traversable) && $this->existsInStore((string) $key)) {
+            return false;
+        }
 
         // Use the underlying cache's atomic add() if available
         $storable = static::wrapNullValue($value);
@@ -794,8 +889,6 @@ class SmartCache implements SmartCacheContract, Repository
                 if (!empty($tags)) {
                     $this->associateTagsWithKey($namespacedKey, $tags);
                 }
-            } else {
-                $this->activeTags = [];
             }
 
             return $result;
@@ -803,9 +896,11 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Fallback: non-atomic approach for stores that don't support add()
         if ($this->has($key)) {
-            $this->activeTags = [];
             return false;
         }
+
+        // Hand the tags to put(), which applies them to this key.
+        $this->activeTags = $tags;
 
         return $this->put($key, $value, $ttl);
     }
@@ -820,6 +915,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function increment($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $result = $this->cache->increment($key, $value);
 
         if ($result !== false) {
@@ -839,6 +935,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function decrement($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $result = $this->cache->decrement($key, $value);
 
         if ($result !== false) {
@@ -1199,7 +1296,7 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
-        $value = $callback();
+        $value = $this->callKeepingActiveTags($callback);
 
         if ($condition($value)) {
             $this->put($key, $value, $ttl);
@@ -1226,6 +1323,7 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $context = [
             'key' => $key,
+            'namespace' => $this->activeNamespace,
             'ttl' => $ttl,
             'driver' => $this->driver,
             'cache' => $this->cache,
@@ -1237,7 +1335,7 @@ class SmartCache implements SmartCacheContract, Repository
         foreach ($this->strategies as $strategy) {
             if ($strategy->shouldApply($value, $context)) {
                 try {
-                    return $strategy->optimize($value, $context);
+                    $optimized = $strategy->optimize($value, $context);
                 } catch (\Throwable $e) {
                     if ($this->config->get('smart-cache.fallback.log_errors', true)) {
                         Log::warning("SmartCache optimization failed for {$key}: " . $e->getMessage());
@@ -1249,10 +1347,53 @@ class SmartCache implements SmartCacheContract, Repository
 
                     throw $e;
                 }
+
+                // Sizes cost a serialize() each, so only measure them for a
+                // listener, or for Event::fake() in an application's tests.
+                if ($this->shouldDispatchEvent('optimization_applied')
+                    && $this->optimizationAppliedIsObserved()
+                ) {
+                    $this->dispatchOptimizationApplied(
+                        $key,
+                        $strategy->getIdentifier(),
+                        $this->calculateDataSize($value),
+                        $this->calculateDataSize($optimized)
+                    );
+                }
+
+                return $optimized;
             }
         }
 
         return $value;
+    }
+
+    /**
+     * Whether anything will receive an OptimizationApplied event: a listener,
+     * or Event::fake() in an application's tests.
+     *
+     * An application test that mocks the Event facade does not expect a
+     * hasListeners() call; that counts as nobody listening.
+     *
+     * @return bool
+     */
+    private function optimizationAppliedIsObserved(): bool
+    {
+        if (Event::getFacadeRoot() instanceof EventFake) {
+            return true;
+        }
+
+        try {
+            // Event::spy() returns null rather than a bool.
+            return (bool) Event::hasListeners(OptimizationApplied::class);
+        } catch (\BadMethodCallException $e) {
+            // Mockery records unexpected calls even when caught.
+            if (\method_exists($e, 'dismiss')) {
+                $e->dismiss();
+            }
+
+            return false;
+        }
     }
 
     /**
@@ -1456,7 +1597,7 @@ class SmartCache implements SmartCacheContract, Repository
             // Best-effort persist; never let a reset() call break the request lifecycle.
         }
 
-        $this->activeTags = [];
+        $this->clearActiveTags();
         $this->activeNamespace = null;
         $this->dependencies = [];
         $this->managedKeys = [];
@@ -1596,6 +1737,10 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Determines the cache driver from the store instance.
      *
+     * Returns Laravel's driver name (RedisStore => redis, DynamoDbStore =>
+     * dynamodb), which is how the smart-cache.drivers config is keyed. Earlier
+     * releases produced "redis_", so that config never applied.
+     *
      * @param mixed $store
      * @return string|null
      */
@@ -1605,7 +1750,7 @@ class SmartCache implements SmartCacheContract, Repository
         $parts = \explode('\\', $class);
         $storeName = \end($parts);
 
-        return \strtolower(\preg_replace('/Store$/', '', \preg_replace('/(?<!^)[A-Z]/', '_$0', $storeName)));
+        return \strtolower((string) \preg_replace('/Store$/', '', $storeName));
     }
 
     /**
@@ -1623,6 +1768,10 @@ class SmartCache implements SmartCacheContract, Repository
     public function flexible(string $key, array $durations, \Closure $callback): mixed
     {
         $namespacedKey = $this->applyNamespace((string) $key);
+        // With scoped tags, active tags tag this key whenever it is regenerated
+        // and are used up here so they cannot tag the next unrelated write.
+        // Otherwise flexible() leaves them alone, as in 1.14.
+        $tags = $this->scopedTags ? $this->takeActiveTags($namespacedKey) : [];
         $freshTtl = $durations[0] ?? 3600;  // Default 1 hour fresh
         $staleTtl = $durations[1] ?? 7200;  // Default 2 hours stale (absolute time)
         $totalTtl = $staleTtl;
@@ -1651,10 +1800,12 @@ class SmartCache implements SmartCacheContract, Repository
                 $staleValue = $this->maybeRestoreValue($cachedValue, $namespacedKey);
 
                 if ($staleValue === $sentinel) {
+                    $this->tagRegeneratedKey($namespacedKey, $tags);
                     return $this->generateAndCache($namespacedKey, $durations, $callback);
                 }
 
                 // Historical 1.x behavior: refresh in-process before returning stale
+                $this->tagRegeneratedKey($namespacedKey, $tags);
                 $this->refreshInBackground($namespacedKey, $durations, $callback);
 
                 return $staleValue;
@@ -1662,7 +1813,23 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         // No cache or expired beyond stale period - generate fresh data
+        $this->tagRegeneratedKey($namespacedKey, $tags);
         return $this->generateAndCache($namespacedKey, $durations, $callback);
+    }
+
+    /**
+     * Tag a key that flexible() is about to (re)generate. Like put(), the tag
+     * index is written before the value.
+     *
+     * @param string $namespacedKey
+     * @param array $tags
+     * @return void
+     */
+    private function tagRegeneratedKey(string $namespacedKey, array $tags): void
+    {
+        if ($tags !== []) {
+            $this->associateTagsWithKey($namespacedKey, $tags);
+        }
     }
 
     /**
@@ -1810,7 +1977,9 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function refreshAsync(string $key, callable|string $callback, ?int $ttl = null, ?string $queue = null): void
     {
-        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $this->activeTags);
+        // The queue worker has no active namespace, so the job carries it along.
+        $tags = $this->scopedTags ? $this->takeActiveTags($this->applyNamespace($key)) : $this->activeTags;
+        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $tags, $this->activeNamespace);
 
         if ($queue !== null) {
             $job->onQueue($queue);
@@ -1844,15 +2013,30 @@ class SmartCache implements SmartCacheContract, Repository
             if ($metadata && isset($metadata['created_at'])) {
                 $age = time() - $metadata['created_at'];
                 if ($age > $ttl) {
+                    // Restart the freshness window first so the requests that arrive
+                    // before the job finishes keep serving stale instead of each
+                    // queueing another refresh job.
+                    $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
+
                     // Value is stale, queue background refresh
-                    $this->refreshAsync($key, $callback, $staleTtl, $queue);
+                    try {
+                        $this->refreshAsync($key, $callback, $staleTtl, $queue);
+                    } catch (\Throwable $e) {
+                        // Nothing was queued: put the stale timestamp back so the
+                        // next request retries instead of waiting out $ttl.
+                        $this->cache->put("_sc_meta:{$namespacedKey}", $metadata, $staleTtl);
+
+                        throw $e;
+                    }
                 }
             }
             return $value;
         }
 
         // No cached value, we need to compute it synchronously
-        $freshValue = \is_callable($callback) ? $callback() : $this->resolveCallback($callback);
+        $freshValue = $this->callKeepingActiveTags(
+            fn () => \is_callable($callback) ? $callback() : $this->resolveCallback($callback)
+        );
         $this->put($key, $freshValue, $staleTtl);
         $namespacedKey = $this->applyNamespace((string) $key);
         $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
@@ -1887,8 +2071,115 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function tags(string|array $tags): static
     {
-        $this->activeTags = \is_array($tags) ? $tags : [$tags];
+        $tags = \is_array($tags) ? $tags : [$tags];
+
+        // Calling tags() again with the same list keeps the keys already looked
+        // up, so "look up several keys, then write the misses" stays tagged.
+        $keys = $this->activeTagsScope !== null && $this->activeTagsScope['tags'] === $tags
+            ? $this->activeTagsScope['keys']
+            : [];
+
+        $this->activeTags = $tags;
+        $this->activeTagsScope = ['tags' => $tags, 'fresh' => true, 'keys' => $keys];
+
         return $this;
+    }
+
+    /**
+     * Record a tagged lookup of this key, so the active tags still apply to a
+     * later write of it (the remember() pattern), but not to writes of other keys.
+     *
+     * @param string $namespacedKey
+     * @return void
+     */
+    private function bindActiveTags(string $namespacedKey): void
+    {
+        if (!$this->scopedTags
+            || $this->activeTags === []
+            || $this->activeTagsScope === null
+            || $this->activeTagsScope['tags'] !== $this->activeTags
+        ) {
+            return;
+        }
+
+        $this->activeTagsScope['fresh'] = false;
+        $this->activeTagsScope['keys'][$namespacedKey] = true;
+    }
+
+    /**
+     * Use up the active tags for a write of this key.
+     *
+     * @param string $namespacedKey
+     * @return array Tags to associate with the key; empty when none apply.
+     */
+    private function takeActiveTags(string $namespacedKey): array
+    {
+        $tags = $this->activeTags;
+        $scope = $this->activeTagsScope;
+        $this->clearActiveTags();
+
+        // Without scoping, and for tags that tags() did not set, the next write
+        // takes the tags whatever its key, as in 1.14.
+        if (!$this->scopedTags || $scope === null || $scope['tags'] !== $tags) {
+            return $tags;
+        }
+
+        return $scope['fresh'] || isset($scope['keys'][$namespacedKey]) ? $tags : [];
+    }
+
+    /**
+     * @return void
+     */
+    private function clearActiveTags(): void
+    {
+        $this->activeTags = [];
+        $this->activeTagsScope = null;
+    }
+
+    /**
+     * Run a value callback so that cache calls inside it cannot use up the
+     * active tags, which belong to the key the value is written to (scoped
+     * tags only; otherwise tags behave as in 1.14).
+     *
+     * @param \Closure $callback
+     * @return mixed
+     */
+    private function callKeepingActiveTags(\Closure $callback): mixed
+    {
+        if (!$this->scopedTags) {
+            return $callback();
+        }
+
+        $tags = $this->activeTags;
+        $scope = $this->activeTagsScope;
+
+        try {
+            return $callback();
+        } finally {
+            $this->activeTags = $tags;
+            $this->activeTagsScope = $scope;
+        }
+    }
+
+    /**
+     * Hand the active tags to an instance created by store() or memo(), which
+     * is where the caller's next write goes (scoped tags only).
+     *
+     * @param SmartCache $instance
+     * @return void
+     */
+    private function moveActiveTagsTo(SmartCache $instance): void
+    {
+        // Only tags set right before store()/memo() belong to the new instance.
+        // After a lookup they belong to that lookup's key, for example inside a
+        // tagged remember() callback.
+        if (!$this->scopedTags || !($this->activeTagsScope['fresh'] ?? false)) {
+            return;
+        }
+
+        $instance->activeTags = $this->activeTags;
+        $instance->activeTagsScope = $this->activeTagsScope;
+        $this->clearActiveTags();
     }
 
     /**
@@ -2101,7 +2392,7 @@ class SmartCache implements SmartCacheContract, Repository
             });
         }
 
-        $this->activeTags = [];
+        $this->clearActiveTags();
     }
 
     /**
@@ -2516,7 +2807,7 @@ class SmartCache implements SmartCacheContract, Repository
             if ($metadata && isset($metadata['created_at'])) {
                 if ($this->rateLimiter()->shouldRefreshProbabilistically($ttl, $metadata['created_at'], $beta)) {
                     if ($this->rateLimiter()->attempt("refresh:{$key}", 1, $ttl)) {
-                        $value = $callback();
+                        $value = $this->callKeepingActiveTags($callback);
                         $this->put($key, $value, $ttl);
                         $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => \time(), 'stored_at' => \time()], $ttl);
                     }
@@ -2526,12 +2817,162 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         // No cached value, compute and store
-        $value = $callback();
+        $value = $this->callKeepingActiveTags($callback);
         $this->put($key, $value, $ttl);
         $namespacedKey = $this->applyNamespace((string) $key);
         $this->cache->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $ttl);
 
         return $value;
+    }
+
+    /**
+     * Remember a value, letting only one process regenerate it on a cache miss.
+     *
+     * On a miss the callback runs under an atomic lock, so a cold or freshly
+     * invalidated key is rebuilt once instead of by every concurrent request.
+     * Processes that arrive while the lock is held wait up to $waitSeconds and
+     * then read the value the lock holder stored. Cache hits never touch the lock.
+     *
+     * When the store does not support locks, the lock backend fails, or the wait
+     * times out, the callback runs without the lock, so this method never fails
+     * where remember() would succeed.
+     *
+     * @param string $key
+     * @param \DateTimeInterface|\DateInterval|int|null $ttl
+     * @param \Closure $callback
+     * @param int $lockSeconds Maximum seconds the lock is held; keep it above the regeneration time
+     * @param int $waitSeconds Seconds a waiting process blocks before regenerating without the lock
+     * @return mixed
+     */
+    public function rememberWithLock(
+        string $key,
+        mixed $ttl,
+        \Closure $callback,
+        int $lockSeconds = 10,
+        int $waitSeconds = 10
+    ): mixed {
+        $sentinel = static::sentinel();
+        $value = $this->get($key, $sentinel);
+
+        if ($value !== $sentinel) {
+            if ($this->costAwareManager !== null) {
+                $this->costAwareManager->recordAccess($this->applyNamespace($key));
+            }
+            return $value;
+        }
+
+        $valueAppeared = false;
+        $lock = $this->acquireRegenerationLock($key, $lockSeconds, $waitSeconds, $valueAppeared);
+
+        try {
+            // Another process may have stored the value while we waited, or just
+            // before we took the lock. has() keeps this re-check out of the
+            // hit/miss metrics.
+            if ($valueAppeared || $this->existsInStore($key)) {
+                $value = $this->get($key, $sentinel);
+
+                if ($value !== $sentinel) {
+                    return $value;
+                }
+            }
+
+            $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
+            $value = $this->callKeepingActiveTags($callback);
+            $this->put($key, $value, $ttl);
+
+            if ($this->costAwareManager !== null && $startTime !== null) {
+                $costMs = (\microtime(true) - $startTime) * 1000;
+                $size = $this->calculateDataSize($value);
+                $this->costAwareManager->recordCost($this->applyNamespace($key), $costMs, $size);
+            }
+
+            return $value;
+        } finally {
+            if ($lock !== null) {
+                try {
+                    $lock->release();
+                } catch (\Throwable $releaseError) {
+                    // Best-effort release; the lock expires on its own TTL.
+                }
+            }
+        }
+    }
+
+    /**
+     * Acquire the lock that serialises regeneration of a missing key.
+     *
+     * While another process holds the lock, this polls the cache and stops
+     * waiting as soon as the value appears, so waiters do not queue for the lock
+     * just to read it.
+     *
+     * Returns null when the value appeared, the store has no lock support, the
+     * lock backend fails (for example a database store without the cache_locks
+     * table), or the wait times out. The caller then re-checks the cache and
+     * regenerates without the lock only if the value is still missing.
+     *
+     * @param string $key
+     * @param int $lockSeconds
+     * @param int $waitSeconds
+     * @param bool $valueAppeared Set to true when waiting ended because the value was stored
+     * @return Lock|null
+     */
+    private function acquireRegenerationLock(string $key, int $lockSeconds, int $waitSeconds, bool &$valueAppeared): ?Lock
+    {
+        $store = $this->cache->getStore();
+
+        if (!$store instanceof LockProvider) {
+            return null;
+        }
+
+        $namespacedKey = $this->applyNamespace($key);
+
+        try {
+            // Hashed so a long key cannot push the lock name past a store's key-length limit.
+            $lock = $store->lock('_sc_remember_lock:' . \sha1($namespacedKey), \max(1, $lockSeconds));
+            $deadline = \microtime(true) + \max(0, $waitSeconds);
+
+            while (!$lock->get()) {
+                if ($this->existsInStore($key)) {
+                    $valueAppeared = true;
+                    return null;
+                }
+
+                if (\microtime(true) >= $deadline) {
+                    return null;
+                }
+
+                \usleep(self::REGENERATION_LOCK_POLL_MICROSECONDS);
+            }
+
+            return $lock;
+        } catch (\Throwable $e) {
+            if ($this->config->get('smart-cache.fallback.log_errors', true)) {
+                Log::warning("SmartCache could not lock regeneration of {$namespacedKey}: " . $e->getMessage());
+            }
+
+            return null;
+        }
+    }
+
+    /**
+     * Whether the key exists in the store right now.
+     *
+     * memo() remembers hits and misses for the rest of the request, which could
+     * hide a change another process made meanwhile, so that memory is dropped
+     * first, in every layer when memo() instances are nested.
+     *
+     * @param string $key
+     * @return bool
+     */
+    private function existsInStore(string $key): bool
+    {
+        $namespacedKey = $this->applyNamespace($key);
+
+        for ($layer = $this->cache; $layer instanceof MemoizedCacheDriver; $layer = $layer->getRepository()) {
+            $layer->forgetMemoizedKey($namespacedKey);
+        }
+
+        return $this->cache->has($namespacedKey);
     }
 
     /**
@@ -2862,8 +3303,9 @@ class SmartCache implements SmartCacheContract, Repository
             'metadata' => $metadata
         ];
 
-        if (\count($metrics['recent']) > 100) {
-            $metrics['recent'] = \array_slice($metrics['recent'], -100);
+        $recentLimit = \max(1, (int) $this->config->get('smart-cache.monitoring.recent_entries_limit', 100));
+        if (\count($metrics['recent']) > $recentLimit) {
+            $metrics['recent'] = \array_slice($metrics['recent'], -$recentLimit);
         }
 
         if ($metrics['count'] % 50 === 0) {
@@ -3048,8 +3490,13 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $results = [];
 
-        foreach ($keys as $key) {
-            $results[$key] = $this->get($key);
+        // Like Laravel's Repository, accept a list of keys or ['key' => default].
+        foreach ($keys as $key => $default) {
+            if (\is_string($key)) {
+                $results[$key] = $this->get($key, $default);
+            } else {
+                $results[$default] = $this->get($default);
+            }
         }
 
         return $results;
@@ -3109,12 +3556,23 @@ class SmartCache implements SmartCacheContract, Repository
         $memoizedRepository = new \SmartCache\Drivers\MemoizedCacheDriver($repository);
 
         // Create a new SmartCache instance with the memoized repository
-        return new static(
+        $instance = new static(
             $memoizedRepository,
             $this->cacheManager,
             $this->config,
             $this->strategies
         );
+
+        // Preserve runtime configuration, as store() does. Dropping the namespace
+        // would make a tenant-scoped memo() read and write global keys.
+        $instance->jitterEnabled = $this->jitterEnabled;
+        $instance->jitterPercentage = $this->jitterPercentage;
+        $instance->activeNamespace = $this->activeNamespace;
+        $instance->circuitBreakerEnabled = $this->circuitBreakerEnabled;
+        $instance->costAwareManager = $this->costAwareManager;
+        $this->moveActiveTagsTo($instance);
+
+        return $instance;
     }
 
     /**

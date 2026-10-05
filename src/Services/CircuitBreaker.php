@@ -250,7 +250,7 @@ class CircuitBreaker
     public function execute(callable $callback, mixed $fallback = null): mixed
     {
         if (!$this->isAvailable()) {
-            return $fallback;
+            return $this->resolveFallback($fallback);
         }
 
         try {
@@ -266,7 +266,7 @@ class CircuitBreaker
     public function executeWithFallback(callable $callback, mixed $fallback = null): mixed
     {
         if (!$this->isAvailable()) {
-            return $fallback;
+            return $this->resolveFallback($fallback);
         }
 
         try {
@@ -275,8 +275,17 @@ class CircuitBreaker
             return $result;
         } catch (\Throwable $e) {
             $this->recordFailure($e);
-            return $fallback;
+            return $this->resolveFallback($fallback);
         }
+    }
+
+    /**
+     * A Closure fallback is called to produce the value; anything else is
+     * returned as-is, matching Laravel's value() helper.
+     */
+    private function resolveFallback(mixed $fallback): mixed
+    {
+        return $fallback instanceof \Closure ? $fallback() : $fallback;
     }
 }
 

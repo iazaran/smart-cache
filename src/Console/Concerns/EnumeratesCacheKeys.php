@@ -112,7 +112,7 @@ trait EnumeratesCacheKeys
                             : [$cursor, $batch];
                     };
 
-                    foreach ($this->scanRedisUsing($scanner) as $key) {
+                    foreach ($this->scanRedisUsing($scanner, $this->initialScanCursor(true)) as $key) {
                         $keys[$key] = true;
                     }
                 }
@@ -168,20 +168,41 @@ trait EnumeratesCacheKeys
         ], $options);
 
         return $this->scanRedisUsing(
-            static fn ($cursor) => $connection->scan($cursor, $scanOptions)
+            static fn ($cursor) => $connection->scan($cursor, $scanOptions),
+            $this->initialScanCursor($connection instanceof \Illuminate\Redis\Connections\PhpRedisConnection)
         );
+    }
+
+    /**
+     * The cursor a fresh SCAN must start from.
+     *
+     * phpredis treats an integer 0 as "iteration finished" and returns nothing,
+     * so a scan started from 0 silently enumerates no keys. Mirrors Laravel's
+     * RedisStore: phpredis 6.1+ starts from null, Predis and older phpredis
+     * start from the string '0'.
+     *
+     * @param bool $isPhpRedis
+     * @return string|null
+     */
+    private function initialScanCursor(bool $isPhpRedis): ?string
+    {
+        if ($isPhpRedis && \version_compare((string) \phpversion('redis'), '6.1.0', '>=')) {
+            return null;
+        }
+
+        return '0';
     }
 
     /**
      * Run and validate a complete cursor-based Redis scan.
      *
      * @param \Closure $scanner
+     * @param string|null $cursor The starting cursor, see initialScanCursor()
      * @return array
      */
-    private function scanRedisUsing(\Closure $scanner): array
+    private function scanRedisUsing(\Closure $scanner, ?string $cursor = '0'): array
     {
         $keys = [];
-        $cursor = 0;
         // Backstop: a driver that never returns a zero cursor must not spin forever.
         $iterations = 0;
 

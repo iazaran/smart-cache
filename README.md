@@ -132,6 +132,9 @@ $data = SmartCache::asyncSwr('dashboard_stats', RefreshDashboardStats::class, 30
 ### Stampede Protection
 
 ```php
+// Single-flight regeneration — on a miss, only one process runs the callback
+$report = SmartCache::rememberWithLock('daily_report', 3600, fn() => Report::build());
+
 // XFetch algorithm — probabilistic early refresh
 $data = SmartCache::rememberWithStampedeProtection('key', 3600, fn() => expensiveQuery());
 
@@ -146,6 +149,8 @@ SmartCache::withJitter(0.1)->put('popular_data', $data, 3600);
 SmartCache::putWithJitter('popular_data', $data, 3600, 0.2);
 SmartCache::rememberWithJitter('report', 3600, 0.1, fn() => Analytics::generate());
 ```
+
+> **Single-flight regeneration (v1.15.0+).** When a hot key is missing — after a deploy, a flush, or an invalidation — `remember()` lets every concurrent request run the callback at once. `rememberWithLock()` runs it under an atomic lock instead: one process regenerates, the others wait (10 s by default) and then read the stored value. Cache hits never touch the lock. If the store has no lock support (`LockProvider`) or the wait times out, the callback runs anyway, so the method never fails where `remember()` would succeed. On the database cache driver, locks need the `cache_locks` table that `php artisan cache:table` creates. Tune both limits per call: `rememberWithLock($key, $ttl, $callback, lockSeconds: 30, waitSeconds: 5)`.
 
 ### Write Deduplication (Cache DNA)
 
@@ -193,6 +198,8 @@ SmartCache::suggestEvictions(5);         // lowest-value entries to remove
 ### Circuit Breaker & Fallback
 
 ```php
+// With the circuit breaker enabled (circuit_breaker.enabled or withCircuitBreaker()),
+// a failing or open circuit returns the fallback; a Closure fallback is called.
 $data = SmartCache::withFallback(
     fn() => SmartCache::get('key'),
     fn() => $this->fallbackSource()
@@ -237,6 +244,8 @@ SmartCache::tags(['users'])->put('user_1', $user, 3600);
 SmartCache::flushTags(['users']);
 ```
 
+Use `flushTags()` to invalidate by tag; `flush()` clears the entire store. By default, tags set with `tags()` stay active until a write uses them, so after a tagged `get()` that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set `smart-cache.tags.scoped = true` (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling `tags()`, or use `tags()->remember()`.
+
 ### Model Auto-Invalidation
 
 ```php
@@ -280,6 +289,8 @@ Tags should describe the data used to build a response, not the controller that 
     'patterns' => ['/^user_token_/', '/^payment_/'],  // regex match
 ],
 ```
+
+Keys and patterns match with or without the active namespace. Matching values are always encrypted, whatever their size: encryption takes precedence over compression and chunking, so a large encrypted value is stored as a single entry.
 
 ### Adaptive Compression
 
@@ -368,7 +379,7 @@ SmartCache stores internal metadata in the selected cache store. Depending on th
 
 ## Best Practices & Troubleshooting
 
-- **Binary Data:** If caching already compressed objects like images, video, or encrypted data, disable `compression` for those specific cache keys as they waste CPU cycles without yielding size reductions.
+- **Binary Data:** Already-compressed payloads such as images, video, or encrypted data gain nothing from gzip. Write those keys through `SmartCache::repository()`, which bypasses SmartCache optimization.
 - **Memory Limits with Chunking:** Large multi-megabyte datasets automatically trigger the 'chunking' strategy. For arrays over 100,000 items, verify `memory_limit` in `php.ini` or enable `lazy_loading` via config to avoid server crashes.
 - **Provider Not Found:** Laravel aggressively caches service providers and aliases. Always run `php artisan optimize:clear` after upgrading or installing this package if encountering *"Class 'SmartCache' not found"*.
 - **IDE Autocomplete:** Modern IDEs (PhpStorm, VSCode) completely resolve `SmartCache::` magical methods automatically via our included Facade PHPDocs without needing `ide-helper` generated files.
@@ -409,6 +420,7 @@ return [
     'managed_keys'    => ['max_tracked' => 0],       // v1.12.0: 0 = unlimited (default)
     'metadata_lock'   => ['enabled' => true, 'ttl' => 5, 'wait' => 1],
     'model_invalidation' => ['after_commit' => true],
+    'tags'            => ['scoped' => false],        // v1.15.0: opt-in scoped tags (recommended for new apps)
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
     'warmers'         => [],                    // Cache warmer classes for smart-cache:warm
 ];
@@ -452,7 +464,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 531 tests, 2,078 assertions
+composer test            # 605 tests, 2,251 assertions
 composer test-coverage   # with code coverage
 ```
 

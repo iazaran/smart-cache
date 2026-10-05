@@ -1171,7 +1171,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Configure which cache drivers should use which optimization strategies.
-    | Set to null to use the global strategies configuration.
+    | Set to null to use the global strategies configuration. Keys are Laravel
+    | driver names (redis, memcached, file, database, dynamodb, array); these
+    | settings apply since 1.15.0.
     |
     */
     'drivers' => [
@@ -1181,7 +1183,7 @@ return [
             'chunking' => true,
         ],
         'memcached' => [
-            'compression' => false, // Memcached has its own compression
+            'compression' => true, // false = rely on php-memcached's own (weaker) compression
             'chunking' => true,
         ],
     ],
@@ -1288,10 +1290,14 @@ SmartCache::tags(['users', 'profiles'])->put('user_1', $user1, 3600);
 SmartCache::tags(['users', 'profiles'])->put('user_2', $user2, 3600);
 
 // Clear all cache with specific tags
-SmartCache::tags(['users'])->flush(); // Clears both user_1 and user_2
+SmartCache::flushTags(['users']); // Clears both user_1 and user_2
 
 // Clear cache with multiple tags
-SmartCache::tags(['users', 'profiles'])->flush();</code></pre>
+SmartCache::flushTags(['users', 'profiles']);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Use <code>flushTags()</code>, not <code>flush()</code>.</strong> <code>flush()</code> clears the entire cache store. By default, tags set with <code>tags()</code> stay active until a write uses them, so after a tagged <code>get()</code> that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set <code>smart-cache.tags.scoped = true</code> (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling <code>tags()</code>, or use <code>tags()-&gt;remember()</code>.
+                    </div>
 
                     <h2>Cache Locking</h2>
                     <p>Prevent cache stampede with atomic locks:</p>
@@ -1445,6 +1451,10 @@ return [
 
     'model_invalidation' => [
         'after_commit' => true,      // Flush after DB commit when inside a transaction
+    ],
+
+    'tags' => [
+        'scoped' => false,           // v1.15.0: opt-in scoped tags (recommended for new apps)
     ],
 
     'monitoring' => [
@@ -1711,7 +1721,8 @@ Event::listen(CacheMissed::class, function ($event) {
 });
 
 Event::listen(OptimizationApplied::class, function ($event) {
-    Log::info("Optimized {$event->key}: {$event->strategy} - {$event->ratio}% reduction");
+    $saved = round((1 - $event->ratio) * 100, 1);
+    Log::info("Optimized {$event->key}: {$event->strategy} - {$saved}% smaller");
 });
 
 Event::listen(TagFlushed::class, function ($event) {
@@ -1755,8 +1766,9 @@ config(['smart-cache.strategies.compression.mode' => 'adaptive']);
 SmartCache::put('hot_data', $frequentlyAccessed, 3600);  // Uses level 3-4 (faster)
 SmartCache::put('cold_data', $rarelyAccessed, 3600);     // Uses level 7-9 (smaller)
 
-// Get compression statistics
-$stats = SmartCache::getCompressionStats($optimizedValue);
+// Inspect how a stored value was compressed
+$adaptive = SmartCache::getStrategies()['adaptive_compression'];
+$stats = $adaptive->getCompressionStats(SmartCache::getRaw('cold_data'));
 // Returns: level, original_size, compressed_size, ratio, savings_bytes, savings_percent</code></pre>
 
                     <h2>💾 Lazy Loading</h2>
@@ -1792,9 +1804,10 @@ $mapped = $largeDataset->map(fn($item) => $item->name);</code></pre>
 SmartCache::put('simple_data', ['key' => 'value'], 3600);  // Uses JSON
 SmartCache::put('complex_data', $objectGraph, 3600);       // Uses igbinary/PHP
 
-// Get serialization statistics
-$stats = SmartCache::getSerializationStats($optimizedValue);
-// Returns: method, original_size, serialized_size, ratio</code></pre>
+// Compare serialization methods for a value
+$serializer = SmartCache::getStrategies()['smart_serialization'];
+$stats = $serializer->getSerializationStats($value);
+// Returns: json, igbinary and php sizes, plus recommended and best_size</code></pre>
 
                     <h2>Smart Cache Invalidation</h2>
 
@@ -1898,7 +1911,7 @@ SmartCache::addStrategy(new JsonCompressionStrategy());</code></pre>
 
                     <h2>🛡️ Best Practices &amp; Troubleshooting</h2>
                     <ul>
-                        <li><strong>Binary Data:</strong> If caching already compressed objects like images, video, or encrypted data, disable <code>compression</code> for those specific cache keys as they waste CPU cycles without yielding size reductions.</li>
+                        <li><strong>Binary Data:</strong> Already-compressed payloads such as images, video, or encrypted data gain nothing from gzip. Write those keys through <code>SmartCache::repository()</code>, which bypasses SmartCache optimization.</li>
                         <li><strong>Memory Limits with Chunking:</strong> Large multi-megabyte datasets automatically trigger the 'chunking' strategy. For arrays over 100,000 items, verify <code>memory_limit</code> in <code>php.ini</code> or enable <code>lazy_loading</code> via config to avoid server crashes.</li>
                         <li><strong>Provider Not Found:</strong> Laravel aggressively caches service providers and aliases. Always run <code>php artisan optimize:clear</code> after upgrading or installing this package if encountering <em>"Class 'SmartCache' not found"</em>.</li>
                         <li><strong>IDE Autocomplete:</strong> Modern IDEs (PhpStorm, VSCode) completely resolve <code>SmartCache::</code> magical methods automatically via our included Facade PHPDocs without needing <code>ide-helper</code> generated files.</li>
@@ -1931,6 +1944,8 @@ SmartCache::put('user_123_data', $sensitiveData, 3600);
 // Decryption is automatic on retrieval
 $data = SmartCache::get('user_123_data');
 // Returns decrypted data</code></pre>
+
+                    <p>Keys and patterns match with or without the active namespace. Matching values are always encrypted, whatever their size: encryption takes precedence over compression and chunking, so a large encrypted value is stored as a single entry.</p>
 
                     <h2>📁 Cache Namespacing</h2>
                     <p>Group cache keys by namespace for better organization:</p>
@@ -2027,6 +2042,25 @@ $data = SmartCache::rememberWithStampedeProtection(
     'window' => 60,
     'max_attempts' => 10,
 ],</code></pre>
+
+                    <h2>🔒 Single-Flight Regeneration <span class="badge badge-success">v1.15.0</span></h2>
+                    <p>When a hot key is missing — after a deploy, a flush, or an invalidation — <code>remember()</code> lets every concurrent request run the callback at once. <code>rememberWithLock()</code> runs it under an atomic lock instead: one process regenerates, the others wait and then read the stored value.</p>
+
+                    <pre><code class="language-php">// Same arguments as remember()
+$report = SmartCache::rememberWithLock('daily_report', 3600, fn() => Report::build());
+
+// Tune the lock per call
+$report = SmartCache::rememberWithLock(
+    'daily_report',
+    3600,
+    fn() => Report::build(),
+    lockSeconds: 30, // hold the lock at most 30 s
+    waitSeconds: 5,  // wait at most 5 s, then regenerate anyway
+);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Safe by default.</strong> Cache hits never touch the lock. If the store does not implement <code>LockProvider</code>, the lock backend is unavailable, or the wait times out, the callback runs without the lock, so the method never fails where <code>remember()</code> would succeed. Keep <code>lockSeconds</code> above the usual regeneration time. On the database cache driver, locks need the <code>cache_locks</code> table that <code>php artisan cache:table</code> creates.
+                    </div>
 
                     <h2>🔥 Cache Warming</h2>
                     <p>Pre-populate cache with frequently accessed data:</p>
@@ -2313,6 +2347,9 @@ return [
 
     'model_invalidation' => [
         'after_commit' => true,         // Defer model invalidation until DB commit
+    ],
+    'tags' => [
+        'scoped' => false,              // v1.15.0: opt-in scoped tags (recommended for new apps)
     ],
 
     'dashboard' => [
@@ -2916,38 +2953,38 @@ $users = $memo->get('users'); // From memory — no cache round-trip</code></pre
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::getCompressionStats()</div>
-                        <div class="method-signature">SmartCache::getCompressionStats(mixed $optimizedValue): array</div>
-                        <p>Get compression statistics for optimized data.</p>
+                        <div class="method-name">AdaptiveCompressionStrategy::getCompressionStats()</div>
+                        <div class="method-signature">AdaptiveCompressionStrategy::getCompressionStats(mixed $optimizedValue): array</div>
+                        <p>Get compression statistics for a value stored with adaptive compression. Available on the strategy instance when <code>strategies.compression.mode</code> is <code>adaptive</code>.</p>
                         <div class="parameter">
-                            <span class="parameter-name">$optimizedValue</span> <span class="parameter-type">(mixed)</span> - Optimized value from cache
+                            <span class="parameter-name">$optimizedValue</span> <span class="parameter-type">(mixed)</span> - Stored value, as returned by <code>SmartCache::getRaw()</code>
                         </div>
                         <div class="parameter">
                             <span class="return-type">Returns:</span> array - Compression stats (level, sizes, ratio, savings)
                         </div>
                         <div class="example">
                             <strong>Example:</strong>
-                            <pre><code class="language-php">$optimized = SmartCache::optimize($data);
-$stats = SmartCache::getCompressionStats($optimized);
+                            <pre><code class="language-php">$adaptive = SmartCache::getStrategies()['adaptive_compression'];
+$stats = $adaptive->getCompressionStats(SmartCache::getRaw('report'));
 // Returns: level, original_size, compressed_size, ratio, savings_bytes, savings_percent</code></pre>
                         </div>
                     </div>
 
                     <div class="method">
-                        <div class="method-name">SmartCache::getSerializationStats()</div>
-                        <div class="method-signature">SmartCache::getSerializationStats(mixed $optimizedValue): array</div>
-                        <p>Get serialization statistics for optimized data.</p>
+                        <div class="method-name">SmartSerializationStrategy::getSerializationStats()</div>
+                        <div class="method-signature">SmartSerializationStrategy::getSerializationStats(mixed $value): array</div>
+                        <p>Compare the serialized size of a value under each available method. Available on the strategy instance when <code>strategies.serialization.enabled</code> is <code>true</code>.</p>
                         <div class="parameter">
-                            <span class="parameter-name">$optimizedValue</span> <span class="parameter-type">(mixed)</span> - Optimized value from cache
+                            <span class="parameter-name">$value</span> <span class="parameter-type">(mixed)</span> - The value to analyse
                         </div>
                         <div class="parameter">
-                            <span class="return-type">Returns:</span> array - Serialization stats (method, sizes, ratio)
+                            <span class="return-type">Returns:</span> array - Size per method (json, igbinary, php), recommended method, best size
                         </div>
                         <div class="example">
                             <strong>Example:</strong>
-                            <pre><code class="language-php">$optimized = SmartCache::optimize($data);
-$stats = SmartCache::getSerializationStats($optimized);
-// Returns: method, original_size, serialized_size, ratio</code></pre>
+                            <pre><code class="language-php">$serializer = SmartCache::getStrategies()['smart_serialization'];
+$stats = $serializer->getSerializationStats($data);
+// Returns: json, igbinary and php sizes, plus recommended and best_size</code></pre>
                         </div>
                     </div>
 
@@ -3029,7 +3066,7 @@ $stats = SmartCache::getSerializationStats($optimized);
                             <span class="parameter-name">$callback</span> <span class="parameter-type">(callable)</span> - Primary cache operation
                         </div>
                         <div class="parameter">
-                            <span class="parameter-name">$fallback</span> <span class="parameter-type">(mixed)</span> - Fallback value or callable if cache fails (default: null)
+                            <span class="parameter-name">$fallback</span> <span class="parameter-type">(mixed)</span> - Fallback value, or a Closure that returns it, used when the operation fails or the circuit is open (default: null). Requires the circuit breaker to be enabled; otherwise the callback runs directly.
                         </div>
                         <div class="parameter">
                             <span class="return-type">Returns:</span> mixed - Result from operation or fallback
@@ -3094,6 +3131,34 @@ $stats = SmartCache::getSerializationStats($optimized);
                             <pre><code class="language-php">$data = SmartCache::rememberWithStampedeProtection(
     'popular_key', 3600, fn() => expensiveQuery(), 1.0
 );</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::rememberWithLock() <span class="badge badge-success">v1.15.0</span></div>
+                        <div class="method-signature">SmartCache::rememberWithLock(string $key, DateTimeInterface|DateInterval|int|null $ttl, Closure $callback, int $lockSeconds = 10, int $waitSeconds = 10): mixed</div>
+                        <p>Remember a value; on a cache miss only one process runs the callback while the others wait and then read the stored value. Falls back to regenerating without the lock when the store has no lock support or the wait times out.</p>
+                        <div class="parameter">
+                            <span class="parameter-name">$key</span> <span class="parameter-type">(string)</span> - Cache key
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$ttl</span> <span class="parameter-type">(DateTimeInterface|DateInterval|int|null)</span> - Time to live
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$callback</span> <span class="parameter-type">(Closure)</span> - Value generator
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$lockSeconds</span> <span class="parameter-type">(int)</span> - Maximum seconds the lock is held; keep it above the regeneration time
+                        </div>
+                        <div class="parameter">
+                            <span class="parameter-name">$waitSeconds</span> <span class="parameter-type">(int)</span> - Seconds a waiting process blocks before regenerating without the lock (0 = do not wait)
+                        </div>
+                        <div class="parameter">
+                            <span class="return-type">Returns:</span> mixed - Cached or generated value
+                        </div>
+                        <div class="example">
+                            <strong>Example:</strong>
+                            <pre><code class="language-php">$report = SmartCache::rememberWithLock('daily_report', 3600, fn() => Report::build());</code></pre>
                         </div>
                     </div>
 
@@ -3430,7 +3495,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 531 tests, 2,078 assertions
+# 605 tests, 2,251 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>
