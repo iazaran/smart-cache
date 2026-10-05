@@ -242,6 +242,11 @@ trait CacheInvalidation
             try {
                 $namespace = $cache->getNamespace();
             } catch (\BadMethodCallException $e) {
+                // Mockery records unexpected calls even when caught; dismiss it so
+                // the application's test is not flagged as risky.
+                if (\method_exists($e, 'dismiss')) {
+                    $e->dismiss();
+                }
                 $namespace = null;
             }
         }

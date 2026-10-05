@@ -1288,10 +1288,14 @@ SmartCache::tags(['users', 'profiles'])->put('user_1', $user1, 3600);
 SmartCache::tags(['users', 'profiles'])->put('user_2', $user2, 3600);
 
 // Clear all cache with specific tags
-SmartCache::tags(['users'])->flush(); // Clears both user_1 and user_2
+SmartCache::flushTags(['users']); // Clears both user_1 and user_2
 
 // Clear cache with multiple tags
-SmartCache::tags(['users', 'profiles'])->flush();</code></pre>
+SmartCache::flushTags(['users', 'profiles']);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Use <code>flushTags()</code>, not <code>flush()</code>.</strong> <code>flush()</code> clears the entire cache store. Tags set with <code>tags()</code> apply to the next write. After a tagged read such as <code>get()</code> or <code>has()</code>, they still apply to a write of the same key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key.
+                    </div>
 
                     <h2>Cache Locking</h2>
                     <p>Prevent cache stampede with atomic locks:</p>
@@ -2049,7 +2053,7 @@ $report = SmartCache::rememberWithLock(
 );</code></pre>
 
                     <div class="alert alert-info">
-                        <strong>Safe by default.</strong> Cache hits never touch the lock. If the store does not implement <code>LockProvider</code>, the lock backend is unavailable, or the wait times out, the callback runs without the lock, so the method never fails where <code>remember()</code> would succeed. Keep <code>lockSeconds</code> above the usual regeneration time.
+                        <strong>Safe by default.</strong> Cache hits never touch the lock. If the store does not implement <code>LockProvider</code>, the lock backend is unavailable, or the wait times out, the callback runs without the lock, so the method never fails where <code>remember()</code> would succeed. Keep <code>lockSeconds</code> above the usual regeneration time. On the database cache driver, locks need the <code>cache_locks</code> table that <code>php artisan cache:table</code> creates.
                     </div>
 
                     <h2>🔥 Cache Warming</h2>
@@ -3482,7 +3486,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 582 tests, 2,213 assertions
+# 590 tests, 2,226 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

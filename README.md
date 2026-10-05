@@ -150,7 +150,7 @@ SmartCache::putWithJitter('popular_data', $data, 3600, 0.2);
 SmartCache::rememberWithJitter('report', 3600, 0.1, fn() => Analytics::generate());
 ```
 
-> **Single-flight regeneration (v1.15.0+).** When a hot key is missing — after a deploy, a flush, or an invalidation — `remember()` lets every concurrent request run the callback at once. `rememberWithLock()` runs it under an atomic lock instead: one process regenerates, the others wait (10 s by default) and then read the stored value. Cache hits never touch the lock. If the store has no lock support (`LockProvider`) or the wait times out, the callback runs anyway, so the method never fails where `remember()` would succeed. Tune both limits per call: `rememberWithLock($key, $ttl, $callback, lockSeconds: 30, waitSeconds: 5)`.
+> **Single-flight regeneration (v1.15.0+).** When a hot key is missing — after a deploy, a flush, or an invalidation — `remember()` lets every concurrent request run the callback at once. `rememberWithLock()` runs it under an atomic lock instead: one process regenerates, the others wait (10 s by default) and then read the stored value. Cache hits never touch the lock. If the store has no lock support (`LockProvider`) or the wait times out, the callback runs anyway, so the method never fails where `remember()` would succeed. On the database cache driver, locks need the `cache_locks` table that `php artisan cache:table` creates. Tune both limits per call: `rememberWithLock($key, $ttl, $callback, lockSeconds: 30, waitSeconds: 5)`.
 
 ### Write Deduplication (Cache DNA)
 
@@ -243,6 +243,8 @@ SmartCache::invalidate('user_profile'); // also clears user_posts
 SmartCache::tags(['users'])->put('user_1', $user, 3600);
 SmartCache::flushTags(['users']);
 ```
+
+Tags set with `tags()` apply to the next write. After a tagged read such as `get()` or `has()`, they still apply to a write of the same key, so the "read, then write on a miss" pattern stays tagged, but they never tag a write of a different key. Use `flushTags()` to invalidate by tag; `flush()` clears the entire store.
 
 ### Model Auto-Invalidation
 
@@ -461,7 +463,7 @@ Review calls to `clear()` during migration and choose `clearManaged()` or `flush
 ## Testing
 
 ```bash
-composer test            # 582 tests, 2,213 assertions
+composer test            # 590 tests, 2,226 assertions
 composer test-coverage   # with code coverage
 ```
 

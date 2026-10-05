@@ -11,6 +11,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Testing\Fakes\EventFake;
 use SmartCache\Contracts\OptimizationStrategy;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
 use SmartCache\Drivers\MemoizedCacheDriver;
@@ -122,6 +123,18 @@ class SmartCache implements SmartCacheContract, Repository
      * @var array
      */
     protected array $activeTags = [];
+
+    /**
+     * Keys that tagged reads were made for since tags() was called.
+     *
+     * Null means the active tags apply to the next write, whatever its key.
+     * Otherwise they only apply to a write of one of these keys, so a tagged
+     * miss still tags the remember()-style write that follows it, but never
+     * an unrelated write.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $activeTagsKeys = null;
 
     /**
      * @var array
@@ -316,6 +329,7 @@ class SmartCache implements SmartCacheContract, Repository
         if ($value === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
+            $this->bindActiveTags($key);
             return static::resolveDefault($default);
         }
 
@@ -323,6 +337,7 @@ class SmartCache implements SmartCacheContract, Repository
         if ($restoredValue === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
             $this->dispatchCacheMissed($key);
+            $this->bindActiveTags($key);
             return static::resolveDefault($default);
         }
 
@@ -333,7 +348,7 @@ class SmartCache implements SmartCacheContract, Repository
         $this->trackAccessFrequency($key);
 
         // Reset active tags to prevent leaking into next operation
-        $this->activeTags = [];
+        $this->clearActiveTags();
 
         return $restoredValue;
     }
@@ -410,8 +425,9 @@ class SmartCache implements SmartCacheContract, Repository
         // metadata indexes can survive invalidation indefinitely.
         $this->trackKey($key);
 
-        if (!empty($this->activeTags)) {
-            $this->associateTagsWithKey($key, $this->activeTags);
+        $tags = $this->takeActiveTags($key);
+        if ($tags !== []) {
+            $this->associateTagsWithKey($key, $tags);
         }
 
         // Cache DNA — skip the write when the content is identical AND the entry
@@ -482,6 +498,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function has($key): bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         return $this->cache->has($key);
     }
 
@@ -502,6 +519,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function forget($key): bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $value = $this->cache->get($key);
 
         // If value is chunked, clean up all chunk keys
@@ -548,8 +566,9 @@ class SmartCache implements SmartCacheContract, Repository
         $this->trackKey($key);
 
         // Handle active tags
-        if (!empty($this->activeTags)) {
-            $this->associateTagsWithKey($key, $this->activeTags);
+        $tags = $this->takeActiveTags($key);
+        if ($tags !== []) {
+            $this->associateTagsWithKey($key, $tags);
         }
 
         // forever() does not maintain a DNA record; a stale one left over from an
@@ -658,6 +677,7 @@ class SmartCache implements SmartCacheContract, Repository
         $instance->activeNamespace = $this->activeNamespace;
         $instance->circuitBreakerEnabled = $this->circuitBreakerEnabled;
         $instance->costAwareManager = $this->costAwareManager;
+        $this->moveActiveTagsTo($instance);
 
         return $instance;
     }
@@ -701,6 +721,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function touch($key, $ttl): bool
     {
         $namespacedKey = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($namespacedKey);
 
         $sentinel = static::sentinel();
         $rawValue = $this->cache->get($namespacedKey, $sentinel);
@@ -808,7 +829,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function add($key, $value, $ttl = null): bool
     {
         $namespacedKey = $this->applyNamespace((string) $key);
-        $tags = $this->activeTags;
+        $tags = $this->takeActiveTags($namespacedKey);
 
         // Chunking writes chunk keys straight to the store, and those keys are
         // derived from the cache key. Bail out before that when the entry already
@@ -817,7 +838,6 @@ class SmartCache implements SmartCacheContract, Repository
         // idempotency markers keep their single round trip. existsInStore()
         // reads past memo(), whose remembered hit may be stale.
         if ((\is_array($value) || $value instanceof \Traversable) && $this->existsInStore((string) $key)) {
-            $this->activeTags = [];
             return false;
         }
 
@@ -834,8 +854,6 @@ class SmartCache implements SmartCacheContract, Repository
                 if (!empty($tags)) {
                     $this->associateTagsWithKey($namespacedKey, $tags);
                 }
-            } else {
-                $this->activeTags = [];
             }
 
             return $result;
@@ -843,9 +861,11 @@ class SmartCache implements SmartCacheContract, Repository
 
         // Fallback: non-atomic approach for stores that don't support add()
         if ($this->has($key)) {
-            $this->activeTags = [];
             return false;
         }
+
+        // Hand the tags to put(), which applies them to this key.
+        $this->activeTags = $tags;
 
         return $this->put($key, $value, $ttl);
     }
@@ -860,6 +880,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function increment($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $result = $this->cache->increment($key, $value);
 
         if ($result !== false) {
@@ -879,6 +900,7 @@ class SmartCache implements SmartCacheContract, Repository
     public function decrement($key, $value = 1): int|bool
     {
         $key = $this->applyNamespace((string) $key);
+        $this->bindActiveTags($key);
         $result = $this->cache->decrement($key, $value);
 
         if ($result !== false) {
@@ -1291,9 +1313,11 @@ class SmartCache implements SmartCacheContract, Repository
                     throw $e;
                 }
 
-                // Sizes cost a serialize() each, so only measure them for a listener.
+                // Sizes cost a serialize() each, so only measure them for a
+                // listener, or for Event::fake() in an application's tests.
                 if ($this->shouldDispatchEvent('optimization_applied')
-                    && Event::hasListeners(OptimizationApplied::class)
+                    && (Event::hasListeners(OptimizationApplied::class)
+                        || Event::getFacadeRoot() instanceof EventFake)
                 ) {
                     $this->dispatchOptimizationApplied(
                         $key,
@@ -1511,7 +1535,7 @@ class SmartCache implements SmartCacheContract, Repository
             // Best-effort persist; never let a reset() call break the request lifecycle.
         }
 
-        $this->activeTags = [];
+        $this->clearActiveTags();
         $this->activeNamespace = null;
         $this->dependencies = [];
         $this->managedKeys = [];
@@ -1678,6 +1702,9 @@ class SmartCache implements SmartCacheContract, Repository
     public function flexible(string $key, array $durations, \Closure $callback): mixed
     {
         $namespacedKey = $this->applyNamespace((string) $key);
+        // Active tags tag this key whenever it is regenerated, and are used up
+        // here so they cannot tag the next unrelated write.
+        $tags = $this->takeActiveTags($namespacedKey);
         $freshTtl = $durations[0] ?? 3600;  // Default 1 hour fresh
         $staleTtl = $durations[1] ?? 7200;  // Default 2 hours stale (absolute time)
         $totalTtl = $staleTtl;
@@ -1706,10 +1733,12 @@ class SmartCache implements SmartCacheContract, Repository
                 $staleValue = $this->maybeRestoreValue($cachedValue, $namespacedKey);
 
                 if ($staleValue === $sentinel) {
+                    $this->tagRegeneratedKey($namespacedKey, $tags);
                     return $this->generateAndCache($namespacedKey, $durations, $callback);
                 }
 
                 // Historical 1.x behavior: refresh in-process before returning stale
+                $this->tagRegeneratedKey($namespacedKey, $tags);
                 $this->refreshInBackground($namespacedKey, $durations, $callback);
 
                 return $staleValue;
@@ -1717,7 +1746,23 @@ class SmartCache implements SmartCacheContract, Repository
         }
 
         // No cache or expired beyond stale period - generate fresh data
+        $this->tagRegeneratedKey($namespacedKey, $tags);
         return $this->generateAndCache($namespacedKey, $durations, $callback);
+    }
+
+    /**
+     * Tag a key that flexible() is about to (re)generate. Like put(), the tag
+     * index is written before the value.
+     *
+     * @param string $namespacedKey
+     * @param array $tags
+     * @return void
+     */
+    private function tagRegeneratedKey(string $namespacedKey, array $tags): void
+    {
+        if ($tags !== []) {
+            $this->associateTagsWithKey($namespacedKey, $tags);
+        }
     }
 
     /**
@@ -1866,7 +1911,8 @@ class SmartCache implements SmartCacheContract, Repository
     public function refreshAsync(string $key, callable|string $callback, ?int $ttl = null, ?string $queue = null): void
     {
         // The queue worker has no active namespace, so the job carries it along.
-        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $this->activeTags, $this->activeNamespace);
+        $tags = $this->takeActiveTags($this->applyNamespace($key));
+        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $tags, $this->activeNamespace);
 
         if ($queue !== null) {
             $job->onQueue($queue);
@@ -1957,7 +2003,65 @@ class SmartCache implements SmartCacheContract, Repository
     public function tags(string|array $tags): static
     {
         $this->activeTags = \is_array($tags) ? $tags : [$tags];
+        $this->activeTagsKeys = null;
         return $this;
+    }
+
+    /**
+     * Record that a tagged read was made for this key, so the active tags still
+     * apply to a later write of it (the remember() pattern), but not to writes
+     * of other keys.
+     *
+     * @param string $namespacedKey
+     * @return void
+     */
+    private function bindActiveTags(string $namespacedKey): void
+    {
+        if ($this->activeTags !== []) {
+            $this->activeTagsKeys[$namespacedKey] = true;
+        }
+    }
+
+    /**
+     * Use up the active tags for a write of this key.
+     *
+     * @param string $namespacedKey
+     * @return array Tags to associate with the key; empty when none apply.
+     */
+    private function takeActiveTags(string $namespacedKey): array
+    {
+        $tags = $this->activeTags;
+        $boundKeys = $this->activeTagsKeys;
+        $this->clearActiveTags();
+
+        if ($boundKeys !== null && !isset($boundKeys[$namespacedKey])) {
+            return [];
+        }
+
+        return $tags;
+    }
+
+    /**
+     * @return void
+     */
+    private function clearActiveTags(): void
+    {
+        $this->activeTags = [];
+        $this->activeTagsKeys = null;
+    }
+
+    /**
+     * Hand the active tags to an instance created by store() or memo(), which
+     * is where the caller's next write goes.
+     *
+     * @param SmartCache $instance
+     * @return void
+     */
+    private function moveActiveTagsTo(SmartCache $instance): void
+    {
+        $instance->activeTags = $this->activeTags;
+        $instance->activeTagsKeys = $this->activeTagsKeys;
+        $this->clearActiveTags();
     }
 
     /**
@@ -2170,7 +2274,7 @@ class SmartCache implements SmartCacheContract, Repository
             });
         }
 
-        $this->activeTags = [];
+        $this->clearActiveTags();
     }
 
     /**
@@ -2639,13 +2743,14 @@ class SmartCache implements SmartCacheContract, Repository
             return $value;
         }
 
-        $lock = $this->acquireRegenerationLock($key, $lockSeconds, $waitSeconds);
+        $valueAppeared = false;
+        $lock = $this->acquireRegenerationLock($key, $lockSeconds, $waitSeconds, $valueAppeared);
 
         try {
             // Another process may have stored the value while we waited, or just
             // before we took the lock. has() keeps this re-check out of the
             // hit/miss metrics.
-            if ($this->existsInStore($key)) {
+            if ($valueAppeared || $this->existsInStore($key)) {
                 $value = $this->get($key, $sentinel);
 
                 if ($value !== $sentinel) {
@@ -2690,9 +2795,10 @@ class SmartCache implements SmartCacheContract, Repository
      * @param string $key
      * @param int $lockSeconds
      * @param int $waitSeconds
+     * @param bool $valueAppeared Set to true when waiting ended because the value was stored
      * @return Lock|null
      */
-    private function acquireRegenerationLock(string $key, int $lockSeconds, int $waitSeconds): ?Lock
+    private function acquireRegenerationLock(string $key, int $lockSeconds, int $waitSeconds, bool &$valueAppeared): ?Lock
     {
         $store = $this->cache->getStore();
 
@@ -2708,7 +2814,12 @@ class SmartCache implements SmartCacheContract, Repository
             $deadline = \microtime(true) + \max(0, $waitSeconds);
 
             while (!$lock->get()) {
-                if ($this->existsInStore($key) || \microtime(true) >= $deadline) {
+                if ($this->existsInStore($key)) {
+                    $valueAppeared = true;
+                    return null;
+                }
+
+                if (\microtime(true) >= $deadline) {
                     return null;
                 }
 
@@ -3340,6 +3451,7 @@ class SmartCache implements SmartCacheContract, Repository
         $instance->activeNamespace = $this->activeNamespace;
         $instance->circuitBreakerEnabled = $this->circuitBreakerEnabled;
         $instance->costAwareManager = $this->costAwareManager;
+        $this->moveActiveTagsTo($instance);
 
         return $instance;
     }
