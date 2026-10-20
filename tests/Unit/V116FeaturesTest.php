@@ -185,8 +185,9 @@ class V116ScriptedReadRepository extends Repository
  * Regression coverage for 1.16.0.
  *
  * Each test fails against the 1.15.0 implementation, except those marked as a
- * guard: they pin behavior that must not change, or check the opt-in native
- * memo mode, which 1.15.0 does not have.
+ * guard. A guard pins behavior that must not change, checks the opt-in native
+ * memo mode (which 1.15.0 does not have), or protects against a race or cost
+ * that the new chunk, registry, and index handling could introduce.
  */
 class V116FeaturesTest extends TestCase
 {
@@ -414,7 +415,6 @@ class V116FeaturesTest extends TestCase
         $this->assertSame('kept', $this->rawStore()->get('laravel_key'));
     }
 
-    /** Guard. */
     public function test_flushing_an_empty_tag_list_removes_nothing(): void
     {
         $this->smartCache->put('unrelated', 'kept', 60);
@@ -424,6 +424,7 @@ class V116FeaturesTest extends TestCase
         $this->assertSame('kept', $this->smartCache->get('unrelated'));
     }
 
+    /** Guard. */
     public function test_flush_after_an_empty_bulk_call_still_clears_the_store(): void
     {
         foreach (['many', 'getMultiple', 'deleteMultiple'] as $method) {
@@ -577,6 +578,7 @@ class V116FeaturesTest extends TestCase
         $this->assertSame('theirs', $this->rawStore()->get('marker'));
     }
 
+    /** Guard. */
     public function test_native_memo_reads_a_key_it_added_after_remembering_a_miss(): void
     {
         if (!$this->nativeMemoAvailable()) {
@@ -634,6 +636,7 @@ class V116FeaturesTest extends TestCase
         $this->assertSame('theirs', $memo->get('locked'), 'The memo layer must not keep the earlier miss');
     }
 
+    /** Guard. */
     public function test_native_memo_on_a_store_without_locks_does_not_try_to_lock(): void
     {
         if (!$this->nativeMemoAvailable()) {
@@ -672,6 +675,7 @@ class V116FeaturesTest extends TestCase
         $this->assertSame($this->rows(300, 'new'), $cache->get('big'));
     }
 
+    /** Guard. */
     public function test_a_reader_that_keeps_finding_replaced_entries_never_evicts_the_newest(): void
     {
         $this->app['config']->set('smart-cache.self_healing.enabled', true);
@@ -834,6 +838,7 @@ class V116FeaturesTest extends TestCase
         $this->assertNull($this->rawStore()->get(OrphanChunkCleanupService::REGISTRY_KEY));
     }
 
+    /** Guard. */
     public function test_writes_that_touch_no_chunks_never_read_the_registry(): void
     {
         $repository = new V116ScriptedReadRepository($this->rawStore()->getStore());
@@ -1031,6 +1036,7 @@ class V116FeaturesTest extends TestCase
         $this->assertEqualsCanonicalizing(['from_first', 'from_second'], $this->rawStore()->get('_sc_managed_keys'));
     }
 
+    /** Guard. */
     public function test_rewriting_a_key_another_process_untracked_keeps_it_in_the_index(): void
     {
         $writer = $this->otherProcess();
