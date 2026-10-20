@@ -1849,6 +1849,8 @@ SmartCache::dependsOn('user_stats', 'user_profile');
 SmartCache::invalidate('user_profile');
 // This will also clear 'user_posts' and 'user_stats'</code></pre>
 
+                    <p><strong>Namespaces (v1.16.0+).</strong> Dependencies follow the active namespace. Under <code>namespace('t1')</code>, <code>dependsOn()</code> stores the edge with the namespace (<code>t1:user_posts → t1:user_profile</code>) as well as the un-namespaced edge earlier releases read, so tenants that use the same key names no longer consume each other's edges. Without a namespace, dependencies are stored and invalidated exactly as before.</p>
+
                     <h3>Pattern-Based Invalidation</h3>
                     <p>Clear cache entries using wildcards and regex patterns:</p>
 
@@ -3537,7 +3539,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 673 tests, 2,461 assertions
+# 678 tests, 2,475 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

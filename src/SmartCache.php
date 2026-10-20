@@ -3082,10 +3082,27 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $this->markActiveTagsUsed();
         $dependencies = \is_array($dependencies) ? $dependencies : [$dependencies];
+        $namespace = $this->activeNamespace;
 
-        $this->mutateDependencies(function (array $map) use ($key, $dependencies): array {
+        $this->mutateDependencies(function (array $map) use ($key, $dependencies, $namespace): array {
             $existing = $map[$key] ?? [];
             $map[$key] = \array_values(\array_unique([...$existing, ...$dependencies]));
+
+            // Under a namespace the edge is also stored with the namespace on
+            // both ends. Two tenants using the same key names share the edge
+            // above, and invalidating it in one tenant consumes it, so the
+            // other tenant would keep its dependent key; the namespaced copy
+            // belongs to this tenant alone. The edge above is still written,
+            // exactly as before, for servers running an earlier release.
+            if ($namespace !== null) {
+                $namespacedKey = "{$namespace}:{$key}";
+                $namespacedDependencies = \array_map(
+                    static fn ($dependency): string => "{$namespace}:{$dependency}",
+                    $dependencies
+                );
+                $existing = $map[$namespacedKey] ?? [];
+                $map[$namespacedKey] = \array_values(\array_unique([...$existing, ...$namespacedDependencies]));
+            }
 
             return $map;
         });
@@ -3101,7 +3118,26 @@ class SmartCache implements SmartCacheContract, Repository
         $this->loadDependencies();
         $this->dependenciesLoaded = true;
 
-        return $this->invalidateWithVisited($key, []);
+        $success = true;
+        $namespace = $this->activeNamespace;
+
+        // Under a namespace, follow this tenant's namespaced edges first. They
+        // hold fully qualified keys, so they are walked with the namespace
+        // suspended.
+        if ($namespace !== null) {
+            $this->activeNamespace = null;
+
+            try {
+                $success = $this->invalidateWithVisited("{$namespace}:{$key}", []);
+            } finally {
+                $this->activeNamespace = $namespace;
+            }
+        }
+
+        // Then the edges stored without a namespace, exactly as every earlier
+        // release did. They are the only edges written before 1.16.0, so
+        // dependencies declared before the upgrade keep invalidating.
+        return $this->invalidateWithVisited($key, []) && $success;
     }
 
     /**

@@ -249,6 +249,8 @@ SmartCache::flushTags(['users']);
 
 Use `flushTags()` to invalidate by tag. Since v1.16.0, `SmartCache::tags(['users'])->flush()` does the same, like Laravel's `Cache::tags()->flush()`: it removes only the tagged entries, with their chunks and metadata, and `tags([])->flush()` removes nothing. A plain `flush()` still clears the entire store. Like pending tags in general, a `tags()` call left unused (for example, when computing the value throws) applies to the next `flush()` on the facade in the same request too. Tags work on every store, including file and database, because SmartCache keeps its own tag index, and `tags('a', 'b')`, enum tag names, and `tags(...)->putMany()` (which tags every key) behave as in Laravel. By default, tags set with `tags()` stay active until a write uses them, so after a tagged `get()` that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set `smart-cache.tags.scoped = true` (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling `tags()`, or use `tags()->remember()`.
 
+Dependencies follow the active namespace (v1.16.0+). Tenants that use the same key names keep their own edges, so invalidating `user_profile` in one tenant never stops another tenant's `invalidate('user_profile')` from clearing its `user_posts`.
+
 ### Model Auto-Invalidation
 
 ```php
@@ -480,7 +482,7 @@ These read optimized entries and honor the namespace.
 ## Testing
 
 ```bash
-composer test            # 673 tests, 2,461 assertions
+composer test            # 678 tests, 2,475 assertions
 composer test-coverage   # with code coverage
 ```
 

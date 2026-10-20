@@ -1115,6 +1115,81 @@ class V116FeaturesTest extends TestCase
         $this->assertNull($this->rawStore()->get('user_1'));
     }
 
+    public function test_tenants_with_the_same_key_names_keep_their_own_dependencies(): void
+    {
+        foreach (['t1', 't2'] as $tenant) {
+            $this->smartCache->namespace($tenant);
+            $this->smartCache->put('parent', 'p', 60);
+            $this->smartCache->put('child', 'c', 60);
+            $this->smartCache->dependsOn('child', 'parent');
+        }
+
+        $this->smartCache->namespace('t1')->invalidate('parent');
+
+        $this->assertNull($this->rawStore()->get('t1:child'));
+        $this->assertSame('c', $this->rawStore()->get('t2:child'), 'Another tenant is not invalidated');
+
+        $this->smartCache->namespace('t2')->invalidate('parent');
+
+        $this->assertNull($this->rawStore()->get('t2:child'), 'Its dependency survived the other tenant');
+    }
+
+    /** Guard. */
+    public function test_dependencies_without_a_namespace_are_stored_and_consumed_as_before(): void
+    {
+        $this->smartCache->put('a', 1, 60);
+        $this->smartCache->put('b', 2, 60);
+        $this->smartCache->dependsOn('b', 'a');
+
+        $this->assertSame(['b' => ['a']], $this->rawStore()->get('_sc_dependencies'));
+
+        $this->smartCache->invalidate('a');
+
+        $this->assertNull($this->rawStore()->get('b'));
+        $this->assertNull($this->rawStore()->get('_sc_dependencies'));
+    }
+
+    public function test_namespaced_dependencies_also_keep_the_edge_earlier_releases_read(): void
+    {
+        $this->smartCache->namespace('t1')->dependsOn('child', ['parent', 'other']);
+
+        $this->assertSame([
+            'child' => ['parent', 'other'],
+            't1:child' => ['t1:parent', 't1:other'],
+        ], $this->rawStore()->get('_sc_dependencies'));
+    }
+
+    /** Guard. */
+    public function test_dependencies_declared_before_the_upgrade_still_invalidate_under_a_namespace(): void
+    {
+        // Written by 1.15 under namespace t1: the edge has no namespace.
+        $this->rawStore()->forever('_sc_dependencies', ['child' => ['parent']]);
+        $this->smartCache->namespace('t1')->put('child', 'c', 60);
+
+        $this->smartCache->invalidate('parent');
+
+        $this->assertNull($this->rawStore()->get('t1:child'));
+    }
+
+    /** Guard. */
+    public function test_namespaced_dependency_chains_and_cycles_are_followed_once(): void
+    {
+        $cache = $this->smartCache->namespace('t1');
+        foreach (['a', 'b', 'c'] as $key) {
+            $cache->put($key, $key, 60);
+        }
+        $cache->dependsOn('b', 'a')->dependsOn('c', 'b')->dependsOn('a', 'c');
+        $this->smartCache->namespace('t2')->put('c', 'other tenant', 60);
+
+        $this->assertTrue($this->smartCache->namespace('t1')->invalidate('a'));
+
+        foreach (['a', 'b', 'c'] as $key) {
+            $this->assertNull($this->rawStore()->get("t1:{$key}"));
+        }
+        $this->assertSame('other tenant', $this->rawStore()->get('t2:c'));
+        $this->assertSame('t1', $this->smartCache->getNamespace());
+    }
+
     public function test_namespaced_model_invalidation_reaches_the_namespace_keys(): void
     {
         $this->smartCache->namespace('t1')->put('App\Models\User_1_profile', 'tenant', 60);
