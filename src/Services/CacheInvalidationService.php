@@ -58,13 +58,19 @@ class CacheInvalidationService
      */
     public function flushPatterns(array $patterns): int
     {
-        return $this->withoutNamespace(function () use ($patterns): int {
+        $namespace = $this->activeNamespace();
+
+        return $this->withoutNamespace(function () use ($patterns, $namespace): int {
             $invalidated = 0;
             $managedKeys = $this->smartCache->getManagedKeys();
 
             foreach ($patterns as $pattern) {
                 foreach ($managedKeys as $key) {
-                    if ($this->matchesAdvancedPattern($key, $pattern)) {
+                    $key = (string) $key;
+
+                    if ($this->matchesAdvancedPattern($key, $pattern)
+                        || $this->matchesWithinNamespace($key, (string) $pattern, $namespace)
+                    ) {
                         $result = $this->smartCache->forget($key);
                         if ($result) {
                             $invalidated++;
@@ -75,6 +81,45 @@ class CacheInvalidationService
 
             return $invalidated;
         });
+    }
+
+    /**
+     * The caller's namespace, or null when there is none or the SmartCache
+     * implementation does not expose it.
+     *
+     * @return string|null
+     */
+    private function activeNamespace(): ?string
+    {
+        if (!\is_callable([$this->smartCache, 'getNamespace'])) {
+            return null;
+        }
+
+        $namespace = $this->smartCache->getNamespace();
+
+        return \is_string($namespace) && $namespace !== '' ? $namespace : null;
+    }
+
+    /**
+     * Whether a fully qualified key in the caller's namespace matches the
+     * pattern once the namespace prefix is removed.
+     *
+     * Patterns are matched against fully qualified managed keys, so before 1.16
+     * namespace('t1')->flushPatterns(['user_*']) removed the global user_*
+     * keys but left t1:user_* stale. Both are removed now.
+     *
+     * @param string $key
+     * @param string $pattern
+     * @param string|null $namespace
+     * @return bool
+     */
+    private function matchesWithinNamespace(string $key, string $pattern, ?string $namespace): bool
+    {
+        if ($namespace === null || !\str_starts_with($key, $namespace . ':')) {
+            return false;
+        }
+
+        return $this->matchesAdvancedPattern(\substr($key, \strlen($namespace) + 1), $pattern);
     }
 
     /**
@@ -257,7 +302,10 @@ class CacheInvalidationService
                     }
                 }
 
-                if ($missingChunks > 0) {
+                // A writer deletes the replaced entry's chunks once its new entry
+                // is stored; only an entry that is still the one inspected is
+                // broken.
+                if ($missingChunks > 0 && $this->smartCache->getRaw($key) === $value) {
                     // Key has missing chunks, remove it
                     $this->smartCache->forget($key);
                     $results['orphaned_chunks_cleaned']++;

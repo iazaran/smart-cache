@@ -146,15 +146,29 @@ class CircuitBreaker
         }
 
         if ($this->state === self::STATE_OPEN) {
-            $elapsed = $this->openedAt !== null ? \time() - $this->openedAt : 0;
-            if ($elapsed >= $this->recoveryTimeout) {
-                $this->state = self::STATE_HALF_OPEN;
-                $this->successCount = 0;
-                $this->persistSharedState();
-                return true;
-            }
+            return $this->halfOpenIfRecoveryElapsed();
+        }
+
+        return true;
+    }
+
+    /**
+     * Move an open breaker to half-open once the recovery timeout has passed,
+     * starting the success count from zero.
+     *
+     * @return bool Whether the breaker is now half-open
+     */
+    protected function halfOpenIfRecoveryElapsed(): bool
+    {
+        $elapsed = $this->openedAt !== null ? \time() - $this->openedAt : 0;
+
+        if ($elapsed < $this->recoveryTimeout) {
             return false;
         }
+
+        $this->state = self::STATE_HALF_OPEN;
+        $this->successCount = 0;
+        $this->persistSharedState();
 
         return true;
     }
@@ -217,11 +231,11 @@ class CircuitBreaker
     {
         $this->hydrateSharedState();
 
+        // Same transition as isAvailable(). Switching state here without
+        // resetting the success count let a breaker that had re-opened close
+        // after a single success, when getStats() or the dashboard read it.
         if ($this->state === self::STATE_OPEN && $this->openedAt !== null) {
-            $elapsed = \time() - $this->openedAt;
-            if ($elapsed >= $this->recoveryTimeout) {
-                $this->state = self::STATE_HALF_OPEN;
-            }
+            $this->halfOpenIfRecoveryElapsed();
         }
         return $this->state;
     }

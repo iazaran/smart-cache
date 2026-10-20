@@ -262,6 +262,10 @@ return [
     | calling tags(): a cache lookup inside tags('t')->put('k', $service->build())
     | runs after tags(). Or use tags('t')->remember().
     |
+    | Since 1.16.0, tags('t')->flush() removes only the entries tagged 't' (like
+    | flushTags('t') and Laravel's Cache::tags('t')->flush()); a plain flush()
+    | still clears the whole store.
+    |
     */
     'tags' => [
         'scoped' => false,
@@ -269,14 +273,36 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Memoization
+    |--------------------------------------------------------------------------
+    |
+    | SmartCache::memo() keeps values read during a request or job in memory.
+    | By default every memo() call creates its own memo layer.
+    |
+    | 'native' => true (Laravel 12.9+, since 1.16.0) builds memo() on Laravel's
+    | Cache::memo() instead: one memo layer per store, shared with Cache::memo()
+    | and with every other memo() call, which Laravel clears between requests
+    | and queued jobs. On older Laravel versions memo() keeps its own layer.
+    | In that mode add() writes to the store directly (it stays atomic), and
+    | SmartCache then reads that key from the store for as long as the memo
+    | layer lives.
+    |
+    */
+    'memo' => [
+        'native' => false,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Chunk Registry
     |--------------------------------------------------------------------------
     |
-    | The orphan-chunk cleanup service persists its registry every time a
-    | chunked entry is written.  On extremely write-heavy workloads this
-    | can dominate cache I/O.  Increase `persist_every` to batch writes —
-    | the registry is still flushed on `cleanupOrphanChunks()` and on
-    | service shutdown.  Default `1` matches the historical behaviour.
+    | Since 1.16.0 SmartCache registers the chunks of every chunked value stored
+    | without expiry, and `smart-cache:cleanup-chunks` removes the ones whose
+    | entry is gone or was replaced. Chunks of values with a TTL expire with
+    | them. SmartCache updates the registry right away, under a metadata lock;
+    | `persist_every` only batches OrphanChunkCleanupService::registerChunks()
+    | calls made by your own code. Default `1` persists every change.
     |
     */
     'chunk_registry' => [

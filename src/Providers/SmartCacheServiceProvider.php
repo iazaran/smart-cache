@@ -10,6 +10,7 @@ use SmartCache\Strategies\CompressionStrategy;
 use SmartCache\Strategies\AdaptiveCompressionStrategy;
 use SmartCache\Strategies\ChunkingStrategy;
 use SmartCache\Strategies\EncryptionStrategy;
+use SmartCache\Strategies\RestoreOnlyStrategy;
 use SmartCache\Strategies\SmartSerializationStrategy;
 use SmartCache\Console\Commands\ClearCommand;
 use SmartCache\Console\Commands\CleanupChunksCommand;
@@ -40,6 +41,10 @@ class SmartCacheServiceProvider extends ServiceProvider
             // Order matters: the first strategy that applies to a value wins.
             $strategies = [];
 
+            // A disabled strategy still decodes the entries it wrote while it
+            // was enabled; it just stops encoding new ones.
+            $restoreStrategies = [];
+
             // Encryption goes first. Only one strategy is applied per value, so a
             // size strategy ahead of it would store large matching values as
             // plain compressed or chunked data instead of encrypting them.
@@ -52,6 +57,14 @@ class SmartCacheServiceProvider extends ServiceProvider
                         'encrypt_all' => $config->get('smart-cache.strategies.encryption.encrypt_all', false),
                     ]
                 );
+            } else {
+                // Built only when an encrypted entry is read, so an application
+                // without encryption never needs the encrypter or an APP_KEY.
+                $restoreStrategies[] = new RestoreOnlyStrategy(
+                    'encryption',
+                    '_sc_encrypted',
+                    fn () => new EncryptionStrategy($app['encrypter'])
+                );
             }
 
             // Chunking before compression: more specific strategies are tried first
@@ -61,6 +74,16 @@ class SmartCacheServiceProvider extends ServiceProvider
                     $config->get('smart-cache.strategies.chunking.chunk_size', 1000),
                     $config->get('smart-cache.strategies.chunking.lazy_loading', false),
                     $config->get('smart-cache.strategies.chunking.smart_sizing', false)
+                );
+            } else {
+                $restoreStrategies[] = new RestoreOnlyStrategy(
+                    'chunking',
+                    '_sc_chunked',
+                    fn () => new ChunkingStrategy(
+                        $config->get('smart-cache.thresholds.chunking', 102400),
+                        $config->get('smart-cache.strategies.chunking.chunk_size', 1000),
+                        $config->get('smart-cache.strategies.chunking.lazy_loading', false)
+                    )
                 );
             }
 
@@ -84,6 +107,13 @@ class SmartCacheServiceProvider extends ServiceProvider
                         $config->get('smart-cache.strategies.compression.level', 6)
                     );
                 }
+            } else {
+                // Fixed and adaptive compression share one storage format.
+                $restoreStrategies[] = new RestoreOnlyStrategy(
+                    'compression',
+                    '_sc_compressed',
+                    fn () => new CompressionStrategy()
+                );
             }
 
             // Add smart serialization strategy if enabled
@@ -92,6 +122,12 @@ class SmartCacheServiceProvider extends ServiceProvider
                     $config->get('smart-cache.strategies.serialization.preferred_method', 'auto'),
                     $config->get('smart-cache.strategies.serialization.auto_detect', true),
                     $config->get('smart-cache.strategies.serialization.size_threshold', 1024)
+                );
+            } else {
+                $restoreStrategies[] = new RestoreOnlyStrategy(
+                    'smart_serialization',
+                    '_sc_serialized',
+                    fn () => new SmartSerializationStrategy()
                 );
             }
 
@@ -105,7 +141,7 @@ class SmartCacheServiceProvider extends ServiceProvider
                 );
             }
 
-            return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies, $costAwareManager);
+            return new SmartCache($cacheManager->store(), $cacheManager, $config, $strategies, $costAwareManager, $restoreStrategies);
         });
 
         // Register alias for facade
@@ -181,6 +217,8 @@ class SmartCacheServiceProvider extends ServiceProvider
             }
         });
 
+        $this->registerQueueWorkerRefresh();
+
         // Register command metadata for HTTP context
         $this->app->singleton('smart-cache.commands', fn () => [
             'smart-cache:clear' => [
@@ -214,6 +252,41 @@ class SmartCacheServiceProvider extends ServiceProvider
                 'signature' => 'smart-cache:warm {--warmer=* : Specific warmer(s) to run} {--list : List available warmers}'
             ]
         ]);
+    }
+
+    /**
+     * Refresh SmartCache's loaded state before each job a queue worker runs.
+     *
+     * A worker never terminates between jobs, so without this every job would
+     * see the managed-key index, dependency map, and pending tags as the first
+     * job left them: keys added by other processes since then would escape
+     * flushPatterns() and model invalidation run from a job. Looping fires only
+     * in `queue:work` daemons, never for the sync queue, whose jobs run inside
+     * the request that dispatched them. The namespace and runtime settings are
+     * kept (see SmartCache::refreshState()).
+     */
+    protected function registerQueueWorkerRefresh(): void
+    {
+        if (!$this->app->bound('events') || !\class_exists(\Illuminate\Queue\Events\Looping::class)) {
+            return;
+        }
+
+        $this->app['events']->listen(\Illuminate\Queue\Events\Looping::class, function () {
+            // Only refresh an instance that already exists; resolving the
+            // singleton here would build it in workers that never use it.
+            if (!$this->app->resolved(SmartCacheContract::class)) {
+                return;
+            }
+
+            try {
+                $smartCache = $this->app->make(SmartCacheContract::class);
+                if (\method_exists($smartCache, 'refreshState')) {
+                    $smartCache->refreshState();
+                }
+            } catch (\Throwable $e) {
+                // Never stop the worker loop
+            }
+        });
     }
 
     /**

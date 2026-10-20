@@ -17,7 +17,7 @@ trait HasLocks
      */
     public function lock(string $name, int $seconds = 0, ?string $owner = null): Lock
     {
-        $store = $this->cache->getStore();
+        $store = $this->lockStore();
         
         if (!$store instanceof LockProvider) {
             throw new \RuntimeException(
@@ -38,7 +38,7 @@ trait HasLocks
      */
     public function restoreLock(string $name, string $owner): Lock
     {
-        $store = $this->cache->getStore();
+        $store = $this->lockStore();
         
         if (!$store instanceof LockProvider) {
             throw new \RuntimeException(
@@ -47,6 +47,19 @@ trait HasLocks
         }
         
         return $store->restoreLock($name, $owner);
+    }
+
+    /**
+     * The store that provides locks: the one below any memo() layer, since
+     * Laravel's memoized store reports lock support even for a store without it.
+     *
+     * @return object
+     */
+    protected function lockStore(): object
+    {
+        return \method_exists($this, 'storeRepository')
+            ? $this->storeRepository()->getStore()
+            : $this->cache->getStore();
     }
 }
 

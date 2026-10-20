@@ -10,6 +10,11 @@ use Illuminate\Support\Collection;
  * 
  * Loads chunks on-demand as they're accessed, reducing memory usage
  * for large datasets stored in cache.
+ *
+ * A chunk that is missing when it is loaded (evicted, or deleted because the
+ * entry was replaced after this collection was returned) throws a
+ * RuntimeException. Before 1.16.0 its items silently read as null and
+ * toArray() left them out, so a partial dataset looked complete.
  */
 class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
 {
@@ -219,11 +224,7 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         $result = [];
         
         foreach ($this->chunkKeys as $chunkKey) {
-            $chunk = $this->cache->get($chunkKey, []);
-
-            if (!\is_array($chunk)) {
-                continue;
-            }
+            $chunk = $this->fetchChunk($chunkKey);
 
             // Chunks preserve the original keys (ChunkingStrategy has always used
             // array_chunk(..., preserve_keys: true)). array_merge would renumber the
@@ -261,6 +262,35 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
     public function toCollection(): Collection
     {
         return new Collection($this->toArray());
+    }
+
+    /**
+     * Load every chunk now: a Collection when a collection was cached, an
+     * array otherwise, as an eager read returns.
+     *
+     * @return array|Collection
+     */
+    public function materialize(): array|Collection
+    {
+        return $this->isCollection ? $this->toCollection() : $this->toArray();
+    }
+
+    /**
+     * Read one chunk from the cache.
+     *
+     * @param string $chunkKey
+     * @return array
+     * @throws \RuntimeException When the chunk is missing or not an array
+     */
+    protected function fetchChunk(string $chunkKey): array
+    {
+        $chunk = $this->cache->get($chunkKey);
+
+        if (!\is_array($chunk)) {
+            throw new \RuntimeException("Missing cache chunk [{$chunkKey}] while reading a lazily loaded value");
+        }
+
+        return $chunk;
     }
 
     /**
@@ -356,13 +386,13 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
         
         // Load the chunk
         if (isset($this->chunkKeys[$chunkIndex])) {
-            $chunk = $this->cache->get($this->chunkKeys[$chunkIndex], []);
+            $chunk = $this->fetchChunk($this->chunkKeys[$chunkIndex]);
 
             // ChunkingStrategy chunks with preserve_keys, so chunk N is keyed by
             // the original offsets N*size … (N+1)*size-1 (or by the original string
             // keys). Access here is purely positional — key() yields the ordinal
             // position — so index the chunk by position, not by original key.
-            $this->currentChunk = \is_array($chunk) ? \array_values($chunk) : [];
+            $this->currentChunk = \array_values($chunk);
             $this->currentChunkIndex = $chunkIndex;
 
             // Cache the loaded chunk

@@ -159,26 +159,71 @@ trait CacheInvalidation
      */
     public function performCacheInvalidation(): void
     {
+        $this->invalidateCacheTargets([
+            'keys' => $this->getCacheKeysToInvalidate(),
+            'tags' => $this->getCacheTagsToFlush(),
+            'patterns' => $this->getCachePatternsToInvalidate(),
+            'dependencies' => $this->getCacheDependenciesToInvalidate(),
+        ]);
+    }
+
+    /**
+     * Invalidate the given keys, tags, patterns, and dependencies.
+     *
+     * @param array{keys?: array, tags?: array, patterns?: array, dependencies?: array} $targets
+     * @return void
+     */
+    public function invalidateCacheTargets(array $targets): void
+    {
         // Invalidate specific keys
-        foreach ($this->getCacheKeysToInvalidate() as $key) {
+        foreach ($targets['keys'] ?? [] as $key) {
             SmartCache::forget($key);
         }
 
         // Flush tags
-        $tagsToFlush = $this->getCacheTagsToFlush();
+        $tagsToFlush = $targets['tags'] ?? [];
         if (!empty($tagsToFlush)) {
             SmartCache::flushTags($tagsToFlush, 'model');
         }
 
         // Handle patterns (basic wildcard support)
-        foreach ($this->getCachePatternsToInvalidate() as $pattern) {
+        foreach ($targets['patterns'] ?? [] as $pattern) {
             $this->invalidatePattern($pattern);
         }
 
         // Handle dependencies
-        foreach ($this->getCacheDependenciesToInvalidate() as $dependency) {
+        foreach ($targets['dependencies'] ?? [] as $dependency) {
             SmartCache::invalidate($dependency);
         }
+    }
+
+    /**
+     * Declared keys, tags, patterns, and dependencies resolved with the
+     * attribute values the model had before this save, where they differ from
+     * the current ones.
+     *
+     * Placeholders such as 'category_{category_id}_products' otherwise resolve
+     * against the new values only, so moving a product to another category left
+     * the old category's entry stale. The observer reads this while the
+     * "updated" event runs, before Eloquent forgets the original values.
+     * Overridden get*ToInvalidate() methods are not involved: only the declared
+     * configuration can be resolved against the original attributes.
+     *
+     * @return array{keys: array, tags: array, patterns: array, dependencies: array}
+     */
+    public function getOriginalCacheInvalidationTargets(): array
+    {
+        $config = $this->getCacheInvalidationConfig();
+        $targets = [];
+
+        foreach (['keys', 'tags', 'patterns', 'dependencies'] as $section) {
+            $targets[$section] = \array_values(\array_diff(
+                $this->resolveCacheInvalidationValuesWith($config[$section], fn (string $attribute) => $this->getOriginal($attribute)),
+                $this->resolveCacheInvalidationValues($config[$section])
+            ));
+        }
+
+        return $targets;
     }
 
     /**
@@ -221,16 +266,6 @@ trait CacheInvalidation
      */
     protected function invalidatePattern(string $pattern): void
     {
-        // Numeric keys such as '123' come back as integers from the index.
-        $matchedKeys = \array_filter(
-            \array_map('strval', SmartCache::getManagedKeys()),
-            fn (string $key) => $this->matchesPattern($key, $pattern)
-        );
-
-        if ($matchedKeys === []) {
-            return;
-        }
-
         // Managed keys are stored fully qualified, so forget() must not apply the
         // active namespace a second time. Mirrors CacheInvalidationService.
         $cache = SmartCache::getFacadeRoot();
@@ -249,6 +284,22 @@ trait CacheInvalidation
                 }
                 $namespace = null;
             }
+        }
+
+        // Numeric keys such as '123' come back as integers from the index. Under
+        // a namespace, a key of that namespace also matches when the rest of it
+        // does, so 'users_list_*' covers 't1:users_list_1' for namespace t1.
+        $prefix = \is_string($namespace) && $namespace !== '' ? $namespace . ':' : null;
+        $matchedKeys = \array_filter(
+            \array_map('strval', SmartCache::getManagedKeys()),
+            fn (string $key) => $this->matchesPattern($key, $pattern)
+                || ($prefix !== null
+                    && \str_starts_with($key, $prefix)
+                    && $this->matchesPattern(\substr($key, \strlen($prefix)), $pattern))
+        );
+
+        if ($matchedKeys === []) {
+            return;
         }
 
         if ($namespace !== null) {
@@ -368,6 +419,18 @@ trait CacheInvalidation
      */
     protected function resolveCacheInvalidationValues(array $values): array
     {
+        return $this->resolveCacheInvalidationValuesWith($values, fn (string $attribute) => $this->getAttribute($attribute));
+    }
+
+    /**
+     * Resolve placeholders with the given attribute reader.
+     *
+     * @param array $values
+     * @param callable(string): mixed $attributeValue
+     * @return array
+     */
+    protected function resolveCacheInvalidationValuesWith(array $values, callable $attributeValue): array
+    {
         $resolvedValues = [];
 
         foreach ($values as $value) {
@@ -375,12 +438,43 @@ trait CacheInvalidation
                 continue;
             }
 
-            $resolvedValues[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) {
-                $attribute = $matches[1];
-                return $this->getAttribute($attribute) ?? $matches[0];
+            $resolvedValues[] = preg_replace_callback('/\{(\w+)\}/', function ($matches) use ($attributeValue) {
+                return $this->cacheInvalidationPlaceholderValue($attributeValue($matches[1])) ?? $matches[0];
             }, $value);
         }
 
         return \array_values(\array_unique($resolvedValues));
+    }
+
+    /**
+     * The text a placeholder resolves to, or null to leave it as written.
+     *
+     * Enum casts resolve to their value (backed) or name (pure), as cache keys
+     * do; before 1.16 an enum-cast attribute threw "could not be converted to
+     * string" from save(), after the row was written. Other values that have no
+     * string form (arrays, plain DateTime) leave the placeholder in place.
+     *
+     * @param mixed $value
+     * @return string|null
+     */
+    protected function cacheInvalidationPlaceholderValue(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if ($value instanceof \BackedEnum) {
+            return (string) $value->value;
+        }
+
+        if ($value instanceof \UnitEnum) {
+            return $value->name;
+        }
+
+        if (\is_scalar($value) || $value instanceof \Stringable) {
+            return (string) $value;
+        }
+
+        return null;
     }
 }

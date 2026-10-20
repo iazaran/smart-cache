@@ -57,8 +57,10 @@ class SmartChunkSizeCalculator
             ? (int) floor($safeMaxSize / $avgItemSize)
             : $defaultChunkSize;
 
-        // Ensure minimum chunk size
-        $optimalChunkSize = max($optimalChunkSize, 100);
+        // At least one item per chunk. A floor of 100 items overrode the driver
+        // limit for large items (100 x 20 KB on Memcached's 1 MB limit), so the
+        // store rejected every chunk.
+        $optimalChunkSize = max($optimalChunkSize, 1);
 
         // Adjust based on total data size
         if ($totalSize > 10 * 1024 * 1024) { // > 10MB
