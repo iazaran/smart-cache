@@ -26,7 +26,7 @@ class CacheInvalidationObserver
      */
     public function updated(Model $model): void
     {
-        $this->invalidateCache($model);
+        $this->invalidateCache($model, $this->originalTargets($model));
     }
 
     /**
@@ -55,23 +55,61 @@ class CacheInvalidationObserver
      * Perform cache invalidation if the model uses the CacheInvalidation trait.
      *
      * @param Model $model
+     * @param array $originalTargets Targets for the values the model had before an update
      * @return void
      */
-    protected function invalidateCache(Model $model): void
+    protected function invalidateCache(Model $model, array $originalTargets = []): void
     {
         if (!$this->usesCacheInvalidationTrait($model)) {
             return;
         }
 
+        $invalidate = function () use ($model, $originalTargets): void {
+            $model->performCacheInvalidation();
+
+            if ($originalTargets !== [] && \method_exists($model, 'invalidateCacheTargets')) {
+                $model->invalidateCacheTargets($originalTargets);
+            }
+        };
+
         if ($this->shouldDeferUntilAfterCommit($model)) {
-            $model->getConnection()->afterCommit(function () use ($model): void {
-                $model->performCacheInvalidation();
-            });
+            $model->getConnection()->afterCommit($invalidate);
 
             return;
         }
 
-        $model->performCacheInvalidation();
+        $invalidate();
+    }
+
+    /**
+     * Targets resolved with the model's values from before the update. Read
+     * now, while the event runs: by the time a deferred invalidation runs after
+     * commit, Eloquent has replaced the original values with the new ones.
+     *
+     * @param Model $model
+     * @return array
+     */
+    protected function originalTargets(Model $model): array
+    {
+        if (!$this->usesCacheInvalidationTrait($model)
+            || !\method_exists($model, 'getOriginalCacheInvalidationTargets')
+        ) {
+            return [];
+        }
+
+        try {
+            $targets = $model->getOriginalCacheInvalidationTargets();
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        foreach ($targets as $values) {
+            if (\is_array($values) && $values !== []) {
+                return $targets;
+            }
+        }
+
+        return [];
     }
 
     /**

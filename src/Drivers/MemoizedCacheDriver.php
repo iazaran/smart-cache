@@ -459,6 +459,9 @@ class MemoizedCacheDriver implements Repository
      */
     public function touch($key, $ttl): bool
     {
+        // A TTL of zero or less deletes the entry, so the memory of it must go.
+        $this->forgetMemoized($key);
+
         // Delegate to the underlying repository's touch() if available (Laravel 13+)
         if (\method_exists($this->repository, 'touch')) {
             return $this->repository->touch($key, $ttl);
@@ -603,5 +606,19 @@ class MemoizedCacheDriver implements Repository
         }
 
         return true;
+    }
+
+    /**
+     * Pass other repository methods (getDefaultCacheTime(), getName(), lock
+     * helpers, macros) to the wrapped repository, as Laravel's Repository passes
+     * unknown calls on to its store.
+     *
+     * @param string $method
+     * @param array $parameters
+     * @return mixed
+     */
+    public function __call(string $method, array $parameters): mixed
+    {
+        return $this->repository->{$method}(...$parameters);
     }
 }

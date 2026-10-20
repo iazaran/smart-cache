@@ -92,8 +92,21 @@ class RateLimiter
 
     /**
      * Probabilistic early expiration to prevent stampede (XFetch algorithm).
+     *
+     * XFetch refreshes when now - delta * beta * ln(rand) >= expiry, where delta
+     * is how long a regeneration takes: the refresh probability is
+     * exp(-remaining / (beta * delta)), negligible until the last few multiples
+     * of delta before expiry. Earlier releases used the whole TTL as delta,
+     * which refreshed about 37% of reads even right after a write.
+     *
+     * @param int $ttl
+     * @param int $createdAt
+     * @param float $beta Above 1 refreshes earlier, below 1 later; 0 never early
+     * @param float|null $delta Seconds a regeneration takes; when unknown, one
+     *                          second, or a tenth of the TTL if that is shorter
+     * @return bool
      */
-    public function shouldRefreshProbabilistically(int $ttl, int $createdAt, float $beta = 1.0): bool
+    public function shouldRefreshProbabilistically(int $ttl, int $createdAt, float $beta = 1.0, ?float $delta = null): bool
     {
         $now = \time();
         $expiresAt = $createdAt + $ttl;
@@ -103,7 +116,15 @@ class RateLimiter
             return true;
         }
 
-        $probability = \exp(-$remaining / ($beta * $ttl));
+        if ($beta <= 0) {
+            return false;
+        }
+
+        if ($delta === null || $delta <= 0) {
+            $delta = \max(0.001, \min(1.0, $ttl / 10));
+        }
+
+        $probability = \exp(-$remaining / ($beta * $delta));
         $random = \mt_rand() / \mt_getrandmax();
 
         return $random < $probability;

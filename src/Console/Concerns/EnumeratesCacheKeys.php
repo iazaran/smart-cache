@@ -21,7 +21,12 @@ trait EnumeratesCacheKeys
         $storeClass = \get_class($store);
 
         if (\str_contains($storeClass, 'Redis')) {
-            return $this->scanRedisKeys($store->connection());
+            $connection = $store->connection();
+
+            return $this->stripKeyPrefix(
+                $this->scanRedisKeys($connection),
+                $this->redisConnectionPrefix($connection) . $this->storePrefix($store)
+            );
         }
 
         if (\str_contains($storeClass, 'ArrayStore')) {
@@ -29,6 +34,73 @@ trait EnumeratesCacheKeys
         }
 
         throw new \Exception('Cannot enumerate keys for this cache driver');
+    }
+
+    /**
+     * Keep the keys that belong to the store and remove their prefix.
+     *
+     * SCAN returns keys as Redis holds them: with the connection prefix
+     * (database.redis.options.prefix) and the cache store prefix (cache.prefix)
+     * in front. Before 1.16 the prefixed keys were compared with managed keys
+     * and passed to forget(), so nothing ever matched. Keys without both
+     * prefixes belong to something else on the same connection (queues,
+     * sessions, another store) and are left out.
+     *
+     * @param array $keys
+     * @param string $prefix
+     * @return array
+     */
+    private function stripKeyPrefix(array $keys, string $prefix): array
+    {
+        if ($prefix === '') {
+            return $keys;
+        }
+
+        $length = \strlen($prefix);
+        $stripped = [];
+
+        foreach ($keys as $key) {
+            $key = (string) $key;
+
+            if (\str_starts_with($key, $prefix) && \strlen($key) > $length) {
+                $stripped[] = \substr($key, $length);
+            }
+        }
+
+        return $stripped;
+    }
+
+    /**
+     * The prefix the Redis client puts in front of every key, as Laravel's own
+     * RedisStore reads it.
+     *
+     * @param object $connection
+     * @return string
+     */
+    private function redisConnectionPrefix(object $connection): string
+    {
+        try {
+            if ($connection instanceof \Illuminate\Redis\Connections\PhpRedisConnection) {
+                return (string) $connection->_prefix('');
+            }
+
+            if ($connection instanceof \Illuminate\Redis\Connections\PredisConnection) {
+                return (string) ($connection->getOptions()->prefix ?: '');
+            }
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('Cannot determine the Redis key prefix', 0, $e);
+        }
+
+        return '';
+    }
+
+    /**
+     * @param object $store
+     * @return string
+     */
+    private function storePrefix(object $store): string
+    {
+        return \method_exists($store, 'getPrefix') ? (string) $store->getPrefix() : '';
     }
 
     /**

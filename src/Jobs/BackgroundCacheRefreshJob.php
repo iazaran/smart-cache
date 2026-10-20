@@ -99,13 +99,11 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            if ($this->namespace === null) {
-                $this->storeValue($this->resolveCallback());
-            } else {
-                // The callback may itself read through SmartCache, so it runs
-                // inside the namespace too, not just the write.
-                $this->inNamespace(fn () => $this->storeValue($this->resolveCallback()));
-            }
+            // The callback may itself read through SmartCache, so it runs inside
+            // the namespace too, not just the write. A job queued without a
+            // namespace runs without one, rather than in whatever namespace an
+            // earlier job left active on the worker.
+            $this->inNamespace(fn () => $this->storeValue($this->resolveCallback()));
         } catch (\Throwable $e) {
             // Log the error but don't fail the job if it's a transient issue
             \Illuminate\Support\Facades\Log::warning("Background cache refresh failed for key '{$this->key}': " . $e->getMessage());
@@ -141,8 +139,21 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     protected function inNamespace(\Closure $refresh): void
     {
         $cache = SmartCache::getFacadeRoot();
+
+        // getNamespace() is not on the SmartCache contract.
+        if (!\is_callable([$cache, 'getNamespace'])) {
+            $refresh();
+
+            return;
+        }
+
         $previous = $cache->getNamespace();
-        $cache->namespace($this->namespace);
+
+        if ($this->namespace === null) {
+            $cache->withoutNamespace();
+        } else {
+            $cache->namespace($this->namespace);
+        }
 
         try {
             $refresh();

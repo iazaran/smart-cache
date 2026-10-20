@@ -13,6 +13,15 @@ use SmartCache\Events\TagFlushed;
 trait DispatchesCacheEvents
 {
     /**
+     * Tags of the write being reported. A write takes its tags from the active
+     * tags before it runs, so by the time KeyWritten is dispatched they are no
+     * longer in $activeTags.
+     *
+     * @var array|null
+     */
+    protected ?array $writeEventTags = null;
+
+    /**
      * Dispatch a cache hit event.
      *
      * @param string $key
@@ -50,7 +59,7 @@ trait DispatchesCacheEvents
     protected function dispatchKeyWritten(string $key, mixed $value, ?int $seconds = null): void
     {
         if ($this->shouldDispatchEvent('key_written')) {
-            Event::dispatch(new KeyWritten($key, $value, $seconds, $this->activeTags));
+            Event::dispatch(new KeyWritten($key, $value, $seconds, $this->writeEventTags ?? $this->activeTags));
         }
     }
 

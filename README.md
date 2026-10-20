@@ -91,6 +91,7 @@ SmartCache is built for the painful cases that appear after an application grows
 
 - **Data shape is preserved.** Chunked payloads keep associative keys and sparse numeric keys intact, so ID-keyed arrays do not come back reindexed.
 - **Partial chunk loss is recoverable.** If a chunk is missing or corrupted, SmartCache treats the entry as a cache miss, evicts the broken metadata, and lets `remember()` regenerate a clean value.
+- **Readers never mix versions (v1.16.0+).** Every chunked write stores its chunks under new keys and deletes the replaced entry's chunks only after the new entry is stored, so a concurrent reader gets the old value or the new one, never a mix. A chunked value that shrinks leaves no trailing chunks behind, and the chunks of values stored without expiry are registered so `smart-cache:cleanup-chunks` can remove them if their entry is evicted.
 - **Null remains a valid cached value.** Stored `null` is distinguished from a miss, preserving Laravel cache semantics while still enabling self-healing.
 - **Raw repository access is still available.** Use `SmartCache::repository()` when a package or one-off operation needs the underlying Laravel cache store directly.
 
@@ -214,6 +215,8 @@ $users = $memo->remember('users', 3600, fn() => User::all());
 $users = $memo->get('users'); // instant — served from memory
 ```
 
+By default each `memo()` call creates its own memo layer, so keep the instance in a variable. Set `smart-cache.memo.native = true` (v1.16.0+, Laravel 12.9+) to build `memo()` on Laravel's `Cache::memo()` instead. There is then one memo layer per store, shared with `Cache::memo()` and every other `memo()` call, and Laravel clears it between requests and queued jobs. SmartCache still compresses, chunks, and restores above it, and SmartCache tags work on it: `SmartCache::memo()->tags(['reports'])->remember(...)`. Like `Cache::memo()`, a key the request already read as missing keeps reading as missing until the request writes it. `add()` stays atomic. SmartCache's own bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized in either mode.
+
 ### Atomic Locks
 
 ```php
@@ -244,7 +247,7 @@ SmartCache::tags(['users'])->put('user_1', $user, 3600);
 SmartCache::flushTags(['users']);
 ```
 
-Use `flushTags()` to invalidate by tag; `flush()` clears the entire store. By default, tags set with `tags()` stay active until a write uses them, so after a tagged `get()` that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set `smart-cache.tags.scoped = true` (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling `tags()`, or use `tags()->remember()`.
+Use `flushTags()` to invalidate by tag. Since v1.16.0, `SmartCache::tags(['users'])->flush()` does the same, like Laravel's `Cache::tags()->flush()`: it removes only the tagged entries, with their chunks and metadata. A plain `flush()` still clears the entire store. Tags work on every store, including file and database, because SmartCache keeps its own tag index, and `tags('a', 'b')`, enum tag names, and `tags(...)->putMany()` (which tags every key) behave as in Laravel. By default, tags set with `tags()` stay active until a write uses them, so after a tagged `get()` that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set `smart-cache.tags.scoped = true` (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling `tags()`, or use `tags()->remember()`.
 
 ### Model Auto-Invalidation
 
@@ -421,6 +424,7 @@ return [
     'metadata_lock'   => ['enabled' => true, 'ttl' => 5, 'wait' => 1],
     'model_invalidation' => ['after_commit' => true],
     'tags'            => ['scoped' => false],        // v1.15.0: opt-in scoped tags (recommended for new apps)
+    'memo'            => ['native' => false],        // v1.16.0: build memo() on Laravel's Cache::memo() (Laravel 12.9+)
     'dashboard'       => ['enabled' => false, 'prefix' => 'smart-cache', 'middleware' => ['web']],
     'warmers'         => [],                    // Cache warmer classes for smart-cache:warm
 ];
@@ -429,6 +433,8 @@ return [
 ## Laravel Octane / Long-Running Workers
 
 SmartCache is registered as a singleton, which means per-request state (active tags, namespaces, in-memory metric buffers) would normally leak between requests on **Laravel Octane**, **Swoole**, **FrankenPHP** or **RoadRunner**. Since **v1.12.0** the service provider's `terminating()` hook calls `SmartCache::reset()` and `OrphanChunkCleanupService::flush()` at the end of every request, so there is **nothing extra to configure**. If you embed SmartCache in your own long-running runtime, call `app(\SmartCache\Contracts\SmartCache::class)->reset()` between iterations.
+
+Queue workers never terminate between jobs. Since **v1.16.0**, `queue:work` calls `SmartCache::refreshState()` before each job. Pending bookkeeping is persisted, the managed-key index and dependency map are re-read on next use, and pending tags are dropped, so `flushPatterns()` and model invalidation in a job see keys that other processes added. The namespace and runtime settings (jitter, circuit breaker) are kept, and sync-queue jobs are not affected.
 
 ## Cache Clearing Semantics
 
@@ -456,6 +462,16 @@ $users = SmartCache::get('users');
 ```
 
 Review calls to `clear()` during migration and choose `clearManaged()` or `flush()` explicitly. For incremental adoption, keep Laravel's `Cache` facade alongside SmartCache and migrate only large or operationally sensitive keys.
+
+Since v1.16.0 the rest of Laravel 13's `Repository` API works through SmartCache too:
+- enum keys (`SmartCache::get(CacheKey::Users)`);
+- the typed getters `string()`, `integer()`, `float()`, `boolean()`, `array()`;
+- `missing()` and `rememberWithWarmth()`;
+- Closure TTLs in `remember()`;
+- `DateInterval` durations in `flexible()`;
+- `tags(...)->flush()`.
+
+These read optimized entries and honor the namespace.
 
 ## Documentation
 

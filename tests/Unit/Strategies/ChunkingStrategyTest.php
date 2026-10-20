@@ -280,16 +280,8 @@ class ChunkingStrategyTest extends TestCase
             $originalArray["item_$i"] = "value_$i";
         }
         
-        $this->mockCache->shouldReceive('put')->atLeast(1);
-        
-        // Also setup mock returns for restoration test
-        $chunks = array_chunk($originalArray, 100, true);
-        foreach ($chunks as $index => $chunk) {
-            $this->mockCache->shouldReceive('get')
-                ->with("_sc_chunk_test-key_$index")
-                ->andReturn($chunk);
-        }
-        
+        $this->storeChunksInMemory();
+
         $context = [
             'cache' => $this->mockCache,
             'key' => 'test-key',
@@ -313,14 +305,7 @@ class ChunkingStrategyTest extends TestCase
             $originalArray[$i * 10] = "value_$i";
         }
 
-        $this->mockCache->shouldReceive('put')->atLeast(1);
-
-        $chunks = array_chunk($originalArray, 100, true);
-        foreach ($chunks as $index => $chunk) {
-            $this->mockCache->shouldReceive('get')
-                ->with("_sc_chunk_sparse-key_$index")
-                ->andReturn($chunk);
-        }
+        $this->storeChunksInMemory();
 
         $context = [
             'cache' => $this->mockCache,
@@ -334,6 +319,27 @@ class ChunkingStrategyTest extends TestCase
         $this->assertSame($originalArray, $restored);
         $this->assertArrayHasKey(0, $restored);
         $this->assertArrayHasKey(2190, $restored);
+    }
+
+    /**
+     * Back the mocked repository with an array, so restore() reads the chunks
+     * optimize() wrote under whatever keys it chose.
+     */
+    private function storeChunksInMemory(): void
+    {
+        $stored = [];
+
+        $this->mockCache->shouldReceive('put')->atLeast(1)
+            ->andReturnUsing(function ($key, $value) use (&$stored) {
+                $stored[$key] = $value;
+
+                return true;
+            });
+
+        $this->mockCache->shouldReceive('get')
+            ->andReturnUsing(function ($key, $default = null) use (&$stored) {
+                return $stored[$key] ?? $default;
+            });
     }
 
     protected function tearDown(): void

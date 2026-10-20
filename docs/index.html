@@ -1015,6 +1015,10 @@
                             <h4>⭕ Valid Null Caching</h4>
                             <p>Stored <code>null</code> values remain valid cached values and are not confused with cache misses.</p>
                         </div>
+                        <div class="feature-card">
+                            <h4>🧬 Versioned Chunks <span class="badge badge-success">v1.16.0</span></h4>
+                            <p>Each chunked write uses new chunk keys and deletes the replaced entry's chunks only after the new entry is stored, so a concurrent reader gets the old value or the new one, never a mix, and a chunked value that shrinks leaves no chunks behind.</p>
+                        </div>
                     </div>
 
                     <h2>When SmartCache Fits</h2>
@@ -1292,11 +1296,15 @@ SmartCache::tags(['users', 'profiles'])->put('user_2', $user2, 3600);
 // Clear all cache with specific tags
 SmartCache::flushTags(['users']); // Clears both user_1 and user_2
 
+// Laravel style (v1.16.0+): only the tagged entries, with their chunks
+SmartCache::tags(['reports'])->put('heavy_analytics', $rows, 3600); // chunked
+SmartCache::tags(['reports'])->flush();
+
 // Clear cache with multiple tags
 SmartCache::flushTags(['users', 'profiles']);</code></pre>
 
                     <div class="alert alert-info">
-                        <strong>Use <code>flushTags()</code>, not <code>flush()</code>.</strong> <code>flush()</code> clears the entire cache store. By default, tags set with <code>tags()</code> stay active until a write uses them, so after a tagged <code>get()</code> that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set <code>smart-cache.tags.scoped = true</code> (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling <code>tags()</code>, or use <code>tags()-&gt;remember()</code>.
+                        <strong><code>tags(...)-&gt;flush()</code> flushes only those tags (v1.16.0+).</strong> Like Laravel's <code>Cache::tags()-&gt;flush()</code> and SmartCache's <code>flushTags()</code>, it removes the tagged entries with their chunks and metadata; before 1.16 it cleared the entire store. A plain <code>flush()</code> still clears the entire cache store. Tags work on every store, including file and database, because SmartCache keeps its own tag index; <code>tags('a', 'b')</code>, enum tag names, and <code>tags(...)-&gt;putMany()</code> (which tags every key) behave as in Laravel. By default, tags set with <code>tags()</code> stay active until a write uses them, so after a tagged <code>get()</code> that misses they also tag the next write, whatever its key. That only causes extra invalidation. New applications can set <code>smart-cache.tags.scoped = true</code> (v1.15.0+). Then, after a tagged lookup, the tags only apply to a later write of a key looked up while they were pending. The "read, then write on a miss" pattern stays tagged, and unrelated writes are not. In that mode, compute values before calling <code>tags()</code>, or use <code>tags()-&gt;remember()</code>.
                     </div>
 
                     <h2>Cache Locking</h2>
@@ -1455,6 +1463,10 @@ return [
 
     'tags' => [
         'scoped' => false,           // v1.15.0: opt-in scoped tags (recommended for new apps)
+    ],
+
+    'memo' => [
+        'native' => false,           // v1.16.0: build memo() on Laravel's Cache::memo() (Laravel 12.9+)
     ],
 
     'monitoring' => [
@@ -1700,6 +1712,21 @@ foreach ($products as $product) {
 // Get memoization statistics
 $stats = $memo->getMemoizationStats();
 // Returns: memoized_count, missing_count, total_memory</code></pre>
+
+                    <h3>Native <code>Cache::memo()</code> <span class="badge badge-success">v1.16.0</span></h3>
+                    <p>By default every <code>memo()</code> call creates its own memo layer, so keep the instance in a variable. On Laravel 12.9+ you can build <code>memo()</code> on Laravel's own <code>Cache::memo()</code> instead:</p>
+
+                    <pre><code class="language-php">// config/smart-cache.php
+'memo' => ['native' => true],
+
+// One memo layer per store, shared with Cache::memo() and every memo() call,
+// cleared by Laravel between requests and queued jobs
+SmartCache::memo()->tags(['permissions'])->remember("permissions:{$user->id}", 3600, $load);
+SmartCache::memo()->get("permissions:{$user->id}"); // from memory, already restored by SmartCache</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>How the layers fit.</strong> SmartCache compresses, chunks, and restores above Laravel's memo layer, and its tags work on it. Like <code>Cache::memo()</code>, a key the request has already read as missing keeps reading as missing until the request writes it. <code>add()</code> stays atomic: it writes to the store directly, because Laravel's memoized store has no atomic <code>add()</code>. <code>getMemoizationStats()</code> is only available on SmartCache's own memo layer. In both modes, SmartCache's bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized, so it cannot drop a write or another process's tag entry. On Laravel versions without <code>Cache::memo()</code>, <code>memo()</code> keeps its own layer.
+                    </div>
 
 
 
@@ -2101,18 +2128,14 @@ php artisan smart-cache:warm
 php artisan smart-cache:warm --warmer=products</code></pre>
 
                     <h2>🧹 Orphan Chunk Cleanup</h2>
-                    <p>Automatically clean up orphaned chunks from expired data:</p>
+                    <p>SmartCache deletes a chunked entry's chunks when the entry is forgotten or replaced, after the new entry is stored (v1.16.0+). Chunks of values with a TTL expire with them. Since v1.16.0 the chunks of values stored without expiry are also recorded in a registry: those are the only chunks that could otherwise stay in the store forever, after an eviction, a deletion outside SmartCache, or a concurrent write that lost. The cleanup command removes them:</p>
 
                     <pre><code class="language-php">// Run cleanup command
 php artisan smart-cache:cleanup-chunks
 
 // Schedule automatic cleanup
 // In app/Console/Kernel.php
-$schedule->command('smart-cache:cleanup-chunks')->daily();
-
-// Cleanup is also triggered automatically when:
-// - A chunked key is forgotten
-// - A chunked key expires and is accessed</code></pre>
+$schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
 
                     <h2>📊 Cache Statistics Dashboard</h2>
                     <p>Visual dashboard for monitoring cache performance:</p>
@@ -2273,6 +2296,8 @@ $report = SmartCache::remember('report', 3600, fn() => Analytics::generate());
                     <pre><code class="language-php">// If you embed SmartCache in your own long-running runtime, call reset() between iterations:
 app(\SmartCache\Contracts\SmartCache::class)->reset();</code></pre>
 
+                    <p><strong>Queue workers (v1.16.0+).</strong> A worker never terminates between jobs, so <code>queue:work</code> calls <code>SmartCache::refreshState()</code> before each job. Pending bookkeeping is persisted, the managed-key index and dependency map are re-read on next use, and pending tags are dropped, so <code>flushPatterns()</code> and model invalidation in a job see keys that other processes added. The namespace and runtime settings are kept, and sync-queue jobs are not affected.</p>
+
                     <h2>Operational Footprint</h2>
                     <p>SmartCache stores metadata beside application values in the selected cache store. Depending on enabled features, keys can include <code>_sc_managed_keys</code>, <code>_sc_dna:{key}</code>, <code>_sc_meta:{key}</code>, <code>_sc_chunk_*</code>, <code>_sc_tag_*</code>, <code>_sc_dependencies</code>, <code>_sc_cost_metadata</code>, and <code>_sc_performance_metrics</code>.</p>
 
@@ -2352,6 +2377,10 @@ return [
         'scoped' => false,              // v1.15.0: opt-in scoped tags (recommended for new apps)
     ],
 
+    'memo' => [
+        'native' => false,              // v1.16.0: build memo() on Laravel's Cache::memo() (Laravel 12.9+)
+    ],
+
     'dashboard' => [
         'enabled' => false,
         'prefix' => 'smart-cache',
@@ -2376,10 +2405,10 @@ return [
                     
                     <div class="method">
                         <div class="method-name">SmartCache::get()</div>
-                        <div class="method-signature">SmartCache::get(string $key, mixed $default = null): mixed</div>
-                        <p>Retrieve an item from the cache with automatic restoration of optimized data.</p>
+                        <div class="method-signature">SmartCache::get(UnitEnum|string|array $key, mixed $default = null): mixed</div>
+                        <p>Retrieve an item from the cache with automatic restoration of optimized data. Since v1.16.0 every key-based method also accepts a backed enum (its value) or a pure enum (its name), as in Laravel.</p>
                         <div class="parameter">
-                            <span class="parameter-name">$key</span> <span class="parameter-type">(string)</span> - The cache key
+                            <span class="parameter-name">$key</span> <span class="parameter-type">(UnitEnum|string|array)</span> - The cache key; an array behaves like <code>many()</code>
                         </div>
                         <div class="parameter">
                             <span class="parameter-name">$default</span> <span class="parameter-type">(mixed)</span> - Default value if key doesn't exist
@@ -2391,6 +2420,18 @@ return [
                             <strong>Examples:</strong>
                             <pre><code class="language-php">$users = SmartCache::get('users', []);
 $config = SmartCache::get('app_config', collect());</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="method">
+                        <div class="method-name">SmartCache::string() / integer() / float() / boolean() / array() <span class="badge badge-success">v1.16.0</span></div>
+                        <div class="method-signature">SmartCache::integer(UnitEnum|string $key, mixed $default = null): int</div>
+                        <p>Laravel 13's typed getters. They restore compressed and chunked values and use the active namespace, and throw <code>InvalidArgumentException</code> when the value has another type. <code>missing()</code> and <code>rememberWithWarmth()</code> are available too.</p>
+                        <div class="example">
+                            <strong>Examples:</strong>
+                            <pre><code class="language-php">$count = SmartCache::integer('visits', 0);
+$rows = SmartCache::array(CacheKey::Report);
+[$report, $wasCached] = SmartCache::rememberWithWarmth('report', 3600, fn () => Report::build());</code></pre>
                         </div>
                     </div>
 
@@ -2698,7 +2739,7 @@ SmartCache::repository()->get('key');</code></pre>
                     <div class="method">
                         <div class="method-name">SmartCache::tags()</div>
                         <div class="method-signature">SmartCache::tags(string|array $tags): static</div>
-                        <p>Tag cache entries for organized invalidation.</p>
+                        <p>Tag cache entries for organized invalidation. <code>tags('a', 'b')</code> equals <code>tags(['a', 'b'])</code>, and a <code>flush()</code> right after <code>tags()</code> flushes only those tags (v1.16.0+).</p>
                         <div class="parameter">
                             <span class="parameter-name">$tags</span> <span class="parameter-type">(string|array)</span> - Tag name(s)
                         </div>
@@ -2708,7 +2749,8 @@ SmartCache::repository()->get('key');</code></pre>
                         <div class="example">
                             <strong>Example:</strong>
                             <pre><code class="language-php">SmartCache::tags(['users', 'profiles'])->put('user_1', $user1, 3600);
-SmartCache::tags('products')->put('product_123', $product, 1800);</code></pre>
+SmartCache::tags('products')->put('product_123', $product, 1800);
+SmartCache::tags('products')->flush(); // only the products entries</code></pre>
                         </div>
                     </div>
 
@@ -2885,10 +2927,10 @@ if ($lock->get()) {
 
                     <div class="method">
                         <div class="method-name">SmartCache::memo()</div>
-                        <div class="method-signature">SmartCache::memo(): \SmartCache\Drivers\MemoizedCacheDriver</div>
-                        <p>Get a memoized cache instance that holds values in memory for the current request.</p>
+                        <div class="method-signature">SmartCache::memo(?string $store = null): \SmartCache\SmartCache</div>
+                        <p>Get a SmartCache instance that holds values in memory for the current request or job. With <code>memo.native</code> enabled (v1.16.0+, Laravel 12.9+) it is built on Laravel's <code>Cache::memo()</code> and shares its memo layer.</p>
                         <div class="parameter">
-                            <span class="return-type">Returns:</span> MemoizedCacheDriver - Memoized cache instance
+                            <span class="return-type">Returns:</span> SmartCache - Memoized SmartCache instance, keeping the namespace and runtime settings
                         </div>
                         <div class="example">
                             <strong>Example:</strong>
@@ -3636,7 +3678,7 @@ http://your-app.com/api/test-smart-cache</code></pre>
                     <pre><code class="language-json">{
   "message": "SmartCache feature tests completed",
   "package_info": {
-    "version": "1.13.0",
+    "version": "1.16.0",
     "features_tested": 8
   },
   "tests": {
@@ -3748,6 +3790,10 @@ $value = SmartCache::get('key');</code></pre>
 
                     <div class="alert alert-warning">
                         <strong>Review bulk clearing:</strong> SmartCache 1.x keeps historical managed-only behavior for <code>clear()</code>. Use <code>clearManaged()</code> to preserve unrelated keys or <code>flush()</code> to clear the entire underlying cache store.
+                    </div>
+
+                    <div class="alert alert-info">
+                        <strong>Laravel 13 API (v1.16.0+).</strong> Enum keys, the typed getters (<code>string()</code>, <code>integer()</code>, <code>float()</code>, <code>boolean()</code>, <code>array()</code>), <code>missing()</code>, <code>rememberWithWarmth()</code>, Closure TTLs in <code>remember()</code>, <code>DateInterval</code> durations in <code>flexible()</code>, and <code>tags(...)-&gt;flush()</code> work through SmartCache, read optimized entries, and honor the namespace.
                     </div>
 
                     <h2>Gradual Migration</h2>

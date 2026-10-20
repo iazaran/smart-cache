@@ -164,14 +164,34 @@ class ChunkingStrategy implements OptimizationStrategy
         $chunks = array_chunk($value, $chunkSize, true);
         $chunkKeys = [];
 
+        // Every write gets its own chunk keys. Rewriting the previous version's
+        // chunks in place let a concurrent reader combine chunks of two
+        // versions, and left a failed write pointing at the wrong data. The
+        // wrapper lists its chunk keys, so entries written with the old
+        // "_sc_chunk_{key}_{index}" names stay readable, by any release.
+        $version = \bin2hex(\random_bytes(4));
+
         // Store each chunk separately
         foreach ($chunks as $index => $chunk) {
-            $chunkKey = "_sc_chunk_{$prefix}_{$index}";
-            $chunkKeys[] = $chunkKey;
+            $chunkKey = "_sc_chunk_{$prefix}_{$version}_{$index}";
 
-            if ($cache) {
-                $cache->put($chunkKey, $chunk, $ttl);
+            if ($cache && !$this->putChunk($cache, $chunkKey, $chunk, $ttl)) {
+                // A store that rejects a chunk (Memcached refuses items over its
+                // size limit) would leave an entry that can never be read. Drop
+                // what was written and let SmartCache fall back to the next
+                // strategy or the plain value.
+                foreach ($chunkKeys as $writtenKey) {
+                    try {
+                        $cache->forget($writtenKey);
+                    } catch (\Throwable $e) {
+                        // Best-effort cleanup; the chunk expires with its TTL.
+                    }
+                }
+
+                throw new \RuntimeException("Cache store rejected chunk [{$chunkKey}]");
             }
+
+            $chunkKeys[] = $chunkKey;
         }
 
         // Register chunks for orphan cleanup tracking
@@ -190,6 +210,20 @@ class ChunkingStrategy implements OptimizationStrategy
             'lazy_loading' => $this->lazyLoading,
             'chunk_size' => $chunkSize, // Use actual chunk size (may be different if smart sizing is enabled)
         ];
+    }
+
+    /**
+     * Write one chunk; false when the store reports that it did not store it.
+     *
+     * @param mixed $cache
+     * @param string $chunkKey
+     * @param array $chunk
+     * @param mixed $ttl
+     * @return bool
+     */
+    protected function putChunk(mixed $cache, string $chunkKey, array $chunk, mixed $ttl): bool
+    {
+        return $cache->put($chunkKey, $chunk, $ttl) !== false;
     }
 
     /**

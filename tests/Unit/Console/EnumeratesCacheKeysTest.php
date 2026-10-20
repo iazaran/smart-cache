@@ -20,7 +20,43 @@ class EnumeratesCacheKeysTest extends TestCase
             {
                 return $this->scanRedisKeys($connection);
             }
+
+            public function all(object $store): array
+            {
+                return $this->getAllCacheKeys($store);
+            }
         };
+    }
+
+    public function test_store_keys_are_returned_without_the_cache_prefix(): void
+    {
+        $store = new FakeRedisStore('laravel_cache_', new FakeScanConnection([
+            'laravel_cache_users',
+            'laravel_cache__sc_chunk_users_ab12cd34_0',
+            'queues:default',       // same connection, not a cache key
+            'laravel_cache_',       // the bare prefix is not a key
+        ]));
+
+        $keys = $this->subject()->all($store);
+
+        sort($keys);
+        $this->assertSame(['_sc_chunk_users_ab12cd34_0', 'users'], $keys);
+    }
+
+    public function test_predis_connection_prefix_is_removed_too(): void
+    {
+        $connection = \Mockery::mock(\Illuminate\Redis\Connections\PredisConnection::class);
+        $connection->shouldReceive('isCluster')->andReturn(false);
+        $connection->shouldReceive('getOptions')->andReturn((object) ['prefix' => 'app_database_']);
+        $connection->shouldReceive('scan')->andReturn([0, [
+            'app_database_laravel_cache_users',
+            'app_database_queues:default',
+            'other_laravel_cache_users',
+        ]]);
+
+        $keys = $this->subject()->all(new FakeRedisStore('laravel_cache_', $connection));
+
+        $this->assertSame(['users'], $keys);
     }
 
     public function test_scans_a_phpredis_style_connection_without_calling_keys(): void
@@ -340,5 +376,38 @@ class PredisClusterNodeStub
     {
         $this->keysCalled = true;
         return ['SHOULD-NOT-BE-USED'];
+    }
+}
+
+/**
+ * Named so its class contains "Redis", which is how the trait recognises a
+ * Redis store.
+ */
+class FakeRedisStore
+{
+    public function __construct(private string $prefix, private object $connection)
+    {
+    }
+
+    public function connection(): object
+    {
+        return $this->connection;
+    }
+
+    public function getPrefix(): string
+    {
+        return $this->prefix;
+    }
+}
+
+class FakeScanConnection
+{
+    public function __construct(private array $keys)
+    {
+    }
+
+    public function scan($cursor, $options = [])
+    {
+        return [0, $this->keys];
     }
 }
