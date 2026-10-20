@@ -283,6 +283,9 @@ return [
     | Cache::memo() instead: one memo layer per store, shared with Cache::memo()
     | and with every other memo() call, which Laravel clears between requests
     | and queued jobs. On older Laravel versions memo() keeps its own layer.
+    | In that mode add() writes to the store directly (it stays atomic), and
+    | SmartCache then reads that key from the store for as long as the memo
+    | layer lives.
     |
     */
     'memo' => [

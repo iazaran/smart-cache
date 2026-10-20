@@ -215,7 +215,7 @@ $users = $memo->remember('users', 3600, fn() => User::all());
 $users = $memo->get('users'); // instant — served from memory
 ```
 
-By default each `memo()` call creates its own memo layer, so keep the instance in a variable. Set `smart-cache.memo.native = true` (v1.16.0+, Laravel 12.9+) to build `memo()` on Laravel's `Cache::memo()` instead. There is then one memo layer per store, shared with `Cache::memo()` and every other `memo()` call, and Laravel clears it between requests and queued jobs. SmartCache still compresses, chunks, and restores above it, and SmartCache tags work on it: `SmartCache::memo()->tags(['reports'])->remember(...)`. Like `Cache::memo()`, a key the request already read as missing keeps reading as missing until the request writes it. `add()` stays atomic: it writes to the store directly, and SmartCache reads that key from the store for the rest of the request. SmartCache's own bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized in either mode.
+By default each `memo()` call creates its own memo layer, so keep the instance in a variable. Set `smart-cache.memo.native = true` (v1.16.0+, Laravel 12.9+) to build `memo()` on Laravel's `Cache::memo()` instead. There is then one memo layer per store, shared with `Cache::memo()` and every other `memo()` call, and Laravel clears it between requests and queued jobs. SmartCache still compresses, chunks, and restores above it, and SmartCache tags work on it: `SmartCache::memo()->tags(['reports'])->remember(...)`. Like `Cache::memo()`, a key the request already read as missing keeps reading as missing until the request writes it. `add()` stays atomic: it writes to the store directly, and SmartCache reads that key from the store for the rest of the request (Laravel's own `Cache::memo()` still remembers its earlier miss). SmartCache's own bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized in either mode.
 
 ### Atomic Locks
 
@@ -480,7 +480,7 @@ These read optimized entries and honor the namespace.
 ## Testing
 
 ```bash
-composer test            # 605 tests, 2,251 assertions
+composer test            # 673 tests, 2,461 assertions
 composer test-coverage   # with code coverage
 ```
 

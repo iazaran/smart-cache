@@ -1725,7 +1725,7 @@ SmartCache::memo()->tags(['permissions'])->remember("permissions:{$user->id}", 3
 SmartCache::memo()->get("permissions:{$user->id}"); // from memory, already restored by SmartCache</code></pre>
 
                     <div class="alert alert-info">
-                        <strong>How the layers fit.</strong> SmartCache compresses, chunks, and restores above Laravel's memo layer, and its tags work on it. Like <code>Cache::memo()</code>, a key the request has already read as missing keeps reading as missing until the request writes it. <code>add()</code> stays atomic: it writes to the store directly, because Laravel's memoized store has no atomic <code>add()</code>, and SmartCache then reads that key from the store for the rest of the request. <code>getMemoizationStats()</code> is only available on SmartCache's own memo layer. In both modes, SmartCache's bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized, so it cannot drop a write or another process's tag entry. On Laravel versions without <code>Cache::memo()</code>, <code>memo()</code> keeps its own layer.
+                        <strong>How the layers fit.</strong> SmartCache compresses, chunks, and restores above Laravel's memo layer, and its tags work on it. Like <code>Cache::memo()</code>, a key the request has already read as missing keeps reading as missing until the request writes it. <code>add()</code> stays atomic: it writes to the store directly, because Laravel's memoized store has no atomic <code>add()</code>, and SmartCache then reads that key from the store for the rest of the request (Laravel's own <code>Cache::memo()</code> still remembers its earlier miss). <code>getMemoizationStats()</code> is only available on SmartCache's own memo layer. In both modes, SmartCache's bookkeeping (deduplication records, tag indexes, the managed-key index) is never memoized, so it cannot drop a write or another process's tag entry. On Laravel versions without <code>Cache::memo()</code>, <code>memo()</code> keeps its own layer.
                     </div>
 
 
@@ -3537,7 +3537,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 605 tests, 2,251 assertions
+# 673 tests, 2,461 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

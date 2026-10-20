@@ -1588,7 +1588,7 @@ class SmartCache implements SmartCacheContract, Repository
         $this->markActiveTagsUsed();
         $key = $this->applyNamespace($key);
         $sentinel = static::sentinel();
-        $value = $this->cache->get($key, $sentinel);
+        $value = $this->repositoryFor($key)->get($key, $sentinel);
 
         return $value === $sentinel ? null : $value;
     }
@@ -1984,14 +1984,15 @@ class SmartCache implements SmartCacheContract, Repository
                     }
                 }
 
-                if ($this->config->get('smart-cache.fallback.log_errors', true)) {
-                    Log::warning("SmartCache restoration failed for {$key}: " . $e->getMessage());
-                }
-
                 // Self-Healing: evict the corrupted entry so the next remember()
                 // call transparently regenerates the data instead of serving garbage.
                 if ($this->selfHealingEnabled) {
                     try {
+                        // The entry first, right after the read that confirmed it is
+                        // broken, so a writer storing a new value meanwhile is not
+                        // undone by the slower cleanup below.
+                        $this->cache->forget($key);
+
                         // If the wrapper points at chunk keys, drop them too so we do not
                         // leak orphan chunks into the underlying store.
                         $chunkKeys = static::chunkKeysOf($value);
@@ -2000,15 +2001,23 @@ class SmartCache implements SmartCacheContract, Repository
                             $this->updateChunkRegistry($key, [], $chunkKeys);
                         }
 
-                        $this->cache->forget($key);
                         $this->storeRepository()->forget("_sc_meta:{$key}");
                         $this->storeRepository()->forget("_sc_dna:{$key}");
                         $this->untrackKey($key);
+
+                        if ($this->config->get('smart-cache.fallback.log_errors', true)) {
+                            Log::warning("SmartCache restoration failed for {$key}: " . $e->getMessage());
+                        }
                         Log::info("SmartCache self-healing: evicted corrupted key [{$key}]");
                     } catch (\Throwable $evictError) {
                         // Best-effort eviction
                     }
+
                     return static::sentinel();
+                }
+
+                if ($this->config->get('smart-cache.fallback.log_errors', true)) {
+                    Log::warning("SmartCache restoration failed for {$key}: " . $e->getMessage());
                 }
 
                 if ($this->config->get('smart-cache.fallback.enabled', true)) {
@@ -2444,7 +2453,7 @@ class SmartCache implements SmartCacheContract, Repository
         // Get cached value with timestamp using sentinel for null support
         $metaKey = "_sc_meta:{$namespacedKey}";
         $sentinel = static::sentinel();
-        $cachedValue = $this->cache->get($namespacedKey, $sentinel);
+        $cachedValue = $this->repositoryFor($namespacedKey)->get($namespacedKey, $sentinel);
         $cachedMeta = $this->storeRepository()->get($metaKey);
 
         if ($cachedValue !== $sentinel && $cachedMeta !== null) {
@@ -3439,6 +3448,10 @@ class SmartCache implements SmartCacheContract, Repository
      */
     private function updateChunkRegistry(string $key, array $added, array $removed): void
     {
+        if ($added === [] && $removed === []) {
+            return;
+        }
+
         if ($added === []) {
             // Most chunked values carry a TTL and were never registered, so
             // look before taking the lock.

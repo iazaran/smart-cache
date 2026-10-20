@@ -164,8 +164,15 @@ class V116ScriptedReadRepository extends Repository
     /** @var array<string, array<int, mixed>> */
     public array $scriptedReads = [];
 
+    /** @var array<int, string> Keys read, in order */
+    public array $reads = [];
+
     public function get($key, $default = null): mixed
     {
+        if (\is_string($key)) {
+            $this->reads[] = $key;
+        }
+
         if (\is_string($key) && ($this->scriptedReads[$key] ?? []) !== []) {
             return \array_shift($this->scriptedReads[$key]);
         }
@@ -825,6 +832,23 @@ class V116FeaturesTest extends TestCase
 
         $cache->forget('forever_big');
         $this->assertNull($this->rawStore()->get(OrphanChunkCleanupService::REGISTRY_KEY));
+    }
+
+    public function test_writes_that_touch_no_chunks_never_read_the_registry(): void
+    {
+        $repository = new V116ScriptedReadRepository($this->rawStore()->getStore());
+        $cache = new SmartCache($repository, $this->app['cache'], $this->app['config'], [
+            new ChunkingStrategy(2048, 100),
+        ]);
+        $cache->forever('registered', $this->rows(300));
+        $repository->reads = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $cache->put("scalar_{$i}", $i, 60);
+            $cache->forever("forever_{$i}", "value_{$i}");
+        }
+
+        $this->assertNotContains(OrphanChunkCleanupService::REGISTRY_KEY, $repository->reads);
     }
 
     public function test_chunked_values_with_a_ttl_are_not_registered(): void
