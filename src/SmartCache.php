@@ -44,6 +44,12 @@ class SmartCache implements SmartCacheContract, Repository
     private const METADATA_LOCK_RETRY_MILLISECONDS = 25;
 
     /**
+     * How many times a read follows a chunked entry that was replaced while it
+     * was being restored, before treating it as a miss.
+     */
+    private const REPLACED_ENTRY_REREADS = 3;
+
+    /**
      * Sentinel object used to distinguish between a cache miss and a stored null value.
      * This ensures full Laravel contract compliance where null is a valid cached value.
      */
@@ -152,6 +158,17 @@ class SmartCache implements SmartCacheContract, Repository
      * request.
      */
     private ?Repository $storeRepository = null;
+
+    /**
+     * Keys that add() wrote to the store beneath a native memo layer, per
+     * layer. Laravel's memoized store cannot forget a single key, so a miss it
+     * remembered before the add() would keep hiding the new value; these keys
+     * are read from the store instead for as long as the layer lives. Shared
+     * by every SmartCache instance on the same layer, and released with it.
+     *
+     * @var \WeakMap<Repository, array<string, true>>|null
+     */
+    private static ?\WeakMap $storeReadKeys = null;
 
     /**
      * Name of the cache store this instance uses, when store() or memo()
@@ -445,7 +462,7 @@ class SmartCache implements SmartCacheContract, Repository
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
         $sentinel = static::sentinel();
-        $value = $this->cache->get($key, $sentinel);
+        $value = $this->repositoryFor($key)->get($key, $sentinel);
 
         if ($value === $sentinel) {
             $this->recordPerformanceMetric('cache_miss', $key, $startTime);
@@ -800,13 +817,12 @@ class SmartCache implements SmartCacheContract, Repository
             return false;
         }
 
-        $this->forgetChunkKeys(\array_diff($replacedChunks, $newChunks));
+        $deletedChunks = \array_values(\array_diff($replacedChunks, $newChunks));
+        $this->forgetChunkKeys($deletedChunks);
 
-        if ($forever && $newChunks !== []) {
-            $this->registerForeverChunks($key, $newChunks);
-        } elseif ($replacedChunks !== []) {
-            $this->unregisterChunks($key);
-        }
+        // Chunks stored without expiry are registered for cleanupOrphanChunks();
+        // chunks with a TTL expire on their own.
+        $this->updateChunkRegistry($key, $forever ? $newChunks : [], $deletedChunks);
 
         return true;
     }
@@ -908,7 +924,43 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $key = $this->applyNamespace(static::normalizeKey($key));
         $this->bindActiveTags($key);
-        return $this->cache->has($key);
+        return $this->repositoryFor($key)->has($key);
+    }
+
+    /**
+     * The repository a read of this key goes to: the memo layer, or the store
+     * for a key add() wrote past a native memo layer.
+     *
+     * @param string $namespacedKey
+     * @return Repository
+     */
+    private function repositoryFor(string $namespacedKey): Repository
+    {
+        if ($this->storeRepository !== null
+            && self::$storeReadKeys !== null
+            && self::$storeReadKeys->offsetExists($this->cache)
+            && isset(self::$storeReadKeys[$this->cache][$namespacedKey])
+        ) {
+            return $this->storeRepository;
+        }
+
+        return $this->cache;
+    }
+
+    /**
+     * Read this key from the store, not the native memo layer, for as long as
+     * the layer lives.
+     *
+     * @param string $namespacedKey
+     * @return void
+     */
+    private function readFromStoreFromNowOn(string $namespacedKey): void
+    {
+        self::$storeReadKeys ??= new \WeakMap();
+
+        $keys = self::$storeReadKeys->offsetExists($this->cache) ? self::$storeReadKeys[$this->cache] : [];
+        $keys[$namespacedKey] = true;
+        self::$storeReadKeys[$this->cache] = $keys;
     }
 
     /**
@@ -963,7 +1015,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         if ($chunkKeys !== []) {
             $this->forgetChunkKeys($chunkKeys);
-            $this->unregisterChunks($key);
+            $this->updateChunkRegistry($key, [], $chunkKeys);
         }
 
         // Dispatch event
@@ -1335,6 +1387,10 @@ class SmartCache implements SmartCacheContract, Repository
                     $this->associateTagsWithKey($namespacedKey, $tags);
                 }
 
+                if ($this->storeRepository !== null) {
+                    $this->readFromStoreFromNowOn($namespacedKey);
+                }
+
                 $this->dispatchWrite($namespacedKey, $value, \is_int($ttl) ? $ttl : null, $tags);
             }
 
@@ -1401,6 +1457,7 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function getMultiple($keys, $default = null): iterable
     {
+        $this->markActiveTagsUsed();
         $results = [];
         foreach ($keys as $key) {
             $results[static::normalizeKey($key)] = $this->get($key, $default);
@@ -1877,16 +1934,16 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function maybeRestoreValue(mixed $value, string $key): mixed
     {
-        return $this->restoreValue($value, $key, true);
+        return $this->restoreValue($value, $key, self::REPLACED_ENTRY_REREADS);
     }
 
     /**
      * @param mixed $value
      * @param string $key
-     * @param bool $mayReread Whether a chunked entry that fails to restore may be read again
+     * @param int $rereads How many more times a replaced chunked entry may be read again
      * @return mixed
      */
-    private function restoreValue(mixed $value, string $key, bool $mayReread): mixed
+    private function restoreValue(mixed $value, string $key, int $rereads): mixed
     {
         $context = [
             'key' => $key,
@@ -1909,8 +1966,10 @@ class SmartCache implements SmartCacheContract, Repository
             } catch (\Throwable $e) {
                 // A chunked entry whose chunks are gone may just have been replaced:
                 // a writer deletes the old chunks once its new entry is stored. Read
-                // the entry again and restore that rather than evicting it.
-                if ($mayReread && static::chunkKeysOf($value) !== []) {
+                // the entry again and restore that rather than evicting it. Only the
+                // entry that is still stored can be broken; one that keeps being
+                // replaced is a miss, never an eviction of the newer value.
+                if (static::chunkKeysOf($value) !== []) {
                     $sentinel = static::sentinel();
                     $current = $this->storeRepository()->get($key, $sentinel);
 
@@ -1921,7 +1980,7 @@ class SmartCache implements SmartCacheContract, Repository
                     if (static::chunkKeysOf($current) !== static::chunkKeysOf($value)) {
                         $this->forgetMemoized($key);
 
-                        return $this->restoreValue($current, $key, false);
+                        return $rereads > 0 ? $this->restoreValue($current, $key, $rereads - 1) : $sentinel;
                     }
                 }
 
@@ -1938,7 +1997,7 @@ class SmartCache implements SmartCacheContract, Repository
                         $chunkKeys = static::chunkKeysOf($value);
                         if ($chunkKeys !== []) {
                             $this->forgetChunkKeys($chunkKeys);
-                            $this->unregisterChunks($key);
+                            $this->updateChunkRegistry($key, [], $chunkKeys);
                         }
 
                         $this->cache->forget($key);
@@ -1993,6 +2052,12 @@ class SmartCache implements SmartCacheContract, Repository
             if ($this->managedKeysChangeCount >= $this->managedKeysPersistThreshold) {
                 $this->persistManagedKeys();
             }
+        } else {
+            // Already listed in the copy loaded here, but another process may
+            // have removed it from the stored index since. Re-assert it at the
+            // next persist; this alone does not make the index dirty.
+            $this->managedKeysAdded[$key] = true;
+            unset($this->managedKeysRemoved[$key]);
         }
     }
 
@@ -2506,7 +2571,7 @@ class SmartCache implements SmartCacheContract, Repository
         $lock = null;
 
         if ($singleFlight) {
-            $store = $this->cache->getStore();
+            $store = $this->lockStore();
             if ($store instanceof \Illuminate\Contracts\Cache\LockProvider) {
                 $lockTtl = (int) $this->config->get('smart-cache.swr.lock_ttl', 30);
                 try {
@@ -2740,9 +2805,10 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $scope = $this->activeTagsScope;
 
+        // tags([])->flush() flushes no tags: an empty selection must never
+        // become a flush of the whole store.
         if ($scope === null
             || !($scope['flushable'] ?? false)
-            || $this->activeTags === []
             || $scope['tags'] !== $this->activeTags
         ) {
             return null;
@@ -3149,7 +3215,7 @@ class SmartCache implements SmartCacheContract, Repository
             return $callback();
         }
 
-        $store = $this->cache->getStore();
+        $store = $this->lockStore();
 
         if (!$store instanceof LockProvider) {
             return $callback();
@@ -3358,39 +3424,42 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
-     * Record the chunks of a value stored without expiry in the orphan-chunk
-     * registry, replacing any earlier entry for the key.
+     * Update a key's entry in the orphan-chunk registry: add the chunks of a
+     * value just stored without expiry, and drop the chunks just deleted.
+     *
+     * Chunks already registered that were not deleted stay listed. They belong
+     * to a concurrent write of the same key that lost the race, and nothing
+     * but cleanupOrphanChunks() would ever remove them; it drops each one the
+     * entry no longer points at.
      *
      * @param string $key
-     * @param array<int, string> $chunkKeys
+     * @param array<int, string> $added
+     * @param array<int, string> $removed
      * @return void
      */
-    private function registerForeverChunks(string $key, array $chunkKeys): void
+    private function updateChunkRegistry(string $key, array $added, array $removed): void
     {
-        $this->mutateChunkRegistry(static function (array $registry) use ($key, $chunkKeys): array {
-            $registry[$key] = ['chunk_keys' => $chunkKeys, 'registered_at' => \time()];
-
-            return $registry;
-        });
-    }
-
-    /**
-     * Drop a key from the orphan-chunk registry once its chunks are deleted.
-     *
-     * @param string $key
-     * @return void
-     */
-    private function unregisterChunks(string $key): void
-    {
-        // Most chunked values carry a TTL and were never registered, so look
-        // before taking the lock.
-        $registry = $this->storeRepository()->get(OrphanChunkCleanupService::REGISTRY_KEY);
-        if (!\is_array($registry) || !\array_key_exists($key, $registry)) {
-            return;
+        if ($added === []) {
+            // Most chunked values carry a TTL and were never registered, so
+            // look before taking the lock.
+            $registry = $this->storeRepository()->get(OrphanChunkCleanupService::REGISTRY_KEY);
+            if (!\is_array($registry) || !\array_key_exists($key, $registry)) {
+                return;
+            }
         }
 
-        $this->mutateChunkRegistry(static function (array $registry) use ($key): array {
-            unset($registry[$key]);
+        $this->mutateChunkRegistry(static function (array $registry) use ($key, $added, $removed): array {
+            $registered = $registry[$key]['chunk_keys'] ?? [];
+            $chunks = \array_values(\array_unique([
+                ...\array_diff(\is_array($registered) ? $registered : [], $removed),
+                ...$added,
+            ]));
+
+            if ($chunks === []) {
+                unset($registry[$key]);
+            } else {
+                $registry[$key] = ['chunk_keys' => $chunks, 'registered_at' => \time()];
+            }
 
             return $registry;
         });
@@ -3412,8 +3481,11 @@ class SmartCache implements SmartCacheContract, Repository
 
                 if ($registry === []) {
                     $this->storeRepository()->forget(OrphanChunkCleanupService::REGISTRY_KEY);
-                } else {
-                    $this->storeRepository()->forever(OrphanChunkCleanupService::REGISTRY_KEY, $registry);
+                } elseif (!$this->storeRepository()->forever(OrphanChunkCleanupService::REGISTRY_KEY, $registry)
+                    && $this->config->get('smart-cache.fallback.log_errors', true)
+                ) {
+                    // Memcached rejects items over its size limit (1 MB by default).
+                    Log::warning('SmartCache could not store the orphan-chunk registry (' . \count($registry) . ' entries); new chunks of values stored without expiry are not tracked');
                 }
             });
         } catch (\Throwable $e) {
@@ -3722,7 +3794,7 @@ class SmartCache implements SmartCacheContract, Repository
      */
     private function acquireRegenerationLock(string $key, int $lockSeconds, int $waitSeconds, bool &$valueAppeared): ?Lock
     {
-        $store = $this->cache->getStore();
+        $store = $this->lockStore();
 
         if (!$store instanceof LockProvider) {
             return null;
@@ -3831,6 +3903,12 @@ class SmartCache implements SmartCacheContract, Repository
      */
     private function getFromStore(string $key, mixed $default): mixed
     {
+        // Later reads in this request must see the value too, not the miss
+        // the memo layer remembered.
+        if ($this->storeRepository !== null) {
+            $this->readFromStoreFromNowOn($this->applyNamespace($key));
+        }
+
         $memoized = $this->cache;
         $this->cache = $this->storeRepository();
 
@@ -4354,6 +4432,7 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function many(array $keys): array
     {
+        $this->markActiveTagsUsed();
         $results = [];
 
         // Like Laravel's Repository, accept a list of keys or ['key' => default].
@@ -4420,6 +4499,7 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function deleteMultiple($keys): bool
     {
+        $this->markActiveTagsUsed();
         $success = true;
 
         foreach ($keys as $key) {

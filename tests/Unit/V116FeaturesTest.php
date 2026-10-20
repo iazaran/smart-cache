@@ -83,6 +83,98 @@ class V116RejectingChunkStore extends ArrayStore
 }
 
 /**
+ * A store without lock support (like APC).
+ */
+class V116NoLockStore implements \Illuminate\Contracts\Cache\Store
+{
+    private array $items = [];
+
+    public function get($key)
+    {
+        return $this->items[$key] ?? null;
+    }
+
+    public function many(array $keys)
+    {
+        return array_combine($keys, array_map(fn ($key) => $this->get($key), $keys));
+    }
+
+    public function put($key, $value, $seconds)
+    {
+        $this->items[$key] = $value;
+
+        return true;
+    }
+
+    public function putMany(array $values, $seconds)
+    {
+        foreach ($values as $key => $value) {
+            $this->put($key, $value, $seconds);
+        }
+
+        return true;
+    }
+
+    public function increment($key, $value = 1)
+    {
+        return $this->items[$key] = ((int) ($this->items[$key] ?? 0)) + $value;
+    }
+
+    public function decrement($key, $value = 1)
+    {
+        return $this->increment($key, -$value);
+    }
+
+    public function forever($key, $value)
+    {
+        return $this->put($key, $value, 0);
+    }
+
+    public function forget($key)
+    {
+        unset($this->items[$key]);
+
+        return true;
+    }
+
+    public function flush()
+    {
+        $this->items = [];
+
+        return true;
+    }
+
+    public function getPrefix()
+    {
+        return '';
+    }
+
+    public function touch($key, $seconds)
+    {
+        return isset($this->items[$key]);
+    }
+}
+
+/**
+ * A repository whose next reads of chosen keys return queued values, to replay
+ * what a process would see while other processes write in between.
+ */
+class V116ScriptedReadRepository extends Repository
+{
+    /** @var array<string, array<int, mixed>> */
+    public array $scriptedReads = [];
+
+    public function get($key, $default = null): mixed
+    {
+        if (\is_string($key) && ($this->scriptedReads[$key] ?? []) !== []) {
+            return \array_shift($this->scriptedReads[$key]);
+        }
+
+        return parent::get($key, $default);
+    }
+}
+
+/**
  * Regression coverage for 1.16.0.
  *
  * Each test fails against the 1.15.0 implementation, except those marked as a
@@ -316,6 +408,28 @@ class V116FeaturesTest extends TestCase
     }
 
     /** Guard. */
+    public function test_flushing_an_empty_tag_list_removes_nothing(): void
+    {
+        $this->smartCache->put('unrelated', 'kept', 60);
+
+        $this->assertTrue($this->smartCache->tags([])->flush());
+
+        $this->assertSame('kept', $this->smartCache->get('unrelated'));
+    }
+
+    public function test_flush_after_an_empty_bulk_call_still_clears_the_store(): void
+    {
+        foreach (['many', 'getMultiple', 'deleteMultiple'] as $method) {
+            $this->rawStore()->put('laravel_key', 'gone', 60);
+
+            $this->smartCache->tags(['t'])->{$method}([]);
+            $this->smartCache->flush();
+
+            $this->assertNull($this->rawStore()->get('laravel_key'), "flush() after {$method}([])");
+        }
+    }
+
+    /** Guard. */
     public function test_plain_flush_still_clears_the_store(): void
     {
         $this->smartCache->put('a', 1, 60);
@@ -456,6 +570,23 @@ class V116FeaturesTest extends TestCase
         $this->assertSame('theirs', $this->rawStore()->get('marker'));
     }
 
+    public function test_native_memo_reads_a_key_it_added_after_remembering_a_miss(): void
+    {
+        if (!$this->nativeMemoAvailable()) {
+            $this->markTestSkipped('Cache::memo() needs Laravel 12.9+.');
+        }
+
+        $this->app['config']->set('smart-cache.memo.native', true);
+        $memo = $this->smartCache->memo();
+        $this->assertNull($memo->get('added'));
+
+        $this->assertTrue($memo->add('added', 'mine', 60));
+
+        $this->assertSame('mine', $memo->get('added'));
+        $this->assertTrue($memo->has('added'));
+        $this->assertSame('mine', $this->smartCache->memo()->get('added'), 'Other memo() instances share the layer');
+    }
+
     /** Guard. */
     public function test_native_memo_keeps_the_driver_of_the_store_below_it(): void
     {
@@ -493,6 +624,25 @@ class V116FeaturesTest extends TestCase
         $lock->release();
         $this->assertSame(0, $calls);
         $this->assertSame('theirs', $value);
+        $this->assertSame('theirs', $memo->get('locked'), 'The memo layer must not keep the earlier miss');
+    }
+
+    public function test_native_memo_on_a_store_without_locks_does_not_try_to_lock(): void
+    {
+        if (!$this->nativeMemoAvailable()) {
+            $this->markTestSkipped('Cache::memo() needs Laravel 12.9+.');
+        }
+
+        $this->app['cache']->extend('v116_nolock', fn () => $this->app['cache']->repository(new V116NoLockStore()));
+        $this->app['config']->set('cache.stores.v116_nolock', ['driver' => 'v116_nolock']);
+        $this->app['config']->set('smart-cache.memo.native', true);
+        $this->app['config']->set('smart-cache.fallback.log_errors', true);
+        \Illuminate\Support\Facades\Log::spy();
+
+        $value = $this->smartCache->memo('v116_nolock')->rememberWithLock('nolock', 60, fn () => 'built');
+
+        $this->assertSame('built', $value);
+        \Illuminate\Support\Facades\Log::shouldNotHaveReceived('warning');
     }
 
     // -----------------------------------------------------------------
@@ -513,6 +663,32 @@ class V116FeaturesTest extends TestCase
             $this->assertNull($this->rawStore()->get($chunkKey));
         }
         $this->assertSame($this->rows(300, 'new'), $cache->get('big'));
+    }
+
+    public function test_a_reader_that_keeps_finding_replaced_entries_never_evicts_the_newest(): void
+    {
+        $this->app['config']->set('smart-cache.self_healing.enabled', true);
+        $writer = $this->chunkingCache();
+
+        $writer->put('big', $this->rows(300, 'a'), 60);
+        $a = $this->rawStore()->get('big');
+        $writer->put('big', $this->rows(300, 'b'), 60);
+        $b = $this->rawStore()->get('big');
+        $writer->put('big', $this->rows(300, 'c'), 60);
+        $c = $this->rawStore()->get('big');
+
+        // The reader holds A; its re-read finds B, which is replaced by C
+        // before B's chunks are read.
+        $repository = new V116ScriptedReadRepository($this->rawStore()->getStore());
+        $repository->scriptedReads['big'] = [$b, $c];
+        $reader = new SmartCache($repository, $this->app['cache'], $this->app['config'], [
+            new ChunkingStrategy(2048, 100),
+        ]);
+
+        $restored = (new \ReflectionMethod(SmartCache::class, 'maybeRestoreValue'))->invoke($reader, $a, 'big');
+
+        $this->assertSame($this->rows(300, 'c'), $restored);
+        $this->assertSame($c, $this->rawStore()->get('big'), 'The newest entry must not be evicted');
     }
 
     /** Guard. */
@@ -696,6 +872,32 @@ class V116FeaturesTest extends TestCase
         $this->assertSame($live, $this->rawStore()->get(OrphanChunkCleanupService::REGISTRY_KEY)['replaced']['chunk_keys']);
     }
 
+    public function test_concurrent_forever_writes_keep_the_losers_chunks_registered(): void
+    {
+        $winner = $this->chunkingCache();
+        $winner->forever('raced', $this->rows(300, 'old'));
+        $old = $this->rawStore()->get('raced');
+
+        // B stores its value; A, which read the old entry before B wrote, then
+        // overwrites it and deletes only the old entry's chunks.
+        $winner->forever('raced', $this->rows(300, 'b'));
+        $loserChunks = $this->chunkKeysOf('raced');
+
+        $repository = new V116ScriptedReadRepository($this->rawStore()->getStore());
+        $repository->scriptedReads['raced'] = [$old];
+        (new SmartCache($repository, $this->app['cache'], $this->app['config'], [
+            new ChunkingStrategy(2048, 100),
+        ]))->forever('raced', $this->rows(300, 'a'));
+
+        $stats = $winner->cleanupOrphanChunks();
+
+        $this->assertSame(count($loserChunks), $stats['cleaned_chunks']);
+        foreach ($loserChunks as $chunkKey) {
+            $this->assertNull($this->rawStore()->get($chunkKey));
+        }
+        $this->assertSame($this->rows(300, 'a'), $winner->get('raced'));
+    }
+
     // -----------------------------------------------------------------
     // Lazy loading
     // -----------------------------------------------------------------
@@ -803,6 +1005,25 @@ class V116FeaturesTest extends TestCase
         $first->persistManagedKeys();
 
         $this->assertEqualsCanonicalizing(['from_first', 'from_second'], $this->rawStore()->get('_sc_managed_keys'));
+    }
+
+    public function test_rewriting_a_key_another_process_untracked_keeps_it_in_the_index(): void
+    {
+        $writer = $this->otherProcess();
+        $remover = $this->otherProcess();
+        $writer->put('k', 1, 60);
+        $writer->persistManagedKeys();
+
+        $stale = $this->otherProcess();
+        $stale->getManagedKeys();          // loaded while k was listed
+        $remover->forget('k');
+        $remover->persistManagedKeys();
+
+        $stale->put('k', 2, 60);           // already listed in its stale copy
+        $stale->put('l', 3, 60);
+        $stale->persistManagedKeys();
+
+        $this->assertEqualsCanonicalizing(['k', 'l'], $this->rawStore()->get('_sc_managed_keys'));
     }
 
     public function test_clear_managed_clears_keys_tracked_after_the_index_was_loaded(): void
