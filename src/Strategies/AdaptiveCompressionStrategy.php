@@ -3,6 +3,7 @@
 namespace SmartCache\Strategies;
 
 use SmartCache\Contracts\OptimizationStrategy;
+use SmartCache\Strategies\Concerns\RestrictsUnserialization;
 use Illuminate\Contracts\Cache\Repository;
 
 /**
@@ -15,6 +16,8 @@ use Illuminate\Contracts\Cache\Repository;
  */
 class AdaptiveCompressionStrategy implements OptimizationStrategy
 {
+    use RestrictsUnserialization;
+
     /**
      * @var int
      */
@@ -66,6 +69,14 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
      * Optional cache repository for persisting frequency data.
      */
     protected ?Repository $cache = null;
+
+    /**
+     * Decoder shared by every restore(); adaptive entries use the fixed-level
+     * wire format.
+     *
+     * @var CompressionStrategy|null
+     */
+    private ?CompressionStrategy $decoder = null;
 
     /**
      * AdaptiveCompressionStrategy constructor.
@@ -128,8 +139,13 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
         }
 
         // Convert to string to measure size
-        $serialized = is_string($value) ? $value : serialize($value);
-        
+        try {
+            $serialized = is_string($value) ? $value : serialize($value);
+        } catch (\Throwable $e) {
+            // Values that cannot be serialized cannot be compressed either.
+            return false;
+        }
+
         return strlen($serialized) > $this->threshold;
     }
 
@@ -165,7 +181,11 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
         // Adaptive entries use the fixed-level wire format, so share its validated
         // decoder: a corrupted payload must throw (and self-heal) instead of
         // being served as a false or garbage cache hit.
-        return (new CompressionStrategy())->restore($value, $context);
+        $this->decoder ??= new CompressionStrategy();
+
+        return $this->decoder
+            ->setSerializableClasses($this->serializableClasses)
+            ->restore($value, $context);
     }
 
     /**
@@ -287,7 +307,7 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
             if (\is_array($persisted)) {
                 $this->accessFrequency = $persisted;
             }
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             // Silently fail — in-memory tracking still works
         }
     }
@@ -304,7 +324,7 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
         try {
             $this->cache->put('_sc_adaptive_freq', $this->accessFrequency, 86400);
             $this->frequencyDirty = false;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             // Silently fail
         }
     }
@@ -329,16 +349,19 @@ class AdaptiveCompressionStrategy implements OptimizationStrategy
             return [];
         }
         
+        $originalSize = $optimizedValue['original_size'] ?? 0;
+        $compressedSize = $optimizedValue['compressed_size'] ?? 0;
+
         return [
             'level' => $optimizedValue['level'] ?? null,
-            'original_size' => $optimizedValue['original_size'] ?? 0,
-            'compressed_size' => $optimizedValue['compressed_size'] ?? 0,
-            'ratio' => $optimizedValue['compressed_size'] > 0 
-                ? $optimizedValue['compressed_size'] / $optimizedValue['original_size'] 
+            'original_size' => $originalSize,
+            'compressed_size' => $compressedSize,
+            'ratio' => $compressedSize > 0 && $originalSize > 0
+                ? $compressedSize / $originalSize
                 : 0,
-            'savings_bytes' => ($optimizedValue['original_size'] ?? 0) - ($optimizedValue['compressed_size'] ?? 0),
-            'savings_percent' => $optimizedValue['original_size'] > 0
-                ? (1 - ($optimizedValue['compressed_size'] / $optimizedValue['original_size'])) * 100
+            'savings_bytes' => $originalSize - $compressedSize,
+            'savings_percent' => $originalSize > 0
+                ? (1 - ($compressedSize / $originalSize)) * 100
                 : 0,
         ];
     }

@@ -230,6 +230,30 @@ class CostAwareCacheManager
     }
 
     /**
+     * Persist pending changes and drop the loaded copy, so the next use reads
+     * what other processes stored meanwhile.
+     *
+     * SmartCache calls this between requests in long-running runtimes (Octane)
+     * and before each job a queue worker runs. The copy used to be loaded once
+     * per process, and persisting it wrote back a snapshot that could be hours
+     * old over the scores other processes recorded.
+     *
+     * @return void
+     */
+    public function refresh(): void
+    {
+        try {
+            $this->persist();
+        } catch (\Throwable $e) {
+            // Best-effort: the scores are diagnostic, never cached data.
+        }
+
+        $this->metadata = [];
+        $this->loaded = false;
+        $this->dirty = false;
+    }
+
+    /**
      * Load metadata from cache if not already loaded.
      */
     protected function ensureLoaded(): void

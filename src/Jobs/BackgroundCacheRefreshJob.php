@@ -49,6 +49,17 @@ class BackgroundCacheRefreshJob implements ShouldQueue
     protected ?string $namespace = null;
 
     /**
+     * Name of the cache store the refresh was queued from; null for the
+     * default store.
+     *
+     * Defaults to null so jobs serialized by earlier releases still unserialize
+     * and keep writing to the default store.
+     *
+     * @var string|null
+     */
+    protected ?string $storeName = null;
+
+    /**
      * The number of times the job may be attempted.
      *
      * @var int
@@ -70,9 +81,16 @@ class BackgroundCacheRefreshJob implements ShouldQueue
      * @param int|null $ttl
      * @param array $tags
      * @param string|null $namespace Namespace to write the key under
+     * @param string|null $storeName Cache store to write the key to; null for the default store
      */
-    public function __construct(string $key, callable|string $callback, ?int $ttl = null, array $tags = [], ?string $namespace = null)
-    {
+    public function __construct(
+        string $key,
+        callable|string $callback,
+        ?int $ttl = null,
+        array $tags = [],
+        ?string $namespace = null,
+        ?string $storeName = null
+    ) {
         // Closures cannot be safely serialized by Laravel's queue drivers,
         // so reject them early with a clear, actionable error rather than
         // letting the worker fail later with a cryptic serialization warning.
@@ -89,6 +107,7 @@ class BackgroundCacheRefreshJob implements ShouldQueue
         $this->ttl = $ttl;
         $this->tags = $tags;
         $this->namespace = $namespace;
+        $this->storeName = $storeName;
     }
 
     /**
@@ -119,10 +138,16 @@ class BackgroundCacheRefreshJob implements ShouldQueue
      */
     protected function storeValue(mixed $value): void
     {
+        // The store the refresh was queued from; before 1.17.0 the value always
+        // went to the default store. store() keeps the namespace set above.
+        $cache = $this->storeName !== null
+            ? SmartCache::store($this->storeName)
+            : SmartCache::getFacadeRoot();
+
         if (!empty($this->tags)) {
-            SmartCache::tags($this->tags)->put($this->key, $value, $this->ttl);
+            $cache->tags($this->tags)->put($this->key, $value, $this->ttl);
         } else {
-            SmartCache::put($this->key, $value, $this->ttl);
+            $cache->put($this->key, $value, $this->ttl);
         }
     }
 

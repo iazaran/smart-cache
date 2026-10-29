@@ -16,7 +16,7 @@ use Illuminate\Support\Collection;
  * RuntimeException. Before 1.16.0 its items silently read as null and
  * toArray() left them out, so a partial dataset looked complete.
  */
-class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
+class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \JsonSerializable
 {
     /**
      * @var Repository
@@ -42,6 +42,14 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
      * @var bool
      */
     protected bool $isCollection;
+
+    /**
+     * Class of the cached collection, such as Eloquent\Collection, for
+     * materialize(); null for entries written before it was recorded.
+     *
+     * @var string|null
+     */
+    protected ?string $collectionClass = null;
 
     /**
      * @var int
@@ -76,19 +84,22 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
      * @param int $chunkSize
      * @param int $totalItems
      * @param bool $isCollection
+     * @param string|null $collectionClass Class of the cached collection
      */
     public function __construct(
         Repository $cache,
         array $chunkKeys,
         int $chunkSize,
         int $totalItems,
-        bool $isCollection = false
+        bool $isCollection = false,
+        ?string $collectionClass = null
     ) {
         $this->cache = $cache;
         $this->chunkKeys = $chunkKeys;
         $this->chunkSize = $chunkSize;
         $this->totalItems = $totalItems;
         $this->isCollection = $isCollection;
+        $this->collectionClass = $collectionClass;
     }
 
     /**
@@ -266,13 +277,46 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
 
     /**
      * Load every chunk now: a Collection when a collection was cached, an
-     * array otherwise, as an eager read returns.
+     * array otherwise, as an eager read returns. A cached Eloquent\Collection
+     * (or another Collection subclass) comes back as that class, as it does
+     * from an eager read; before 1.17.0 it came back as a Support\Collection.
      *
      * @return array|Collection
      */
     public function materialize(): array|Collection
     {
-        return $this->isCollection ? $this->toCollection() : $this->toArray();
+        if (!$this->isCollection) {
+            return $this->toArray();
+        }
+
+        $class = $this->collectionClass;
+
+        if ($class !== null
+            && $class !== Collection::class
+            && \class_exists($class)
+            && \is_subclass_of($class, Collection::class)
+        ) {
+            try {
+                return new $class($this->toArray());
+            } catch (\Throwable $e) {
+                // Fall through to a plain collection, as an eager read does.
+            }
+        }
+
+        return $this->toCollection();
+    }
+
+    /**
+     * The items in iteration order, for json_encode() and JSON responses.
+     *
+     * Keys are positions, as when iterating; before 1.17.0 json_encode()
+     * produced "{}" and a controller could not return the collection.
+     *
+     * @return array
+     */
+    public function jsonSerialize(): array
+    {
+        return \iterator_to_array($this);
     }
 
     /**
@@ -303,7 +347,21 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess
     public function slice(int $offset, ?int $length = null): array
     {
         $result = [];
-        $end = $length !== null ? $offset + $length : $this->totalItems;
+
+        // Negative arguments count from the end, as in array_slice(); they
+        // used to produce out-of-range positions that read as null.
+        if ($offset < 0) {
+            $offset = \max(0, $this->totalItems + $offset);
+        }
+
+        if ($length === null) {
+            $end = $this->totalItems;
+        } elseif ($length < 0) {
+            $end = $this->totalItems + $length;
+        } else {
+            $end = $offset + $length;
+        }
+
         $end = min($end, $this->totalItems);
         
         for ($i = $offset; $i < $end; $i++) {

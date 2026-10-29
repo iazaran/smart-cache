@@ -3,6 +3,7 @@
 namespace SmartCache\Services;
 
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Support\Carbon;
 
 /**
  * Rate Limiter for Cache Operations
@@ -108,7 +109,8 @@ class RateLimiter
      */
     public function shouldRefreshProbabilistically(int $ttl, int $createdAt, float $beta = 1.0, ?float $delta = null): bool
     {
-        $now = \time();
+        // The framework clock, as SmartCache uses when it records $createdAt.
+        $now = Carbon::now()->getTimestamp();
         $expiresAt = $createdAt + $ttl;
         $remaining = $expiresAt - $now;
 

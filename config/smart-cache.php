@@ -99,9 +99,10 @@ return [
     |
     */
     'rate_limiter' => [
-        'enabled' => true, // Enable rate limiting for stampede protection
-        'window' => 60, // Window in seconds
-        'max_attempts' => 10, // Maximum attempts per window
+        'enabled' => true, // Informational: throttle() and rememberWithStampedeProtection()
+                           // always rate-limit; this flag is not read.
+        'window' => 60, // Default window in seconds
+        'max_attempts' => 10, // Default maximum attempts per window
     ],
 
     /*
@@ -291,6 +292,29 @@ return [
     'memo' => [
         'native' => false,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Serializable Classes
+    |--------------------------------------------------------------------------
+    |
+    | Laravel's cache.serializable_classes (which new Laravel 13 applications
+    | set to false) is applied by the store, but SmartCache unserializes the
+    | values it compresses, encrypts, or serializes itself, so the setting does
+    | not reach them: a large object comes back intact where a small one would
+    | not. Since 1.17.0 you can apply a restriction to them too (opt-in):
+    |
+    |   null     no restriction (default, the behavior before 1.17.0)
+    |   'cache'  use the value of cache.serializable_classes
+    |   false    allow no classes (objects come back as __PHP_Incomplete_Class)
+    |   [...]    allow only these classes
+    |
+    | Chunked values are read by the store itself and already follow Laravel's
+    | setting. igbinary payloads of the opt-in serialization strategy cannot
+    | be restricted.
+    |
+    */
+    'serializable_classes' => null,
 
     /*
     |--------------------------------------------------------------------------

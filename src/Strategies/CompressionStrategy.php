@@ -3,9 +3,12 @@
 namespace SmartCache\Strategies;
 
 use SmartCache\Contracts\OptimizationStrategy;
+use SmartCache\Strategies\Concerns\RestrictsUnserialization;
 
 class CompressionStrategy implements OptimizationStrategy
 {
+    use RestrictsUnserialization;
+
     /**
      * @var int
      */
@@ -143,7 +146,7 @@ class CompressionStrategy implements OptimizationStrategy
             return true;
         });
         try {
-            $restored = \unserialize($decompressed);
+            $restored = $this->unserializePayload($decompressed);
         } finally {
             \restore_error_handler();
         }

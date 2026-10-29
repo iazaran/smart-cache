@@ -29,8 +29,7 @@ class ClearCommand extends Command
 
     protected function clearSpecificKey(SmartCache $cache, string $key): int
     {
-        $managedKeys = $cache->getManagedKeys();
-        $isManaged = \in_array($key, $managedKeys, true);
+        $isManaged = isset($this->managedKeySet($cache->getManagedKeys())[$key]);
         $force = $this->option('force');
         $keyExists = $cache->has($key);
 
@@ -92,6 +91,14 @@ class ClearCommand extends Command
 
         if ($actualCount === 0) {
             $this->info('All managed keys were expired and have been cleaned up.');
+
+            // --force also clears non-managed keys, as it does when the index
+            // is empty to begin with; this branch used to skip them.
+            if ($force) {
+                $this->info('Checking for non-managed cache keys...');
+                return $this->clearOrphanedKeys($cache);
+            }
+
             return self::SUCCESS;
         }
 
@@ -117,30 +124,46 @@ class ClearCommand extends Command
     {
         $store = $cache->getStore();
         $cleared = 0;
-        $managedKeys = $cache->getManagedKeys();
+        $failed = 0;
+        $managedKeys = $this->managedKeySet($cache->getManagedKeys());
 
         try {
             $allKeys = $this->getAllCacheKeys($store);
-
-            foreach ($allKeys as $key) {
-                if (!\in_array($key, $managedKeys, true) && !$this->isSmartCacheInternalKey($key)) {
-                    if ($cache->store()->forget($key)) {
-                        $cleared++;
-                        $this->line("Cleared key: {$key}");
-                    }
-                }
-            }
-
-            if ($cleared > 0) {
-                $this->info("Cleared {$cleared} non-managed cache keys.");
-            } else {
-                $this->info('No non-managed cache keys found.');
-            }
-
-            return self::SUCCESS;
         } catch (\Exception) {
             $this->warn('Could not scan for non-managed keys with this cache driver. Only managed keys were cleared.');
             return self::SUCCESS;
         }
+
+        foreach ($allKeys as $key) {
+            $key = (string) $key;
+
+            if (isset($managedKeys[$key]) || $this->isSmartCacheInternalKey($key)) {
+                continue;
+            }
+
+            // One key that cannot be read or deleted (such as a Redis tag set
+            // of Laravel's own tagged cache, which is not a string value) no
+            // longer stops the keys after it from being cleared.
+            try {
+                if ($cache->store()->forget($key)) {
+                    $cleared++;
+                    $this->line("Cleared key: {$key}");
+                }
+            } catch (\Throwable $e) {
+                $failed++;
+            }
+        }
+
+        if ($cleared > 0) {
+            $this->info("Cleared {$cleared} non-managed cache keys.");
+        } else {
+            $this->info('No non-managed cache keys found.');
+        }
+
+        if ($failed > 0) {
+            $this->warn("{$failed} non-managed cache keys could not be cleared.");
+        }
+
+        return self::SUCCESS;
     }
 }

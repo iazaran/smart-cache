@@ -331,10 +331,22 @@ trait CacheInvalidation
         // the bare '*' rewrites the backslash pair into '\.', turning 'user_*' into
         // '/^user_\.*$/' (a literal dot, repeated), which matches nothing.
         // Mirrors CacheInvalidationService::matchesPattern().
-        $regexPattern = preg_quote($pattern, '/');
-        $regexPattern = str_replace(['\*', '\?'], ['.*', '.'], $regexPattern);
+        //
+        // invalidatePattern() calls this for every managed key with the same
+        // pattern, so the conversion is kept for the next call. The map is
+        // emptied when it grows, because patterns can embed record IDs.
+        static $regexes = [];
 
-        return (bool) preg_match("/^{$regexPattern}$/", $key);
+        if (!isset($regexes[$pattern])) {
+            if (\count($regexes) >= 100) {
+                $regexes = [];
+            }
+
+            $regexPattern = preg_quote($pattern, '/');
+            $regexes[$pattern] = '/^' . str_replace(['\*', '\?'], ['.*', '.'], $regexPattern) . '$/';
+        }
+
+        return (bool) preg_match($regexes[$pattern], $key);
     }
 
     /**

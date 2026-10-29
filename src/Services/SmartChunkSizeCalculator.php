@@ -130,7 +130,8 @@ class SmartChunkSizeCalculator
      */
     public function calculateChunkCount(int $totalItems, int $chunkSize): int
     {
-        return (int) ceil($totalItems / $chunkSize);
+        // An empty data set sizes its chunks at 0 items.
+        return (int) ceil($totalItems / \max(1, $chunkSize));
     }
 
     /**

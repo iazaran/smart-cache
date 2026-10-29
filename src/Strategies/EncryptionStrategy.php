@@ -3,7 +3,9 @@
 namespace SmartCache\Strategies;
 
 use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
+use SmartCache\Strategies\Concerns\RestrictsUnserialization;
 
 /**
  * Encryption Strategy for Sensitive Cached Data
@@ -13,10 +15,19 @@ use SmartCache\Contracts\OptimizationStrategy;
  */
 class EncryptionStrategy implements OptimizationStrategy
 {
+    use RestrictsUnserialization;
+
     protected Encrypter $encrypter;
     protected array $encryptedKeys = [];
     protected array $encryptedPatterns = [];
     protected bool $encryptAll = false;
+
+    /**
+     * Patterns already reported as invalid, so each is logged once.
+     *
+     * @var array<string, true>
+     */
+    private array $reportedInvalidPatterns = [];
 
     public function __construct(Encrypter $encrypter, array $config = [])
     {
@@ -41,13 +52,43 @@ class EncryptionStrategy implements OptimizationStrategy
             }
 
             foreach ($this->encryptedPatterns as $pattern) {
-                if (@preg_match($pattern, $key)) {
+                $matched = @preg_match($pattern, $key);
+
+                if ($matched === 1) {
                     return true;
+                }
+
+                if ($matched === false) {
+                    $this->reportInvalidPattern((string) $pattern);
                 }
             }
         }
 
         return false;
+    }
+
+    /**
+     * Log a pattern that is not a valid regular expression. It matches nothing,
+     * so the values it was meant to protect are stored unencrypted; that used
+     * to happen without a trace. A glob such as 'user_token_*' is a common
+     * cause: patterns are PCRE regexes such as '/^user_token_/'.
+     *
+     * @param string $pattern
+     * @return void
+     */
+    private function reportInvalidPattern(string $pattern): void
+    {
+        if (isset($this->reportedInvalidPatterns[$pattern])) {
+            return;
+        }
+
+        $this->reportedInvalidPatterns[$pattern] = true;
+
+        try {
+            Log::warning("SmartCache encryption pattern [{$pattern}] is not a valid regular expression, so it matches no keys and their values are not encrypted. Use a PCRE pattern such as '/^user_token_/'.");
+        } catch (\Throwable $e) {
+            // No logger outside a Laravel application.
+        }
     }
 
     /**
@@ -99,12 +140,20 @@ class EncryptionStrategy implements OptimizationStrategy
         // corrupted: self-healing evicts it and remember() regenerates it, instead
         // of serving null as a cache hit — e.g. after an APP_KEY rotation.
         try {
-            $decrypted = $this->encrypter->decrypt($value['data']);
+            // With a class restriction the encrypter's own unserialize() is
+            // skipped too: its payload is only the serialized value as a string.
+            $decrypted = $this->restrictsUnserialization()
+                ? \unserialize($this->encrypter->decrypt($value['data'], false), ['allowed_classes' => false])
+                : $this->encrypter->decrypt($value['data']);
         } catch (\Throwable $e) {
             throw new \RuntimeException('SmartCache encrypted payload could not be decrypted: ' . $e->getMessage(), 0, $e);
         }
 
-        return \unserialize($decrypted);
+        if (!\is_string($decrypted)) {
+            throw new \RuntimeException('SmartCache encrypted payload is not a serialized value.');
+        }
+
+        return $this->unserializePayload($decrypted);
     }
 
     /**

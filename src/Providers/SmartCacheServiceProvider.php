@@ -37,6 +37,16 @@ class SmartCacheServiceProvider extends ServiceProvider
             $cacheManager = $app['cache'];
             $config = $app['config'];
             
+            // Classes SmartCache may unserialize from the payloads it decodes
+            // itself (opt-in; null keeps the historical unrestricted behavior).
+            $serializableClasses = $config->get('smart-cache.serializable_classes');
+            if ($serializableClasses === 'cache') {
+                $serializableClasses = $config->get('cache.serializable_classes');
+            }
+            if (!\is_array($serializableClasses) && !\is_bool($serializableClasses)) {
+                $serializableClasses = null;
+            }
+
             // Create strategies based on config
             // Order matters: the first strategy that applies to a value wins.
             $strategies = [];
@@ -49,21 +59,21 @@ class SmartCacheServiceProvider extends ServiceProvider
             // size strategy ahead of it would store large matching values as
             // plain compressed or chunked data instead of encrypting them.
             if ($config->get('smart-cache.strategies.encryption.enabled', false)) {
-                $strategies[] = new EncryptionStrategy(
+                $strategies[] = (new EncryptionStrategy(
                     $app['encrypter'],
                     [
                         'keys' => $config->get('smart-cache.strategies.encryption.keys', []),
                         'patterns' => $config->get('smart-cache.strategies.encryption.patterns', []),
                         'encrypt_all' => $config->get('smart-cache.strategies.encryption.encrypt_all', false),
                     ]
-                );
+                ))->setSerializableClasses($serializableClasses);
             } else {
                 // Built only when an encrypted entry is read, so an application
                 // without encryption never needs the encrypter or an APP_KEY.
                 $restoreStrategies[] = new RestoreOnlyStrategy(
                     'encryption',
                     '_sc_encrypted',
-                    fn () => new EncryptionStrategy($app['encrypter'])
+                    fn () => (new EncryptionStrategy($app['encrypter']))->setSerializableClasses($serializableClasses)
                 );
             }
 
@@ -100,34 +110,34 @@ class SmartCacheServiceProvider extends ServiceProvider
                         $config->get('smart-cache.strategies.compression.adaptive.frequency_threshold', 100)
                     );
                     $adaptiveStrategy->setCacheRepository($cacheManager->store());
-                    $strategies[] = $adaptiveStrategy;
+                    $strategies[] = $adaptiveStrategy->setSerializableClasses($serializableClasses);
                 } else {
-                    $strategies[] = new CompressionStrategy(
+                    $strategies[] = (new CompressionStrategy(
                         $config->get('smart-cache.thresholds.compression', 51200),
                         $config->get('smart-cache.strategies.compression.level', 6)
-                    );
+                    ))->setSerializableClasses($serializableClasses);
                 }
             } else {
                 // Fixed and adaptive compression share one storage format.
                 $restoreStrategies[] = new RestoreOnlyStrategy(
                     'compression',
                     '_sc_compressed',
-                    fn () => new CompressionStrategy()
+                    fn () => (new CompressionStrategy())->setSerializableClasses($serializableClasses)
                 );
             }
 
             // Add smart serialization strategy if enabled
             if ($config->get('smart-cache.strategies.serialization.enabled', false)) {
-                $strategies[] = new SmartSerializationStrategy(
+                $strategies[] = (new SmartSerializationStrategy(
                     $config->get('smart-cache.strategies.serialization.preferred_method', 'auto'),
                     $config->get('smart-cache.strategies.serialization.auto_detect', true),
                     $config->get('smart-cache.strategies.serialization.size_threshold', 1024)
-                );
+                ))->setSerializableClasses($serializableClasses);
             } else {
                 $restoreStrategies[] = new RestoreOnlyStrategy(
                     'smart_serialization',
                     '_sc_serialized',
-                    fn () => new SmartSerializationStrategy()
+                    fn () => (new SmartSerializationStrategy())->setSerializableClasses($serializableClasses)
                 );
             }
 
