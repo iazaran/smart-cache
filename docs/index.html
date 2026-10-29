@@ -933,6 +933,10 @@
                         <strong>Optimization for large Laravel cache payloads.</strong> SmartCache wraps Laravel's familiar cache API with automatic compression, driver-safe chunking, invalidation, recovery, and diagnostics. It implements <code>Illuminate\Contracts\Cache\Repository</code>; review the explicit <code>clearManaged()</code> and <code>flush()</code> scopes when migrating.
                     </div>
 
+                    <div class="alert alert-success">
+                        <strong>New in 1.17.0: fixes and performance, nothing to change.</strong> Bulk invalidation (<code>flushTags()</code>, <code>flushPatterns()</code>, model invalidation, <code>deleteMultiple()</code>) writes the managed-key index once instead of every 10 keys. <code>remember()</code> serializes large values less, and the dashboard page no longer scans the whole cache. Orphan-chunk cleanup no longer loses registrations. Queued refreshes write to the store they came from. An opt-in <code>serializable_classes</code> setting applies Laravel's deserialization hardening to optimized values. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
+                    </div>
+
                     <h2>What is SmartCache?</h2>
                     <p>SmartCache wraps Laravel's caching layer with transparent optimizations while keeping ordinary cache operations familiar:</p>
 
@@ -1525,7 +1529,10 @@ $analytics = SmartCache::refreshAhead('daily_analytics', function() {
                     <pre><code class="language-php">// Returns stale data instantly, dispatches a background job to refresh
 // Pass a "Class@method" string or an invokable class — Closures are rejected
 // since v1.12.0 because Laravel's queue serializer cannot persist them.
-$data = SmartCache::asyncSwr('dashboard_stats', RefreshDashboardStats::class, 300, 900, 'cache-refresh');</code></pre>
+$data = SmartCache::asyncSwr('dashboard_stats', RefreshDashboardStats::class, 300, 900, 'cache-refresh');
+
+// The job writes to the store it was queued from (v1.17.0+)
+$data = SmartCache::store('redis')->asyncSwr('dashboard_stats', RefreshDashboardStats::class, 300, 900);</code></pre>
 
                     <div class="alert alert-info">
                         <strong>How refresh execution works.</strong> <code>swr()</code>, <code>stale()</code> and <code>refreshAhead()</code> run a due refresh callback <strong>synchronously</strong> in the current PHP process before the method returns the stale value. Use <code>asyncSwr()</code> with a queue worker for non-blocking, out-of-process regeneration.
@@ -1818,7 +1825,16 @@ $item = $largeDataset[50000]; // Only loads the chunk containing this item
 
 // Collection methods work too
 $filtered = $largeDataset->filter(fn($item) => $item->active);
-$mapped = $largeDataset->map(fn($item) => $item->name);</code></pre>
+$mapped = $largeDataset->map(fn($item) => $item->name);
+$lastFive = $largeDataset->slice(-5); // negative offsets count from the end (v1.17.0+)
+
+// Load everything as an eager read would, e.g. an Eloquent\Collection (v1.17.0+)
+$collection = $largeDataset->materialize();
+
+// JSON responses work directly (v1.17.0+)
+return response()->json($largeDataset);</code></pre>
+
+                    <p>Turning <code>lazy_loading</code> off applies to entries written while it was on (v1.17.0+): they are read eagerly from then on. A missing chunk throws a <code>RuntimeException</code> while the collection is read, so read it soon after <code>get()</code>, or call <code>materialize()</code>.</p>
 
                     <h2>🧠 Smart Serialization</h2>
                     <p>Auto-select best serialization method for optimal performance:</p>
@@ -1976,6 +1992,17 @@ $data = SmartCache::get('user_123_data');
 
                     <p>Keys and patterns match with or without the active namespace. Matching values are always encrypted, whatever their size: encryption takes precedence over compression and chunking, so a large encrypted value is stored as a single entry.</p>
 
+                    <p>Patterns are PCRE regular expressions such as <code>'/^user_token_/'</code>, not globs. A pattern that is not a valid regex matches nothing, so the values it was meant to protect are stored unencrypted; since v1.17.0 SmartCache logs a warning for it once.</p>
+
+                    <h3>Deserialization hardening <span class="badge badge-success">v1.17.0</span></h3>
+                    <p>Laravel's <code>cache.serializable_classes</code> (new Laravel 13 applications set it to <code>false</code>) is applied by the store. SmartCache unserializes the values it compresses, encrypts, or serializes itself, so that setting does not reach them. Opt in to apply a restriction there too:</p>
+
+                    <pre><code class="language-php">// config/smart-cache.php
+'serializable_classes' => 'cache',   // follow cache.serializable_classes
+// or false (no classes), or [App\Data\Report::class, ...]; null (default) = no restriction</code></pre>
+
+                    <p>Chunked values are read by the store and already follow Laravel's setting. igbinary payloads of the opt-in serialization strategy cannot be restricted.</p>
+
                     <h2>📁 Cache Namespacing</h2>
                     <p>Group cache keys by namespace for better organization:</p>
 
@@ -2067,7 +2094,7 @@ $data = SmartCache::rememberWithStampedeProtection(
 
 // Configure rate limiter
 'rate_limiter' => [
-    'enabled' => true,
+    'enabled' => true,   // informational: these methods always rate-limit
     'window' => 60,
     'max_attempts' => 10,
 ],</code></pre>
@@ -2157,6 +2184,8 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
 // GET /smart-cache/health     - Health check
 // GET /smart-cache/keys       - Managed keys list
 // GET /smart-cache/commands   - Available commands</code></pre>
+
+                    <p>The HTML page shows the managed-key count, hit rate, and circuit-breaker state. Since v1.17.0 it no longer runs <code>getStatistics()</code> and <code>healthCheck()</code> on every view; each read every managed value, and <code>healthCheck()</code> also prunes the index and evicts broken entries. <code>/statistics</code> and <code>/health</code> still report them.</p>
 
                     <div class="alert alert-warning">
                         <strong>Protect these routes.</strong> The shipped default is <code>['web']</code>, which provides session and CSRF handling but <strong>no authentication</strong>. These endpoints expose your managed cache key list, optimization statistics, and internal metrics — and cache keys routinely embed user, tenant, or record identifiers. Add an authentication and authorization middleware (<code>['web', 'auth']</code>, <code>['web', 'auth', 'can:viewSmartCache']</code>, or your own gate) before enabling the dashboard outside local development. The dashboard is disabled by default, and every endpoint re-checks <code>dashboard.enabled</code> at request time so a stale <code>route:cache</code> cannot keep it reachable after you switch it off.
@@ -2300,6 +2329,8 @@ app(\SmartCache\Contracts\SmartCache::class)->reset();</code></pre>
 
                     <p><strong>Queue workers (v1.16.0+).</strong> A worker never terminates between jobs, so <code>queue:work</code> calls <code>SmartCache::refreshState()</code> before each job. Pending bookkeeping is persisted, the managed-key index and dependency map are re-read on next use, and pending tags are dropped, so <code>flushPatterns()</code> and model invalidation in a job see keys that other processes added. The namespace and runtime settings are kept, and sync-queue jobs are not affected.</p>
 
+                    <p><strong>Cost-aware scores (v1.17.0+).</strong> They are re-read after each request and before each queued job, so a long-running worker no longer writes back a copy loaded hours earlier over the scores other processes recorded.</p>
+
                     <h2>Operational Footprint</h2>
                     <p>SmartCache stores metadata beside application values in the selected cache store. Depending on enabled features, keys can include <code>_sc_managed_keys</code>, <code>_sc_dna:{key}</code>, <code>_sc_meta:{key}</code>, <code>_sc_chunk_*</code>, <code>_sc_tag_*</code>, <code>_sc_dependencies</code>, <code>_sc_cost_metadata</code>, and <code>_sc_performance_metrics</code>.</p>
 
@@ -2334,7 +2365,7 @@ return [
     ],
 
     'rate_limiter' => [
-        'enabled' => true,
+        'enabled' => true,              // Informational; not read
         'window' => 60,
         'max_attempts' => 10,
     ],
@@ -2382,6 +2413,8 @@ return [
     'memo' => [
         'native' => false,              // v1.16.0: build memo() on Laravel's Cache::memo() (Laravel 12.9+)
     ],
+
+    'serializable_classes' => null,     // v1.17.0: 'cache', false, or a class list restricts unserialize()
 
     'dashboard' => [
         'enabled' => false,
@@ -3797,6 +3830,9 @@ $value = SmartCache::get('key');</code></pre>
                     <div class="alert alert-info">
                         <strong>Laravel 13 API (v1.16.0+).</strong> Enum keys, the typed getters (<code>string()</code>, <code>integer()</code>, <code>float()</code>, <code>boolean()</code>, <code>array()</code>), <code>missing()</code>, <code>rememberWithWarmth()</code>, Closure TTLs in <code>remember()</code>, <code>DateInterval</code> durations in <code>flexible()</code>, and <code>tags(...)-&gt;flush()</code> work through SmartCache, read optimized entries, and honor the namespace.
                     </div>
+
+                    <h2>Upgrading to 1.17.0</h2>
+                    <p>No code or configuration changes are needed, and 1.16 and 1.17 servers read each other's entries during a rolling deploy. One ordering note: a refresh queued from <code>SmartCache::store('name')-&gt;refreshAsync()</code> or <code>-&gt;asyncSwr()</code> now writes to that store, but a 1.16 queue worker running such a job still writes to the default store. Upgrade queue workers together with, or before, the servers that queue those refreshes. The <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a> lists every change and its upgrade notes.</p>
 
                     <h2>Gradual Migration</h2>
                     <p>You can migrate gradually by using both facades:</p>

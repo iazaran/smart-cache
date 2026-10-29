@@ -5,6 +5,63 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-10-29
+
+A maintenance release of fixes and performance improvements found in a full audit of 1.16. Nothing in it requires a code change: the `SmartCache` contract is unchanged, no default changes, and 1.16 and 1.17 read each other's entries. One opt-in config key is added (`serializable_classes`, default `null`). A few fixes change what an edge case returns; they are listed under **Changed**.
+
+### Added
+- Opt-in `smart-cache.serializable_classes` (default `null`, no restriction). Laravel's `cache.serializable_classes` is applied by the store, and new Laravel 13 applications set it to `false`. SmartCache unserializes the values it compresses, encrypts, or serializes itself, so that setting does not reach them: a large object came back intact where a small one would be `__PHP_Incomplete_Class`. Set `serializable_classes` to `'cache'` to follow Laravel's setting, to `false`, or to a list of allowed classes. Chunked values are read by the store and already follow Laravel's setting. igbinary payloads of the opt-in serialization strategy cannot be restricted.
+- `LazyChunkedCollection` implements `JsonSerializable`. `json_encode()` produced `{}`, and a controller could not return a lazily loaded value.
+
+### Performance
+- **Bulk invalidation writes the managed-key index once.** Every 10 keys removed from `_sc_managed_keys`, SmartCache re-read and rewrote the whole index under a lock. Flushing a tag that covers thousands of keys rewrote an index of tens of thousands of keys hundreds of times. `flushTags()`, `tags(...)->flush()`, `flushPatterns()`, `invalidateModel()`, `deleteMultiple()`, `flushNamespace()`, and `clearManaged()` now write it once, at the end. The stored result is the same.
+- **`remember()` serializes a large value less.** With the default monitoring and cost-aware scoring, a miss serialized the new value twice more just to measure it: once for the cost-aware size, and once for the write metric when no strategy changed the value. The size `put()` measures is now reused. For a 2 MB payload that saves about 3 ms per miss in our measurements. The recorded numbers are the same.
+- The dashboard's HTML page (`GET /smart-cache`) no longer runs `getStatistics()` and `healthCheck()` on every view. It discarded both results, and each reads every managed value; `healthCheck()` also prunes the index and evicts broken entries. `/statistics` and `/health` are unchanged.
+- `memo()`'s LRU eviction no longer sorts the whole memo layer for every new key once it is full; the access order is kept as it is recorded. In our measurement, 50,000 distinct reads through a full memo layer took 0.2 s instead of 2.3 s.
+- Pattern invalidation converts each glob pattern to a regular expression once per call instead of once per managed key.
+- A shared circuit breaker (`circuit_breaker.shared`) no longer writes its state to the cache on every success while it is closed with no failures.
+
+### Fixed
+- **Orphan chunks**
+  - `cleanupOrphanChunks()` and `smart-cache:cleanup-chunks` could lose registry entries, so the chunks they listed stayed in the store forever. A pass wrote back the registry it had read, dropping chunks registered while it ran. A second pass in the same process (Octane, a queued cleanup) also started from the previous pass's copy instead of the stored registry. A pass now starts from the stored registry and applies only its own changes to it. `OrphanChunkCleanupService::registerChunks()` and `unregisterChunks()` now apply their change to the stored registry instead of writing this instance's copy as a whole.
+  - `ChunkingStrategy::setCleanupService()` is deprecated: SmartCache registers chunks itself, under a metadata lock, once the entry is stored.
+- **Lazy loading**
+  - Turning `strategies.chunking.lazy_loading` off now applies to entries written while it was on. They kept coming back as a `LazyChunkedCollection`, which for entries stored without expiry was forever. Entries written with lazy loading off stay eager when it is turned on, as before.
+  - `materialize()` returns the cached collection class, such as `Eloquent\Collection`, as an eager read does. It returned a `Support\Collection`.
+  - `slice()` with a negative offset or length counts from the end, as `array_slice()` does. It returned out-of-range positions as `null`.
+- **Values that cannot be serialized.** On Laravel's `array` store with `serialize => false` (common in tests), `Cache::put()` keeps a value holding a Closure, but `SmartCache::put()` threw "Serialization of 'Closure' is not allowed" while measuring it for monitoring, hashing it for deduplication, or sizing a large array for chunking. Such values are now stored without optimization or a deduplication record.
+- **Queued refreshes write to the store they came from.** `SmartCache::store('redis')->refreshAsync()` and `->asyncSwr()` queued a job that wrote the refreshed value to the default store, so the redis entry stayed stale and a new job was queued every `$ttl`. The job now carries the store name. See the rolling-deploy note under **Changed**.
+- **`flushNamespace()`** starts from the stored managed-key index, as `clearManaged()` does since 1.16, so a namespace's keys that other processes tracked since this process loaded the index are flushed too.
+- **Metadata locks** no longer apply an update twice. When releasing the lock failed after the update had run (for example a Redis connection dropping), the update ran again without the lock.
+- **SWR and stampede protection use the framework clock.** `flexible()`, `swr()`, `stale()`, `refreshAhead()`, `asyncSwr()`, and `rememberWithStampedeProtection()` used `time()` for freshness, while the store expires entries by Laravel's clock. Under `Carbon::setTestNow()` or `$this->travel()` an entry never went stale, unlike with Laravel's `Cache::flexible()`. In production both clocks agree.
+- **Console commands**
+  - `smart-cache:clear --force` skipped non-managed keys when every managed key had expired.
+  - `smart-cache:clear 123`, `smart-cache:status --force`, and the dashboard's clear command treated a numeric managed key as not managed: the index returns `'123'` as the integer `123`. Their lookups were also a full pass over the index for every scanned key.
+  - `smart-cache:clear --force` stopped at the first key it could not read or delete (such as a tag set of Laravel's own tagged cache on Redis). It now continues and reports how many keys it could not clear.
+  - `smart-cache:warm --warmer=name` warns about a name that is not configured instead of warming nothing without a word.
+- **`flushPatterns()` and `invalidateModel()`** forget a key matched by several patterns once. It was forgotten again for every further pattern and counted again on stores whose `forget()` always reports success (database).
+- **`memo()`**: a key that missed and was then stored with `remember()` or `rememberForever()` on the memo layer read as missing again once LRU evicted it.
+- **Circuit breaker (shared state)**: `getStats()` reported no `time_until_recovery` for a breaker another process had opened, and a breaker another process had closed kept reporting its old `opened_at`.
+- **Cost-aware scoring in long-running processes.** The scores were loaded once per process and written back as a whole, so an Octane worker or queue worker overwrote other processes' scores with a copy that could be hours old. They are now re-read after each request (`reset()`) and before each queued job (`refreshState()`).
+- **Encryption**: a pattern in `strategies.encryption.patterns` that is not a valid regular expression (a glob such as `user_token_*`) matches nothing, so the values it was meant to protect are stored unencrypted. That is unchanged, but it is now logged once as a warning instead of happening silently.
+- **Robustness**
+  - A chunk that is not an array (overwritten or corrupted) raises a clear "Invalid cache chunk" error, so self-healing evicts the entry. It was skipped with a PHP warning.
+  - `SmartChunkSizeCalculator::getRecommendations([])` and `calculateChunkCount(0, 0)` no longer divide by zero.
+  - `AdaptiveCompressionStrategy::getCompressionStats()` no longer divides by zero, and its frequency persistence (also run from its destructor) catches every `Throwable`.
+- The config comment for `rate_limiter.enabled` now says the flag is not read: `throttle()` and `rememberWithStampedeProtection()` always rate-limit.
+
+### Changed
+- **Upgrade note — queued refreshes during a rolling deploy.** A refresh job queued by 1.17 from `store('name')` and run by a 1.16 worker writes to the default store, as in 1.16; on PHP 8.2+ the 1.16 worker also logs a deprecation for the job's new property. Jobs queued by 1.16 have no store and keep writing to the default store. Upgrade queue workers together with, or before, the servers that queue refreshes from `store()`.
+- `smart-cache:clear --force` now clears non-managed keys when every managed key had expired, as it already did when the index was empty.
+- `LazyChunkedCollection::materialize()` returns the cached collection class (a subclass of `Support\Collection`, so existing type hints still pass).
+- `flushPatterns()` and `invalidateModel()` return a lower count when patterns overlap: each key is counted once.
+- Under Octane, cost-aware scores are re-read after each request: one extra read of `_sc_cost_metadata` per request that uses them, as on PHP-FPM.
+
+### Documentation
+- README rewritten to be shorter: why SmartCache, what makes it production-ready, and the essentials, with details in the full documentation.
+- Documented `serializable_classes`, and the 1.17 fixes in the full documentation.
+- `SECURITY.md` lists 1.17.x as the maintained release line.
+
 ## [1.16.0] - 2026-10-20
 
 This release answers three community requests (tag-driven flushing of chunked data, `Cache::memo()` interoperability, and chunk lifecycle) and aligns SmartCache with Laravel 13.33/13.34. The `SmartCache` contract is unchanged, one opt-in config key is added (`memo.native`, default `false`), and entries written by 1.15 are read unchanged. Read the upgrade notes under **Changed**: a few defects are fixed in ways that change behavior.
@@ -403,6 +460,9 @@ This release answers three community requests (tag-driven flushing of chunked da
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.17.0]: https://github.com/iazaran/smart-cache/compare/1.16.0...1.17.0
+[1.16.0]: https://github.com/iazaran/smart-cache/compare/1.15.0...1.16.0
+[1.15.0]: https://github.com/iazaran/smart-cache/compare/1.14.0...1.15.0
 [1.14.0]: https://github.com/iazaran/smart-cache/compare/1.13.2...1.14.0
 [1.13.2]: https://github.com/iazaran/smart-cache/compare/1.13.1...1.13.2
 [1.13.1]: https://github.com/iazaran/smart-cache/compare/1.13.0...1.13.1
