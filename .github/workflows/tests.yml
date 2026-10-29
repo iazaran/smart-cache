@@ -77,6 +77,14 @@ jobs:
       - name: Install dependencies
         env:
           COMPOSER_PROCESS_TIMEOUT: 600
+          # The matrix tests Laravel lines that no longer receive security
+          # fixes (8-11), and Composer now refuses to install releases with
+          # published advisories. Allow them here: this only selects the
+          # framework version under test and does not affect package users.
+          # COMPOSER_NO_BLOCKING is current; COMPOSER_NO_SECURITY_BLOCKING is
+          # the name Composer 2.9 introduced. Older versions ignore both.
+          COMPOSER_NO_BLOCKING: 1
+          COMPOSER_NO_SECURITY_BLOCKING: 1
         run: |
           # Retry the install pipeline to absorb transient packagist DNS / curl
           # timeouts that occasionally hit GitHub-hosted runners.
