@@ -127,6 +127,12 @@ class StatisticsController extends Controller
             'circuit_breaker' => $cache->getCircuitBreakerStats(),
         ];
 
+        // A subclass that renders its own page may read them, as before.
+        if ((new \ReflectionMethod($this, 'renderDashboard'))->getDeclaringClass()->getName() !== self::class) {
+            $data['statistics'] = $cache->getStatistics();
+            $data['health'] = $cache->healthCheck();
+        }
+
         $html = $this->renderDashboard($data);
         
         return response($html)->header('Content-Type', 'text/html');

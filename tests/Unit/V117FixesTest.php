@@ -108,6 +108,24 @@ class V117HookedRepository extends Repository
 }
 
 /**
+ * Records the keys read.
+ */
+class V117ReadTrackingRepository extends Repository
+{
+    /** @var array<int, string> */
+    public array $reads = [];
+
+    public function get($key, $default = null): mixed
+    {
+        if (\is_string($key)) {
+            $this->reads[] = $key;
+        }
+
+        return parent::get($key, $default);
+    }
+}
+
+/**
  * Counts writes, to see how often shared state is persisted.
  */
 class V117CountingRepository extends Repository
@@ -259,6 +277,28 @@ class V117FixesTest extends TestCase
         $this->assertSame('kept', $cache->get('unrelated'));
     }
 
+    /** Guard. */
+    public function test_guard_small_flushes_write_the_index_no_more_often_than_before(): void
+    {
+        $store = new V117CountingStore();
+        $cache = $this->smartCacheOn($store);
+
+        for ($i = 0; $i < 20; $i++) {
+            $cache->tags(["model_{$i}"])->put("model_key_{$i}", $i, 600);
+        }
+        $cache->persistManagedKeys();
+        $store->foreverWrites = [];
+
+        // Like a model observer flushing one tag per save.
+        for ($i = 0; $i < 20; $i++) {
+            $cache->flushTags("model_{$i}");
+        }
+
+        // The usual debounce: one write per 10 pending changes.
+        $this->assertLessThanOrEqual(2, $store->foreverWrites['_sc_managed_keys'] ?? 0);
+        $this->assertSame([], $cache->getManagedKeys());
+    }
+
     public function test_flush_patterns_and_delete_multiple_write_the_index_once(): void
     {
         $store = new V117CountingStore();
@@ -337,6 +377,8 @@ class V117FixesTest extends TestCase
         $this->assertSame(2, $worker->withoutNamespace()->flushNamespace('tenant'));
         $this->assertNull($other->namespace('tenant')->get('orders'));
         $this->assertNull($other->get('profile'));
+
+        $worker->persistManagedKeys();
         $this->assertNull($store->get('_sc_managed_keys'));
     }
 
@@ -659,12 +701,30 @@ class V117FixesTest extends TestCase
         $strategy = new EncryptionStrategy($this->app['encrypter'], ['patterns' => ['user_token_*']]);
 
         // A glob is not a regex: it matches nothing, as before, but now says so.
-        $this->assertFalse($strategy->shouldApply('secret', ['key' => 'user_token_1']));
-        $this->assertFalse($strategy->shouldApply('secret', ['key' => 'user_token_2']));
+        $this->assertFalse($strategy->shouldApply('secret', ['key' => 'user_token_1', 'cache' => $this->rawStore()]));
+        $this->assertFalse($strategy->shouldApply('secret', ['key' => 'user_token_2', 'cache' => $this->rawStore()]));
+
+        // The provider builds the strategy for every request; the warning is
+        // throttled through the store, so a new instance does not repeat it.
+        $nextRequest = new EncryptionStrategy($this->app['encrypter'], ['patterns' => ['user_token_*']]);
+        $this->assertFalse($nextRequest->shouldApply('secret', ['key' => 'user_token_3', 'cache' => $this->rawStore()]));
+        $this->assertFalse($strategy->shouldApply('secret', ['key' => 'user_token_4', 'cache' => $this->rawStore()]));
 
         Log::shouldHaveReceived('warning')
             ->once()
             ->withArgs(fn ($message) => \str_contains($message, '[user_token_*]'));
+    }
+
+    public function test_an_invalid_encryption_pattern_warning_is_throttled_across_requests(): void
+    {
+        Log::spy();
+
+        foreach (['first', 'second', 'third'] as $request) {
+            $strategy = new EncryptionStrategy($this->app['encrypter'], ['patterns' => ['user_token_*']]);
+            $strategy->shouldApply('secret', ['key' => "user_token_{$request}", 'cache' => $this->rawStore()]);
+        }
+
+        Log::shouldHaveReceived('warning')->once();
     }
 
     /** Guard. */
@@ -739,8 +799,16 @@ class V117FixesTest extends TestCase
     /** Guard. */
     public function test_guard_a_refresh_job_without_a_store_writes_to_the_default_store(): void
     {
-        // As a job queued by 1.16 unserializes: without the new property.
-        $job = \unserialize(\serialize(new BackgroundCacheRefreshJob('legacy_feed', V117RefreshCallback::class, 60)));
+        // A job queued by 1.16 has no storeName in its payload.
+        $payload = \serialize(new BackgroundCacheRefreshJob('legacy_feed', V117RefreshCallback::class, 60));
+        $entry = 's:12:"' . "\0*\0" . 'storeName";N;';
+        if (\str_contains($payload, $entry)) {
+            $payload = \str_replace($entry, '', $payload);
+            $payload = \preg_replace_callback('/^(O:\d+:"[^"]+":)(\d+)/', fn ($m) => $m[1] . ($m[2] - 1), $payload);
+        }
+        $this->assertStringNotContainsString('storeName', $payload);
+
+        $job = \unserialize($payload);
         $job->handle();
 
         $this->assertSame('fresh', $this->smartCache->get('legacy_feed'));
@@ -765,6 +833,27 @@ class V117FixesTest extends TestCase
         $this->assertStringContainsString('Managed Keys', $response->getContent());
         // 1.16 ran healthCheck() on every page view, which evicted it.
         $this->assertNotNull($this->rawStore()->get('broken'));
+    }
+
+    /** Guard. */
+    public function test_guard_a_dashboard_subclass_still_receives_statistics_and_health(): void
+    {
+        $this->app['config']->set('smart-cache.dashboard.enabled', true);
+
+        $controller = new class extends StatisticsController {
+            public array $received = [];
+
+            protected function renderDashboard(array $data): string
+            {
+                $this->received = $data;
+
+                return 'custom';
+            }
+        };
+
+        $this->assertSame('custom', $controller->dashboard()->getContent());
+        $this->assertArrayHasKey('statistics', $controller->received);
+        $this->assertArrayHasKey('health', $controller->received);
     }
 
     public function test_clear_force_clears_non_managed_keys_when_every_managed_key_expired(): void
@@ -930,21 +1019,42 @@ class V117FixesTest extends TestCase
     // Cost-aware metadata in long-running workers
     // ------------------------------------------------------------------
 
-    public function test_refresh_state_rereads_cost_aware_scores(): void
+    public function test_refresh_state_rereads_cost_aware_scores_older_than_a_minute(): void
     {
         $this->smartCache->remember('scored', 600, fn () => 'value');
-
-        $this->smartCache->refreshState();
-        $this->assertArrayHasKey('scored', $this->rawStore()->get('_sc_cost_metadata'));
+        $this->smartCache->persistCostMetadata(); // at the end of the request
 
         // Another process records a score.
         $other = new CostAwareCacheManager($this->rawStore());
         $other->recordCost('theirs', 5.0, 10);
         $other->persist();
 
-        // 1.16 kept the copy it loaded first, for the life of the worker.
+        $this->travel(61)->seconds();
+        $this->smartCache->refreshState();
+        $this->assertArrayHasKey('scored', $this->rawStore()->get('_sc_cost_metadata'));
+
+        // 1.16 kept the copy it loaded first, for the life of the worker, and
+        // wrote it back over the other process's scores.
         $this->assertNotNull($this->smartCache->cacheValue('theirs'));
         $this->assertNotNull($this->smartCache->cacheValue('scored'));
+    }
+
+    /** Guard (it calls refresh(), new in 1.17, so it cannot run against 1.16). */
+    public function test_guard_cost_aware_scores_are_not_reread_within_a_minute(): void
+    {
+        $repository = new V117ReadTrackingRepository(new ArrayStore());
+        $manager = new CostAwareCacheManager($repository);
+        $manager->recordCost('mine', 1.0, 10);
+
+        // reset() and refreshState() run after every request and before every
+        // job; within a minute they only persist.
+        $manager->refresh(60);
+        $repository->reads = [];
+        $manager->recordAccess('mine');
+        $manager->refresh(60);
+
+        $this->assertNotContains('_sc_cost_metadata', $repository->reads);
+        $this->assertSame(2, $repository->get('_sc_cost_metadata')['mine']['access_count']);
     }
 }
 

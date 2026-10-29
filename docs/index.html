@@ -934,7 +934,7 @@
                     </div>
 
                     <div class="alert alert-success">
-                        <strong>New in 1.17.0: fixes and performance, nothing to change.</strong> Bulk invalidation (<code>flushTags()</code>, <code>flushPatterns()</code>, model invalidation, <code>deleteMultiple()</code>) writes the managed-key index once instead of every 10 keys. <code>remember()</code> serializes large values less, and the dashboard page no longer scans the whole cache. Orphan-chunk cleanup no longer loses registrations. Queued refreshes write to the store they came from. An opt-in <code>serializable_classes</code> setting applies Laravel's deserialization hardening to optimized values. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
+                        <strong>New in 1.17.0: fixes and performance, nothing to change.</strong> Bulk invalidation (<code>flushTags()</code>, <code>flushPatterns()</code>, model invalidation, <code>deleteMultiple()</code>) writes the managed-key index at most once instead of every 10 keys. <code>remember()</code> serializes large values less, and the dashboard page no longer scans the whole cache. Orphan-chunk cleanup no longer loses registrations. Queued refreshes write to the store they came from. An opt-in <code>serializable_classes</code> setting applies Laravel's deserialization hardening to optimized values. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
                     </div>
 
                     <h2>What is SmartCache?</h2>
@@ -1992,7 +1992,7 @@ $data = SmartCache::get('user_123_data');
 
                     <p>Keys and patterns match with or without the active namespace. Matching values are always encrypted, whatever their size: encryption takes precedence over compression and chunking, so a large encrypted value is stored as a single entry.</p>
 
-                    <p>Patterns are PCRE regular expressions such as <code>'/^user_token_/'</code>, not globs. A pattern that is not a valid regex matches nothing, so the values it was meant to protect are stored unencrypted; since v1.17.0 SmartCache logs a warning for it once.</p>
+                    <p>Patterns are PCRE regular expressions such as <code>'/^user_token_/'</code>, not globs. A pattern that is not a valid regex matches nothing, so the values it was meant to protect are stored unencrypted; since v1.17.0 SmartCache logs a warning for it, at most once an hour per pattern.</p>
 
                     <h3>Deserialization hardening <span class="badge badge-success">v1.17.0</span></h3>
                     <p>Laravel's <code>cache.serializable_classes</code> (new Laravel 13 applications set it to <code>false</code>) is applied by the store. SmartCache unserializes the values it compresses, encrypts, or serializes itself, so that setting does not reach them. Opt in to apply a restriction there too:</p>
@@ -2329,7 +2329,7 @@ app(\SmartCache\Contracts\SmartCache::class)->reset();</code></pre>
 
                     <p><strong>Queue workers (v1.16.0+).</strong> A worker never terminates between jobs, so <code>queue:work</code> calls <code>SmartCache::refreshState()</code> before each job. Pending bookkeeping is persisted, the managed-key index and dependency map are re-read on next use, and pending tags are dropped, so <code>flushPatterns()</code> and model invalidation in a job see keys that other processes added. The namespace and runtime settings are kept, and sync-queue jobs are not affected.</p>
 
-                    <p><strong>Cost-aware scores (v1.17.0+).</strong> They are re-read after each request and before each queued job, so a long-running worker no longer writes back a copy loaded hours earlier over the scores other processes recorded.</p>
+                    <p><strong>Cost-aware scores (v1.17.0+).</strong> After a request or before a queued job, a copy older than a minute is read again on next use, so a long-running worker no longer writes back a copy loaded hours earlier over the scores other processes recorded.</p>
 
                     <h2>Operational Footprint</h2>
                     <p>SmartCache stores metadata beside application values in the selected cache store. Depending on enabled features, keys can include <code>_sc_managed_keys</code>, <code>_sc_dna:{key}</code>, <code>_sc_meta:{key}</code>, <code>_sc_chunk_*</code>, <code>_sc_tag_*</code>, <code>_sc_dependencies</code>, <code>_sc_cost_metadata</code>, and <code>_sc_performance_metrics</code>.</p>
@@ -3572,7 +3572,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 678 tests, 2,475 assertions
+# 725 tests, 2,611 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

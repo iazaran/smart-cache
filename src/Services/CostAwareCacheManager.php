@@ -3,6 +3,7 @@
 namespace SmartCache\Services;
 
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Support\Carbon;
 
 /**
  * Cost-Aware Cache Manager
@@ -30,6 +31,11 @@ class CostAwareCacheManager
      * Whether metadata has been loaded from cache.
      */
     protected bool $loaded = false;
+
+    /**
+     * When the metadata was loaded, for refresh().
+     */
+    private ?int $loadedAt = null;
 
     /**
      * Whether metadata has been modified and needs persisting.
@@ -230,17 +236,20 @@ class CostAwareCacheManager
     }
 
     /**
-     * Persist pending changes and drop the loaded copy, so the next use reads
-     * what other processes stored meanwhile.
+     * Persist pending changes and, once the loaded copy is older than
+     * $maxAgeSeconds, drop it so the next use reads what other processes
+     * stored meanwhile.
      *
      * SmartCache calls this between requests in long-running runtimes (Octane)
-     * and before each job a queue worker runs. The copy used to be loaded once
-     * per process, and persisting it wrote back a snapshot that could be hours
-     * old over the scores other processes recorded.
+     * and before each job a queue worker runs, with a one-minute age, so such
+     * a process reads the metadata at most once a minute. The copy used to be
+     * loaded once per process, and persisting it wrote back a snapshot that
+     * could be hours old over the scores other processes recorded.
      *
+     * @param int $maxAgeSeconds 0 drops the copy whatever its age
      * @return void
      */
-    public function refresh(): void
+    public function refresh(int $maxAgeSeconds = 0): void
     {
         try {
             $this->persist();
@@ -248,8 +257,16 @@ class CostAwareCacheManager
             // Best-effort: the scores are diagnostic, never cached data.
         }
 
+        if ($maxAgeSeconds > 0
+            && $this->loadedAt !== null
+            && Carbon::now()->getTimestamp() - $this->loadedAt < $maxAgeSeconds
+        ) {
+            return;
+        }
+
         $this->metadata = [];
         $this->loaded = false;
+        $this->loadedAt = null;
         $this->dirty = false;
     }
 
@@ -266,6 +283,7 @@ class CostAwareCacheManager
         // A foreign or corrupted entry under this key must not fatal the request.
         $this->metadata = \is_array($metadata) ? $metadata : [];
         $this->loaded = true;
+        $this->loadedAt = Carbon::now()->getTimestamp();
     }
 
     /**

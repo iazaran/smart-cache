@@ -2,6 +2,7 @@
 
 namespace SmartCache\Strategies;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Support\Facades\Log;
 use SmartCache\Contracts\OptimizationStrategy;
@@ -59,7 +60,7 @@ class EncryptionStrategy implements OptimizationStrategy
                 }
 
                 if ($matched === false) {
-                    $this->reportInvalidPattern((string) $pattern);
+                    $this->reportInvalidPattern((string) $pattern, $context['cache'] ?? null);
                 }
             }
         }
@@ -73,10 +74,15 @@ class EncryptionStrategy implements OptimizationStrategy
      * to happen without a trace. A glob such as 'user_token_*' is a common
      * cause: patterns are PCRE regexes such as '/^user_token_/'.
      *
+     * The strategy is built for every request, so the warning is throttled
+     * through the cache store to once an hour per pattern, across processes;
+     * it is checked once per request.
+     *
      * @param string $pattern
+     * @param mixed $cache The cache repository from the strategy context
      * @return void
      */
-    private function reportInvalidPattern(string $pattern): void
+    private function reportInvalidPattern(string $pattern, mixed $cache = null): void
     {
         if (isset($this->reportedInvalidPatterns[$pattern])) {
             return;
@@ -85,9 +91,15 @@ class EncryptionStrategy implements OptimizationStrategy
         $this->reportedInvalidPatterns[$pattern] = true;
 
         try {
+            if ($cache instanceof Repository
+                && !$cache->add('_sc_warned:encryption_pattern:' . \sha1($pattern), true, 3600)
+            ) {
+                return;
+            }
+
             Log::warning("SmartCache encryption pattern [{$pattern}] is not a valid regular expression, so it matches no keys and their values are not encrypted. Use a PCRE pattern such as '/^user_token_/'.");
         } catch (\Throwable $e) {
-            // No logger outside a Laravel application.
+            // No logger or cache outside a Laravel application.
         }
     }
 

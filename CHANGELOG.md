@@ -14,9 +14,9 @@ A maintenance release of fixes and performance improvements found in a full audi
 - `LazyChunkedCollection` implements `JsonSerializable`. `json_encode()` produced `{}`, and a controller could not return a lazily loaded value.
 
 ### Performance
-- **Bulk invalidation writes the managed-key index once.** Every 10 keys removed from `_sc_managed_keys`, SmartCache re-read and rewrote the whole index under a lock. Flushing a tag that covers thousands of keys rewrote an index of tens of thousands of keys hundreds of times. `flushTags()`, `tags(...)->flush()`, `flushPatterns()`, `invalidateModel()`, `deleteMultiple()`, `flushNamespace()`, and `clearManaged()` now write it once, at the end. The stored result is the same.
+- **Bulk invalidation writes the managed-key index at most once.** Every 10 keys removed from `_sc_managed_keys`, SmartCache re-read and rewrote the whole index under a lock. Flushing a tag that covers thousands of keys rewrote an index of tens of thousands of keys hundreds of times. `flushTags()`, `tags(...)->flush()`, `flushPatterns()`, `invalidateModel()`, `invalidate()`, `deleteMultiple()`, and `flushNamespace()` now write it at most once, at the end. Small removals keep the usual schedule (once 10 changes are pending, or at the end of the request), so a model save that flushes one tag writes the index no more often than before. The stored result is the same.
 - **`remember()` serializes a large value less.** With the default monitoring and cost-aware scoring, a miss serialized the new value twice more just to measure it: once for the cost-aware size, and once for the write metric when no strategy changed the value. The size `put()` measures is now reused. For a 2 MB payload that saves about 3 ms per miss in our measurements. The recorded numbers are the same.
-- The dashboard's HTML page (`GET /smart-cache`) no longer runs `getStatistics()` and `healthCheck()` on every view. It discarded both results, and each reads every managed value; `healthCheck()` also prunes the index and evicts broken entries. `/statistics` and `/health` are unchanged.
+- The dashboard's HTML page (`GET /smart-cache`) no longer runs `getStatistics()` and `healthCheck()` on every view. It discarded both results, and each reads every managed value; `healthCheck()` also prunes the index and evicts broken entries. `/statistics` and `/health` are unchanged, and a subclass that overrides `renderDashboard()` still receives both.
 - `memo()`'s LRU eviction no longer sorts the whole memo layer for every new key once it is full; the access order is kept as it is recorded. In our measurement, 50,000 distinct reads through a full memo layer took 0.2 s instead of 2.3 s.
 - Pattern invalidation converts each glob pattern to a regular expression once per call instead of once per managed key.
 - A shared circuit breaker (`circuit_breaker.shared`) no longer writes its state to the cache on every success while it is closed with no failures.
@@ -42,8 +42,8 @@ A maintenance release of fixes and performance improvements found in a full audi
 - **`flushPatterns()` and `invalidateModel()`** forget a key matched by several patterns once. It was forgotten again for every further pattern and counted again on stores whose `forget()` always reports success (database).
 - **`memo()`**: a key that missed and was then stored with `remember()` or `rememberForever()` on the memo layer read as missing again once LRU evicted it.
 - **Circuit breaker (shared state)**: `getStats()` reported no `time_until_recovery` for a breaker another process had opened, and a breaker another process had closed kept reporting its old `opened_at`.
-- **Cost-aware scoring in long-running processes.** The scores were loaded once per process and written back as a whole, so an Octane worker or queue worker overwrote other processes' scores with a copy that could be hours old. They are now re-read after each request (`reset()`) and before each queued job (`refreshState()`).
-- **Encryption**: a pattern in `strategies.encryption.patterns` that is not a valid regular expression (a glob such as `user_token_*`) matches nothing, so the values it was meant to protect are stored unencrypted. That is unchanged, but it is now logged once as a warning instead of happening silently.
+- **Cost-aware scoring in long-running processes.** The scores were loaded once per process and written back as a whole, so an Octane worker or queue worker overwrote other processes' scores with a copy that could be hours old. After a request (`reset()`) or before a queued job (`refreshState()`), a copy older than a minute is now dropped and read again on next use.
+- **Encryption**: a pattern in `strategies.encryption.patterns` that is not a valid regular expression (a glob such as `user_token_*`) matches nothing, so the values it was meant to protect are stored unencrypted. That is unchanged, but it is now logged as a warning, at most once an hour per pattern (throttled through the cache store), instead of happening silently.
 - **Robustness**
   - A chunk that is not an array (overwritten or corrupted) raises a clear "Invalid cache chunk" error, so self-healing evicts the entry. It was skipped with a PHP warning.
   - `SmartChunkSizeCalculator::getRecommendations([])` and `calculateChunkCount(0, 0)` no longer divide by zero.
@@ -51,11 +51,14 @@ A maintenance release of fixes and performance improvements found in a full audi
 - The config comment for `rate_limiter.enabled` now says the flag is not read: `throttle()` and `rememberWithStampedeProtection()` always rate-limit.
 
 ### Changed
-- **Upgrade note — queued refreshes during a rolling deploy.** A refresh job queued by 1.17 from `store('name')` and run by a 1.16 worker writes to the default store, as in 1.16; on PHP 8.2+ the 1.16 worker also logs a deprecation for the job's new property. Jobs queued by 1.16 have no store and keep writing to the default store. Upgrade queue workers together with, or before, the servers that queue refreshes from `store()`.
+- **Upgrade note — queued refreshes during a rolling deploy.** A refresh job queued by 1.17 from `store('name')` and run by a 1.16 worker writes to the default store, as in 1.16 (the worker ignores the job's new property). Jobs queued by 1.16 have no store and keep writing to the default store. Upgrade queue workers together with, or before, the servers that queue refreshes from `store()`.
+- **Upgrade note — lazy loading.** If you turned `strategies.chunking.lazy_loading` off, entries written while it was on are now returned eagerly (an array or collection) instead of as a `LazyChunkedCollection`.
 - `smart-cache:clear --force` now clears non-managed keys when every managed key had expired, as it already did when the index was empty.
-- `LazyChunkedCollection::materialize()` returns the cached collection class (a subclass of `Support\Collection`, so existing type hints still pass).
+- A chunked entry with a chunk that is not an array is treated as corrupted: self-healing evicts it, so `remember()` regenerates it, instead of returning partial data with a PHP warning.
+- `LazyChunkedCollection::materialize()` returns the cached collection class (a subclass of `Support\Collection`, so existing type hints still pass), and `json_encode()` of a `LazyChunkedCollection` gives a list of its items instead of `{}`.
 - `flushPatterns()` and `invalidateModel()` return a lower count when patterns overlap: each key is counted once.
-- Under Octane, cost-aware scores are re-read after each request: one extra read of `_sc_cost_metadata` per request that uses them, as on PHP-FPM.
+- `flushNamespace()` reads the managed-key index from the store before it starts, and flushes the namespace's keys other processes tracked too (never fewer than before).
+- Long-running processes (Octane, queue workers) read cost-aware scores again when their copy is older than a minute: at most one extra read of `_sc_cost_metadata` a minute per process.
 
 ### Documentation
 - README rewritten to be shorter: why SmartCache, what makes it production-ready, and the essentials, with details in the full documentation.

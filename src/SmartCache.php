@@ -50,6 +50,12 @@ class SmartCache implements SmartCacheContract, Repository
     private const REPLACED_ENTRY_REREADS = 3;
 
     /**
+     * How old the cost-aware scores a long-running process holds may get
+     * before reset() and refreshState() make it read them again.
+     */
+    private const COST_METADATA_MAX_AGE_SECONDS = 60;
+
+    /**
      * Sentinel object used to distinguish between a cache miss and a stored null value.
      * This ensures full Laravel contract compliance where null is a valid cached value.
      */
@@ -1555,9 +1561,9 @@ class SmartCache implements SmartCacheContract, Repository
         // Get all tracked keys
         $keys = $this->getManagedKeys();
 
-        // Remove the cleared keys from the index once, at the end. A key another
-        // process tracked while this ran stays listed, because its value was not
-        // cleared.
+        // Remove the cleared keys from the index once, at the end, as before. A
+        // key another process tracked while this ran stays listed, because its
+        // value was not cleared.
         return $this->batchManagedKeyChanges(function () use ($keys, $success): bool {
             foreach ($keys as $key) {
                 // Managed keys are stored fully qualified, so the active namespace
@@ -1566,24 +1572,28 @@ class SmartCache implements SmartCacheContract, Repository
             }
 
             return $success;
-        });
+        }, true);
     }
 
     /**
-     * Run a bulk removal and write the managed-key index once at the end.
+     * Run a bulk removal without writing the managed-key index every 10 keys.
      *
      * Every key removed from the index counts as a change, and every tenth
      * change rewrites the whole stored index under a lock. Flushing a tag or
      * pattern that covers thousands of keys used to rewrite an index of tens
-     * of thousands of keys hundreds of times; it is now written once. The
-     * stored result is the same. If the callback throws, the pending changes
-     * are persisted later, as any other pending change is.
+     * of thousands of keys hundreds of times; it is now written at most once,
+     * at the end. A small removal keeps the usual debounce: the index is only
+     * written once 10 changes are pending (or at the end of the request), so
+     * a model save that flushes one tag writes it no more often than before.
+     * If the callback throws, the pending changes are persisted later, as any
+     * other pending change is.
      *
      * @template TReturn
      * @param \Closure(): TReturn $callback
+     * @param bool $persist Write the index at the end even below the threshold
      * @return TReturn
      */
-    private function batchManagedKeyChanges(\Closure $callback): mixed
+    private function batchManagedKeyChanges(\Closure $callback, bool $persist = false): mixed
     {
         // Nested bulk operations (invalidate() inside flushTags(), ...) write
         // the index when the outermost one finishes.
@@ -1599,7 +1609,9 @@ class SmartCache implements SmartCacheContract, Repository
             $this->batchingManagedKeys = false;
         }
 
-        $this->persistManagedKeys();
+        if ($persist || $this->managedKeysChangeCount >= $this->managedKeysPersistThreshold) {
+            $this->persistManagedKeys();
+        }
 
         return $result;
     }
@@ -2298,7 +2310,7 @@ class SmartCache implements SmartCacheContract, Repository
                 $this->chunkCleanupService->flush();
             }
             if ($this->costAwareManager !== null) {
-                $this->costAwareManager->refresh();
+                $this->costAwareManager->refresh(self::COST_METADATA_MAX_AGE_SECONDS);
             }
         } catch (\Throwable $e) {
             // Best-effort persist; never let a reset() call break the request lifecycle.
@@ -2312,8 +2324,9 @@ class SmartCache implements SmartCacheContract, Repository
     /**
      * Persist pending bookkeeping and drop what was loaded from the store, so
      * the next job in a long-running queue worker starts from the current
-     * managed-key index, dependency map, metrics, and cost-aware scores instead
-     * of copies loaded by an earlier job. Pending tags are dropped too.
+     * managed-key index, dependency map, and metrics instead of copies loaded
+     * by an earlier job (cost-aware scores once their copy is a minute old).
+     * Pending tags are dropped too.
      *
      * Unlike reset(), the active namespace and runtime settings are kept: a
      * worker may set them once, when it boots. The service provider calls this
@@ -2332,7 +2345,7 @@ class SmartCache implements SmartCacheContract, Repository
                 $this->chunkCleanupService->flush();
             }
             if ($this->costAwareManager !== null) {
-                $this->costAwareManager->refresh();
+                $this->costAwareManager->refresh(self::COST_METADATA_MAX_AGE_SECONDS);
             }
         } catch (\Throwable $e) {
             // Best-effort persist; never let this break the worker loop.
@@ -3207,26 +3220,28 @@ class SmartCache implements SmartCacheContract, Repository
         $this->loadDependencies();
         $this->dependenciesLoaded = true;
 
-        $success = true;
-        $namespace = $this->activeNamespace;
+        return $this->batchManagedKeyChanges(function () use ($key): bool {
+            $success = true;
+            $namespace = $this->activeNamespace;
 
-        // Under a namespace, follow this tenant's namespaced edges first. They
-        // hold fully qualified keys, so they are walked with the namespace
-        // suspended.
-        if ($namespace !== null) {
-            $this->activeNamespace = null;
+            // Under a namespace, follow this tenant's namespaced edges first. They
+            // hold fully qualified keys, so they are walked with the namespace
+            // suspended.
+            if ($namespace !== null) {
+                $this->activeNamespace = null;
 
-            try {
-                $success = $this->invalidateWithVisited("{$namespace}:{$key}", []);
-            } finally {
-                $this->activeNamespace = $namespace;
+                try {
+                    $success = $this->invalidateWithVisited("{$namespace}:{$key}", []);
+                } finally {
+                    $this->activeNamespace = $namespace;
+                }
             }
-        }
 
-        // Then the edges stored without a namespace, exactly as every earlier
-        // release did. They are the only edges written before 1.16.0, so
-        // dependencies declared before the upgrade keep invalidating.
-        return $this->invalidateWithVisited($key, []) && $success;
+            // Then the edges stored without a namespace, exactly as every earlier
+            // release did. They are the only edges written before 1.16.0, so
+            // dependencies declared before the upgrade keep invalidating.
+            return $this->invalidateWithVisited($key, []) && $success;
+        });
     }
 
     /**
