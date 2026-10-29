@@ -66,6 +66,12 @@ class ChunkingStrategy implements OptimizationStrategy
     /**
      * Set the cleanup service for tracking chunks.
      *
+     * @deprecated 1.17.0 SmartCache registers the chunks of values stored
+     *             without expiry itself, under a metadata lock, once the entry
+     *             is stored. A service set here registers chunks before the
+     *             entry is written, also for values with a TTL, and is not
+     *             needed. It will be removed in 2.0.
+     *
      * @param OrphanChunkCleanupService $cleanupService
      * @return void
      */
@@ -108,29 +114,35 @@ class ChunkingStrategy implements OptimizationStrategy
         $sampleBytes = 0;
         $sampled = 0;
 
-        foreach ($value as $item) {
-            $sampleBytes += \strlen(\serialize($item));
-            $sampled++;
-            if ($sampled >= $sampleSize) {
-                break;
+        try {
+            foreach ($value as $item) {
+                $sampleBytes += \strlen(\serialize($item));
+                $sampled++;
+                if ($sampled >= $sampleSize) {
+                    break;
+                }
             }
-        }
 
-        $avgItemSize = $sampleSize > 0 ? (int) ceil($sampleBytes / $sampleSize) : 50;
-        $estimate = $count * $avgItemSize;
+            $avgItemSize = $sampleSize > 0 ? (int) ceil($sampleBytes / $sampleSize) : 50;
+            $estimate = $count * $avgItemSize;
 
-        // If clearly below threshold, skip serialization
-        if ($estimate < $this->threshold / 2) {
+            // If clearly below threshold, skip serialization
+            if ($estimate < $this->threshold / 2) {
+                return false;
+            }
+
+            // If clearly above threshold, apply
+            if ($estimate > $this->threshold * 2) {
+                return true;
+            }
+
+            // For borderline cases, serialize to get exact size
+            return \strlen(\serialize($value)) > $this->threshold;
+        } catch (\Throwable $e) {
+            // A value holding a Closure or another unserializable item cannot be
+            // measured; leave it to the store, as CompressionStrategy does.
             return false;
         }
-
-        // If clearly above threshold, apply
-        if ($estimate > $this->threshold * 2) {
-            return true;
-        }
-
-        // For borderline cases, serialize to get exact size
-        return \strlen(\serialize($value)) > $this->threshold;
     }
 
     /**
@@ -240,8 +252,10 @@ class ChunkingStrategy implements OptimizationStrategy
             throw new \RuntimeException('Cache repository is required to restore chunked data');
         }
 
-        // Check if lazy loading is enabled
-        $lazyLoading = $value['lazy_loading'] ?? $this->lazyLoading;
+        // Lazy loading needs the setting on now. An entry written while it was
+        // on used to stay lazy after it was turned off, for good for entries
+        // stored without expiry. Entries written eagerly stay eager.
+        $lazyLoading = $this->lazyLoading && ($value['lazy_loading'] ?? true);
 
         // Get the chunk size that was used (may be different if smart sizing was enabled)
         $chunkSize = $value['chunk_size'] ?? $this->chunkSize;
@@ -253,7 +267,8 @@ class ChunkingStrategy implements OptimizationStrategy
                 $value['chunk_keys'],
                 $chunkSize,
                 $value['total_items'],
-                $value['is_collection'] ?? false
+                $value['is_collection'] ?? false,
+                $value['collection_class'] ?? null
             );
         }
 
@@ -264,6 +279,12 @@ class ChunkingStrategy implements OptimizationStrategy
             $chunk = $cache->get($chunkKey);
             if ($chunk === null) {
                 throw new \RuntimeException("Missing cache chunk [{$chunkKey}] while restoring chunked value");
+            }
+
+            // A chunk that is not an array was overwritten or corrupted. It
+            // used to be skipped with a warning, returning partial data.
+            if (!\is_array($chunk)) {
+                throw new \RuntimeException("Invalid cache chunk [{$chunkKey}] while restoring chunked value");
             }
 
             foreach ($chunk as $itemKey => $itemValue) {

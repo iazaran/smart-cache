@@ -335,6 +335,28 @@ trait EnumeratesCacheKeys
     }
 
     /**
+     * The managed keys as a lookup set.
+     *
+     * The index returns a numeric key such as '123' as the integer 123, so a
+     * strict in_array() against a scanned or typed string key reported it as
+     * not managed. in_array() also cost a full pass over the index for every
+     * scanned key.
+     *
+     * @param array $managedKeys
+     * @return array<string|int, true> Look up keys with isset($set[(string) $key])
+     */
+    private function managedKeySet(array $managedKeys): array
+    {
+        $set = [];
+
+        foreach ($managedKeys as $key) {
+            $set[(string) $key] = true;
+        }
+
+        return $set;
+    }
+
+    /**
      * @param string $key
      * @return bool
      */

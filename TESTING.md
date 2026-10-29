@@ -29,7 +29,7 @@ vendor/bin/phpunit
 Current suite size:
 
 ```bash
-# 678 tests, 2,475 assertions
+# 725 tests, 2,611 assertions
 ```
 
 ### Run Specific Test Suites
@@ -84,6 +84,7 @@ php8.1 vendor/bin/phpunit
 php8.2 vendor/bin/phpunit
 php8.3 vendor/bin/phpunit
 php8.4 vendor/bin/phpunit
+php8.5 vendor/bin/phpunit
 ```
 
 ## Key Testing Features
@@ -186,7 +187,8 @@ vendor/bin/phpunit --stop-on-failure
 
 ### Verbose Output
 ```bash
-vendor/bin/phpunit --verbose
+vendor/bin/phpunit --testdox --display-warnings   # PHPUnit 10+
+vendor/bin/phpunit --testdox --verbose            # PHPUnit 9
 ```
 
 ### Test Specific Cache Driver

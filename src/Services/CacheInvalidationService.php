@@ -9,6 +9,16 @@ class CacheInvalidationService
 {
     protected SmartCache $smartCache;
 
+    /**
+     * Glob patterns converted to regular expressions, so a pattern is
+     * converted once per flushPatterns() call rather than once per managed
+     * key. Emptied on every call: model patterns embed record IDs, and a
+     * long-running worker would otherwise keep every one of them.
+     *
+     * @var array<string, string>
+     */
+    private array $globRegexes = [];
+
     public function __construct(SmartCache $smartCache)
     {
         $this->smartCache = $smartCache;
@@ -60,17 +70,28 @@ class CacheInvalidationService
     {
         $namespace = $this->activeNamespace();
 
+        $this->globRegexes = [];
+
         return $this->withoutNamespace(function () use ($patterns, $namespace): int {
             $invalidated = 0;
             $managedKeys = $this->smartCache->getManagedKeys();
+            // A key matched by several patterns is forgotten once. It used to be
+            // forgotten again for every further pattern, and counted again on
+            // stores whose forget() always reports success (database).
+            $handled = [];
 
             foreach ($patterns as $pattern) {
                 foreach ($managedKeys as $key) {
                     $key = (string) $key;
 
+                    if (isset($handled[$key])) {
+                        continue;
+                    }
+
                     if ($this->matchesAdvancedPattern($key, $pattern)
                         || $this->matchesWithinNamespace($key, (string) $pattern, $namespace)
                     ) {
+                        $handled[$key] = true;
                         $result = $this->smartCache->forget($key);
                         if ($result) {
                             $invalidated++;
@@ -202,9 +223,13 @@ class CacheInvalidationService
             // Handle glob patterns (* and ?)
             if (str_contains($pattern, '*') || str_contains($pattern, '?')) {
                 // Convert glob pattern to regex pattern
-                $regexPattern = preg_quote($pattern, '/');
-                $regexPattern = str_replace(['\*', '\?'], ['.*', '.'], $regexPattern);
-                $result = preg_match("/^{$regexPattern}$/", $key);
+                if (!isset($this->globRegexes[$pattern])) {
+                    $regexPattern = preg_quote($pattern, '/');
+                    $regexPattern = str_replace(['\*', '\?'], ['.*', '.'], $regexPattern);
+                    $this->globRegexes[$pattern] = "/^{$regexPattern}$/";
+                }
+
+                $result = preg_match($this->globRegexes[$pattern], $key);
                 return $result === 1;
             }
 

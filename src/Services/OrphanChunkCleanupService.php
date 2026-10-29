@@ -46,6 +46,21 @@ class OrphanChunkCleanupService
     protected int $pendingChanges = 0;
 
     /**
+     * Registrations and removals made through this instance since the last
+     * persist. persistRegistry() applies them to the stored registry instead
+     * of writing this instance's copy as a whole, which would drop what other
+     * processes registered since it was loaded.
+     *
+     * @var array<string, array>
+     */
+    private array $pendingRegistrations = [];
+
+    /**
+     * @var array<string, true>
+     */
+    private array $pendingRemovals = [];
+
+    /**
      * Create a new orphan chunk cleanup service.
      *
      * @param Repository $cache
@@ -95,6 +110,8 @@ class OrphanChunkCleanupService
             'chunk_keys' => $chunkKeys,
             'registered_at' => time(),
         ];
+        $this->pendingRegistrations[$mainKey] = $this->chunkRegistry[$mainKey];
+        unset($this->pendingRemovals[$mainKey]);
         $this->recordChange();
     }
 
@@ -110,7 +127,8 @@ class OrphanChunkCleanupService
             return;
         }
 
-        unset($this->chunkRegistry[$mainKey]);
+        unset($this->chunkRegistry[$mainKey], $this->pendingRegistrations[$mainKey]);
+        $this->pendingRemovals[$mainKey] = true;
         $this->recordChange();
     }
 
@@ -131,26 +149,44 @@ class OrphanChunkCleanupService
      * Clean up orphan chunks: registered chunks that the main key's current
      * entry no longer points at, because the entry is gone or was replaced.
      *
-     * The stored registry is re-read first, since other processes register
-     * chunks too. Entries this instance holds in memory are kept as well; at
-     * worst an entry is checked that is already clean.
+     * The pass starts from the stored registry, since SmartCache and other
+     * processes register chunks there, and also checks the entries this
+     * instance holds; at worst an entry is checked that is already clean. At
+     * the end only the pass's own changes are applied to the registry as it is
+     * stored then. Writing back the copy read at the start would drop chunks
+     * registered while the pass ran, or since an earlier pass in the same
+     * process, and those chunks would then never be removed.
      *
      * @return array Statistics about the cleanup
      */
     public function cleanupOrphanChunks(): array
     {
-        $stored = $this->cache->get(self::REGISTRY_KEY, []);
-        $this->chunkRegistry = \array_replace(\is_array($stored) ? $stored : [], $this->chunkRegistry);
+        $registry = $this->readStoredRegistry();
 
-        $orphanedMainKeys = [];
-        $cleanedChunks = 0;
-        $changed = false;
-
+        // Chunk lists are merged rather than replaced: only chunks the current
+        // entry does not point at are ever deleted, so checking more is safe.
         foreach ($this->chunkRegistry as $mainKey => $data) {
-            $registered = $this->stringList($data['chunk_keys'] ?? []);
-            $referenced = $this->referencedChunkKeys($this->cache->get((string) $mainKey));
+            $registry[$mainKey] = [
+                'chunk_keys' => \array_values(\array_unique([
+                    ...$this->stringList($registry[$mainKey]['chunk_keys'] ?? []),
+                    ...$this->stringList(\is_array($data) ? ($data['chunk_keys'] ?? []) : []),
+                ])),
+                'registered_at' => $registry[$mainKey]['registered_at'] ?? (\is_array($data) ? ($data['registered_at'] ?? null) : null),
+            ];
+        }
 
-            foreach (\array_diff($registered, $referenced) as $chunkKey) {
+        $orphanedMainKeys = 0;
+        $cleanedChunks = 0;
+        /** @var array<string, array{removed: array<int, string>, referenced: array<int, string>}> $changes */
+        $changes = [];
+
+        foreach ($registry as $mainKey => $data) {
+            $mainKey = (string) $mainKey;
+            $registered = $this->stringList(\is_array($data) ? ($data['chunk_keys'] ?? []) : []);
+            $referenced = $this->referencedChunkKeys($this->cache->get($mainKey));
+            $removed = \array_values(\array_diff($registered, $referenced));
+
+            foreach ($removed as $chunkKey) {
                 if ($this->cache->forget($chunkKey)) {
                     $cleanedChunks++;
                 }
@@ -158,31 +194,40 @@ class OrphanChunkCleanupService
 
             if ($referenced === []) {
                 // Main key is gone, or no longer chunked: nothing left to track
-                $orphanedMainKeys[] = $mainKey;
-                unset($this->chunkRegistry[$mainKey]);
-                $changed = true;
-            } elseif ($referenced !== $registered) {
-                // Replaced by another chunked value; track its chunks instead
-                $this->chunkRegistry[$mainKey] = [
-                    'chunk_keys' => $referenced,
-                    'registered_at' => $data['registered_at'] ?? time(),
-                ];
-                $changed = true;
+                $orphanedMainKeys++;
+            }
+
+            if ($removed !== [] || $referenced !== $registered) {
+                $changes[$mainKey] = ['removed' => $removed, 'referenced' => $referenced];
             }
         }
 
         // Always persist after a cleanup pass so the registry on disk reflects
         // the current state, including any debounced mutations from earlier calls.
-        if ($changed || $this->pendingChanges > 0) {
-            $this->persistRegistry();
+        if ($changes !== [] || $this->pendingChanges > 0) {
+            $this->writeRegistry($changes);
             $this->pendingChanges = 0;
+        } else {
+            $this->chunkRegistry = $registry;
         }
 
         return [
-            'orphaned_main_keys' => count($orphanedMainKeys),
+            'orphaned_main_keys' => $orphanedMainKeys,
             'cleaned_chunks' => $cleanedChunks,
             'remaining_tracked_keys' => count($this->chunkRegistry),
         ];
+    }
+
+    /**
+     * The stored registry, or [] when it is missing or not an array.
+     *
+     * @return array
+     */
+    private function readStoredRegistry(): array
+    {
+        $registry = $this->cache->get(self::REGISTRY_KEY, []);
+
+        return \is_array($registry) ? $registry : [];
     }
 
     /**
@@ -249,13 +294,57 @@ class OrphanChunkCleanupService
      */
     protected function persistRegistry(): void
     {
-        if ($this->chunkRegistry === []) {
+        $this->writeRegistry([]);
+    }
+
+    /**
+     * Apply this instance's pending changes, and a cleanup pass's changes, to
+     * the registry as it is stored now.
+     *
+     * @param array<string, array{removed: array<int, string>, referenced: array<int, string>}> $cleanup
+     * @return void
+     */
+    private function writeRegistry(array $cleanup): void
+    {
+        $registry = $this->readStoredRegistry();
+
+        foreach ($this->pendingRemovals as $mainKey => $flag) {
+            unset($registry[$mainKey]);
+        }
+
+        foreach ($this->pendingRegistrations as $mainKey => $data) {
+            $registry[$mainKey] = $data;
+        }
+
+        // A cleanup pass removes the chunks it deleted and tracks the chunks the
+        // current entry points at. Chunks registered while it ran stay listed.
+        foreach ($cleanup as $mainKey => $change) {
+            $chunks = \array_values(\array_unique([
+                ...\array_diff($this->stringList($registry[$mainKey]['chunk_keys'] ?? []), $change['removed']),
+                ...$change['referenced'],
+            ]));
+
+            if ($chunks === []) {
+                unset($registry[$mainKey]);
+            } else {
+                $registry[$mainKey] = [
+                    'chunk_keys' => $chunks,
+                    'registered_at' => $registry[$mainKey]['registered_at'] ?? time(),
+                ];
+            }
+        }
+
+        $this->pendingRegistrations = [];
+        $this->pendingRemovals = [];
+        $this->chunkRegistry = $registry;
+
+        if ($registry === []) {
             $this->cache->forget(self::REGISTRY_KEY);
 
             return;
         }
 
-        $this->cache->forever(self::REGISTRY_KEY, $this->chunkRegistry);
+        $this->cache->forever(self::REGISTRY_KEY, $registry);
     }
 }
 

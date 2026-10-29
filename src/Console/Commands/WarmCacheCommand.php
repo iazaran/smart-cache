@@ -36,6 +36,11 @@ class WarmCacheCommand extends Command
 
         $selectedWarmers = $this->option('warmer');
         if (!empty($selectedWarmers)) {
+            // A misspelled name used to warm nothing without a word.
+            foreach (\array_diff($selectedWarmers, \array_map('strval', \array_keys($warmers))) as $unknown) {
+                $this->warn("Unknown warmer [{$unknown}]. Run with --list to see the configured warmers.");
+            }
+
             $warmers = \array_filter(
                 $warmers,
                 fn($key) => \in_array($key, $selectedWarmers, true),

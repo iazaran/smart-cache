@@ -116,14 +116,22 @@ class StatisticsController extends Controller
         $this->ensureDashboardEnabled();
 
         $cache = SmartCache::getFacadeRoot();
-        
+
+        // Only what the page shows. It also ran getStatistics() and
+        // healthCheck() and discarded the results: each reads every managed
+        // value, and healthCheck() prunes the index and evicts broken entries,
+        // on every page view. /statistics and /health still report them.
         $data = [
-            'statistics' => $cache->getStatistics(),
             'performance' => $cache->getPerformanceMetrics(),
             'managed_keys' => $cache->getManagedKeys(),
             'circuit_breaker' => $cache->getCircuitBreakerStats(),
-            'health' => $cache->healthCheck(),
         ];
+
+        // A subclass that renders its own page may read them, as before.
+        if ((new \ReflectionMethod($this, 'renderDashboard'))->getDeclaringClass()->getName() !== self::class) {
+            $data['statistics'] = $cache->getStatistics();
+            $data['health'] = $cache->healthCheck();
+        }
 
         $html = $this->renderDashboard($data);
         

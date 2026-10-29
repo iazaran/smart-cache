@@ -3,6 +3,7 @@
 namespace SmartCache\Strategies;
 
 use SmartCache\Contracts\OptimizationStrategy;
+use SmartCache\Strategies\Concerns\RestrictsUnserialization;
 
 /**
  * Smart Serialization Strategy
@@ -14,6 +15,8 @@ use SmartCache\Contracts\OptimizationStrategy;
  */
 class SmartSerializationStrategy implements OptimizationStrategy
 {
+    use RestrictsUnserialization;
+
     protected const JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
 
     /**
@@ -72,7 +75,12 @@ class SmartSerializationStrategy implements OptimizationStrategy
         }
 
         // Fall back to serialize for borderline cases and objects
-        return \strlen(\serialize($value)) >= $this->sizeThreshold;
+        try {
+            return \strlen(\serialize($value)) >= $this->sizeThreshold;
+        } catch (\Throwable $e) {
+            // A value that cannot be serialized is left to the store.
+            return false;
+        }
     }
 
     /**
@@ -228,8 +236,8 @@ class SmartSerializationStrategy implements OptimizationStrategy
         return match ($method) {
             'json' => json_decode($data, true),
             'igbinary' => igbinary_unserialize(base64_decode($data)),
-            'php' => unserialize(base64_decode($data)),
-            default => unserialize(base64_decode($data)),
+            'php' => $this->unserializePayload(base64_decode($data)),
+            default => $this->unserializePayload(base64_decode($data)),
         };
     }
 

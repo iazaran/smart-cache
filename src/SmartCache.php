@@ -50,6 +50,12 @@ class SmartCache implements SmartCacheContract, Repository
     private const REPLACED_ENTRY_REREADS = 3;
 
     /**
+     * How old the cost-aware scores a long-running process holds may get
+     * before reset() and refreshState() make it read them again.
+     */
+    private const COST_METADATA_MAX_AGE_SECONDS = 60;
+
+    /**
      * Sentinel object used to distinguish between a cache miss and a stored null value.
      * This ensures full Laravel contract compliance where null is a valid cached value.
      */
@@ -351,6 +357,13 @@ class SmartCache implements SmartCacheContract, Repository
      * @var bool Whether the next put() receives an explicitly jittered TTL
      */
     private bool $skipNextConfiguredJitter = false;
+
+    /**
+     * Size of the value the last put() wrote, when monitoring measured it, so
+     * the remember*() methods do not serialize the same value again for
+     * cost-aware scoring. Null when the write was skipped or not measured.
+     */
+    private ?int $lastWrittenSize = null;
 
     /**
      * @var CostAwareCacheManager|null Cost-aware cache manager for value scoring
@@ -686,6 +699,7 @@ class SmartCache implements SmartCacheContract, Repository
      */
     private function putValue($key, $value, $ttl, bool $applyConfiguredJitter): bool
     {
+        $this->lastWrittenSize = null;
         $key = $this->applyNamespace(static::normalizeKey($key));
         $startTime = $this->enablePerformanceMonitoring ? microtime(true) : null;
 
@@ -730,11 +744,18 @@ class SmartCache implements SmartCacheContract, Repository
         $newHash = null;
         $requestedExpiry = false;
         if ($this->deduplicationEnabled) {
-            $newHash = $this->contentHash($optimizedValue);
+            try {
+                $newHash = $this->contentHash($optimizedValue);
+            } catch (\Throwable $e) {
+                // A value that cannot be serialized (it holds a Closure) cannot
+                // be hashed either; write it through and keep no record.
+                $newHash = null;
+            }
             $requestedExpiry = $this->resolveDedupExpiry($ttl);
-            $stored = $this->storeRepository()->get("_sc_dna:{$key}");
+            $stored = $newHash !== null ? $this->storeRepository()->get("_sc_dna:{$key}") : null;
 
-            if (static::chunkKeysOf($optimizedValue) === []
+            if ($newHash !== null
+                && static::chunkKeysOf($optimizedValue) === []
                 && $this->canSkipDuplicateWrite($stored, $newHash, $requestedExpiry)
                 && $this->storeRepository()->has($key)
             ) {
@@ -755,7 +776,9 @@ class SmartCache implements SmartCacheContract, Repository
         );
 
         // Persist content hash for future deduplication
-        if ($this->deduplicationEnabled && $result) {
+        if ($this->deduplicationEnabled && $result && $newHash === null) {
+            $this->invalidateDnaRecord($key);
+        } elseif ($this->deduplicationEnabled && $result) {
             $hashTtl = \is_int($ttl) && $ttl > 0 ? $ttl : 86400;
             // 'e' stays false when the TTL shape could not be resolved, which keeps
             // canSkipDuplicateWrite() from ever skipping against this record.
@@ -765,17 +788,39 @@ class SmartCache implements SmartCacheContract, Repository
             ], $hashTtl);
         }
 
+        $originalSize = null;
         if ($this->enablePerformanceMonitoring) {
+            $originalSize = $this->calculateDataSize($value);
             $this->recordPerformanceMetric('cache_write', $key, $startTime, [
-                'original_size' => $this->calculateDataSize($value),
-                'optimized_size' => $this->calculateDataSize($optimizedValue),
+                'original_size' => $originalSize,
+                // A value no strategy changed has the same size; measuring it
+                // again would serialize it a second time.
+                'optimized_size' => $optimizedValue === $value ? $originalSize : $this->calculateDataSize($optimizedValue),
                 'ttl' => $ttl
             ]);
         }
 
         $this->dispatchWrite($key, $value, \is_int($ttl) ? $ttl : null, $tags);
 
+        // Set last, so a write made by a KeyWritten listener cannot replace it.
+        $this->lastWrittenSize = $originalSize;
+
         return $result;
+    }
+
+    /**
+     * The size of a value a remember*() method has just written with put(),
+     * for cost-aware scoring: the size put() measured, or measured now.
+     *
+     * @param mixed $value
+     * @return int
+     */
+    private function writtenValueSize(mixed $value): int
+    {
+        $size = $this->lastWrittenSize;
+        $this->lastWrittenSize = null;
+
+        return $size ?? $this->calculateDataSize($value);
     }
 
     /**
@@ -1100,12 +1145,13 @@ class SmartCache implements SmartCacheContract, Repository
         // Measure regeneration cost for cost-aware caching
         $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
         $value = $this->callKeepingActiveTags($callback);
+        $this->lastWrittenSize = null;
         $this->put($key, $value, $ttl instanceof \Closure ? $ttl($value) : $ttl);
 
         // Record regeneration cost and value size
         if ($this->costAwareManager !== null && $startTime !== null) {
             $costMs = (\microtime(true) - $startTime) * 1000;
-            $size = $this->calculateDataSize($value);
+            $size = $this->writtenValueSize($value);
             $this->costAwareManager->recordCost($this->applyNamespace(static::normalizeKey($key)), $costMs, $size);
         }
 
@@ -1515,23 +1561,59 @@ class SmartCache implements SmartCacheContract, Repository
         // Get all tracked keys
         $keys = $this->getManagedKeys();
 
-        $this->batchingManagedKeys = true;
-
-        try {
+        // Remove the cleared keys from the index once, at the end, as before. A
+        // key another process tracked while this ran stays listed, because its
+        // value was not cleared.
+        return $this->batchManagedKeyChanges(function () use ($keys, $success): bool {
             foreach ($keys as $key) {
                 // Managed keys are stored fully qualified, so the active namespace
                 // must not be applied a second time here.
                 $success = $this->forgetStoredKey((string) $key) && $success;
             }
+
+            return $success;
+        }, true);
+    }
+
+    /**
+     * Run a bulk removal without writing the managed-key index every 10 keys.
+     *
+     * Every key removed from the index counts as a change, and every tenth
+     * change rewrites the whole stored index under a lock. Flushing a tag or
+     * pattern that covers thousands of keys used to rewrite an index of tens
+     * of thousands of keys hundreds of times; it is now written at most once,
+     * at the end. A small removal keeps the usual debounce: the index is only
+     * written once 10 changes are pending (or at the end of the request), so
+     * a model save that flushes one tag writes it no more often than before.
+     * If the callback throws, the pending changes are persisted later, as any
+     * other pending change is.
+     *
+     * @template TReturn
+     * @param \Closure(): TReturn $callback
+     * @param bool $persist Write the index at the end even below the threshold
+     * @return TReturn
+     */
+    private function batchManagedKeyChanges(\Closure $callback, bool $persist = false): mixed
+    {
+        // Nested bulk operations (invalidate() inside flushTags(), ...) write
+        // the index when the outermost one finishes.
+        if ($this->batchingManagedKeys) {
+            return $callback();
+        }
+
+        $this->batchingManagedKeys = true;
+
+        try {
+            $result = $callback();
         } finally {
             $this->batchingManagedKeys = false;
         }
 
-        // Remove the cleared keys from the index. A key another process tracked
-        // while this ran stays listed, because its value was not cleared.
-        $this->persistManagedKeys();
+        if ($persist || $this->managedKeysChangeCount >= $this->managedKeysPersistThreshold) {
+            $this->persistManagedKeys();
+        }
 
-        return $success;
+        return $result;
     }
 
     /**
@@ -1828,11 +1910,12 @@ class SmartCache implements SmartCacheContract, Repository
         $value = $this->callKeepingActiveTags($callback);
 
         if ($condition($value)) {
+            $this->lastWrittenSize = null;
             $this->put($key, $value, $ttl instanceof \Closure ? $ttl($value) : $ttl);
 
             if ($this->costAwareManager !== null && $startTime !== null) {
                 $costMs = (\microtime(true) - $startTime) * 1000;
-                $size = $this->calculateDataSize($value);
+                $size = $this->writtenValueSize($value);
                 $this->costAwareManager->recordCost($this->applyNamespace($key), $costMs, $size);
             }
         }
@@ -2226,6 +2309,9 @@ class SmartCache implements SmartCacheContract, Repository
             if ($this->chunkCleanupService !== null) {
                 $this->chunkCleanupService->flush();
             }
+            if ($this->costAwareManager !== null) {
+                $this->costAwareManager->refresh(self::COST_METADATA_MAX_AGE_SECONDS);
+            }
         } catch (\Throwable $e) {
             // Best-effort persist; never let a reset() call break the request lifecycle.
         }
@@ -2239,7 +2325,8 @@ class SmartCache implements SmartCacheContract, Repository
      * Persist pending bookkeeping and drop what was loaded from the store, so
      * the next job in a long-running queue worker starts from the current
      * managed-key index, dependency map, and metrics instead of copies loaded
-     * by an earlier job. Pending tags are dropped too.
+     * by an earlier job (cost-aware scores once their copy is a minute old).
+     * Pending tags are dropped too.
      *
      * Unlike reset(), the active namespace and runtime settings are kept: a
      * worker may set them once, when it boots. The service provider calls this
@@ -2256,6 +2343,9 @@ class SmartCache implements SmartCacheContract, Repository
             }
             if ($this->chunkCleanupService !== null) {
                 $this->chunkCleanupService->flush();
+            }
+            if ($this->costAwareManager !== null) {
+                $this->costAwareManager->refresh(self::COST_METADATA_MAX_AGE_SECONDS);
             }
         } catch (\Throwable $e) {
             // Best-effort persist; never let this break the worker loop.
@@ -2457,7 +2547,8 @@ class SmartCache implements SmartCacheContract, Repository
         $cachedMeta = $this->storeRepository()->get($metaKey);
 
         if ($cachedValue !== $sentinel && $cachedMeta !== null) {
-            $age = time() - ($cachedMeta['stored_at'] ?? $cachedMeta['created_at'] ?? time());
+            $now = $this->currentTimestamp();
+            $age = $now - ($cachedMeta['stored_at'] ?? $cachedMeta['created_at'] ?? $now);
 
             // If data is fresh, return it
             if ($age <= $freshTtl) {
@@ -2540,7 +2631,8 @@ class SmartCache implements SmartCacheContract, Repository
             false,
             fn (): bool => (bool) $this->cache->put($key, $optimizedValue, $totalTtl)
         );
-        $this->storeRepository()->put($metaKey, ['stored_at' => time(), 'created_at' => time(), 'fresh_ttl' => $freshTtl], $totalTtl);
+        $now = $this->currentTimestamp();
+        $this->storeRepository()->put($metaKey, ['stored_at' => $now, 'created_at' => $now, 'fresh_ttl' => $freshTtl], $totalTtl);
 
         if ($stored) {
             $this->dispatchWrite($key, $value, $totalTtl, []);
@@ -2684,7 +2776,9 @@ class SmartCache implements SmartCacheContract, Repository
         // The queue worker has no active namespace, so the job carries it along.
         $this->markActiveTagsUsed();
         $tags = $this->scopedTags ? $this->takeActiveTags($this->applyNamespace($key)) : $this->activeTags;
-        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $tags, $this->activeNamespace);
+        // It also carries the store, so store('redis')->refreshAsync() refreshes
+        // the redis entry rather than the default store's.
+        $job = new BackgroundCacheRefreshJob($key, $callback, $ttl, $tags, $this->activeNamespace, $this->storeName);
 
         if ($queue !== null) {
             $job->onQueue($queue);
@@ -2716,12 +2810,13 @@ class SmartCache implements SmartCacheContract, Repository
             $namespacedKey = $this->applyNamespace((string) $key);
             $metadata = $this->storeRepository()->get("_sc_meta:{$namespacedKey}");
             if ($metadata && isset($metadata['created_at'])) {
-                $age = time() - $metadata['created_at'];
+                $now = $this->currentTimestamp();
+                $age = $now - $metadata['created_at'];
                 if ($age > $ttl) {
                     // Restart the freshness window first so the requests that arrive
                     // before the job finishes keep serving stale instead of each
                     // queueing another refresh job.
-                    $this->storeRepository()->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
+                    $this->storeRepository()->put("_sc_meta:{$namespacedKey}", ['created_at' => $now, 'stored_at' => $now], $staleTtl);
 
                     // Value is stale, queue background refresh
                     try {
@@ -2744,7 +2839,8 @@ class SmartCache implements SmartCacheContract, Repository
         );
         $this->put($key, $freshValue, $staleTtl);
         $namespacedKey = $this->applyNamespace((string) $key);
-        $this->storeRepository()->put("_sc_meta:{$namespacedKey}", ['created_at' => time(), 'stored_at' => time()], $staleTtl);
+        $now = $this->currentTimestamp();
+        $this->storeRepository()->put("_sc_meta:{$namespacedKey}", ['created_at' => $now, 'stored_at' => $now], $staleTtl);
 
         return $freshValue;
     }
@@ -2951,29 +3047,31 @@ class SmartCache implements SmartCacheContract, Repository
         $this->markActiveTagsUsed();
         $tags = \is_array($tags) ? $tags : [$tags];
 
-        foreach ($tags as $tag) {
-            $tag = static::normalizeKey($tag);
+        $this->batchManagedKeyChanges(function () use ($tags, $source): void {
+            foreach ($tags as $tag) {
+                $tag = static::normalizeKey($tag);
 
-            // Read the raw index rather than getKeysForTag(): pruning and
-            // re-persisting the index is wasted work when the tag entry is about
-            // to be deleted below.
-            $tagKeys = $this->readTagKeys($tag);
-            $flushed = 0;
+                // Read the raw index rather than getKeysForTag(): pruning and
+                // re-persisting the index is wasted work when the tag entry is about
+                // to be deleted below.
+                $tagKeys = $this->readTagKeys($tag);
+                $flushed = 0;
 
-            foreach ($tagKeys as $key) {
-                // Use forget method which handles both regular and optimized cache cleanup.
-                // We don't care about the return value - if the key doesn't exist, that's fine.
-                if ($this->storeRepository()->has($key)) {
-                    $flushed++;
+                foreach ($tagKeys as $key) {
+                    // Use forget method which handles both regular and optimized cache cleanup.
+                    // We don't care about the return value - if the key doesn't exist, that's fine.
+                    if ($this->storeRepository()->has($key)) {
+                        $flushed++;
+                    }
+                    $this->forgetStoredKey((string) $key);
                 }
-                $this->forgetStoredKey((string) $key);
-            }
 
-            // Remove the flushed keys from the tag rather than deleting the whole
-            // entry, so a key another process tagged meanwhile stays tagged.
-            $this->mutateTagKeys($tag, static fn (array $keys): array => \array_values(\array_diff($keys, $tagKeys)));
-            $this->dispatchTagFlushed($tag, $flushed, $source);
-        }
+                // Remove the flushed keys from the tag rather than deleting the whole
+                // entry, so a key another process tagged meanwhile stays tagged.
+                $this->mutateTagKeys($tag, static fn (array $keys): array => \array_values(\array_diff($keys, $tagKeys)));
+                $this->dispatchTagFlushed($tag, $flushed, $source);
+            }
+        });
 
         return true; // Always return true since we handle missing keys gracefully
     }
@@ -3036,23 +3134,27 @@ class SmartCache implements SmartCacheContract, Repository
     {
         $this->markActiveTagsUsed();
         $prefix = "{$namespace}:";
-        $flushed = 0;
 
-        // Save and clear the active namespace to avoid double-prefixing
-        $savedNamespace = $this->activeNamespace;
-        $this->activeNamespace = null;
+        // Start from the stored index, as clearManaged() does, so the
+        // namespace's keys that other processes tracked since this one loaded
+        // its copy are flushed too.
+        $this->persistManagedKeys();
+        $this->loadManagedKeys();
+        $this->managedKeysLoaded = true;
 
-        foreach ($this->getManagedKeys() as $key) {
-            if (str_starts_with($key, $prefix)) {
-                $this->forget($key);
-                $flushed++;
+        return $this->batchManagedKeyChanges(function () use ($prefix): int {
+            $flushed = 0;
+
+            foreach ($this->getManagedKeys() as $key) {
+                if (str_starts_with((string) $key, $prefix)) {
+                    // Managed keys are fully qualified: no second namespace.
+                    $this->forgetStoredKey((string) $key);
+                    $flushed++;
+                }
             }
-        }
 
-        // Restore the namespace
-        $this->activeNamespace = $savedNamespace;
-
-        return $flushed;
+            return $flushed;
+        });
     }
 
     /**
@@ -3118,26 +3220,28 @@ class SmartCache implements SmartCacheContract, Repository
         $this->loadDependencies();
         $this->dependenciesLoaded = true;
 
-        $success = true;
-        $namespace = $this->activeNamespace;
+        return $this->batchManagedKeyChanges(function () use ($key): bool {
+            $success = true;
+            $namespace = $this->activeNamespace;
 
-        // Under a namespace, follow this tenant's namespaced edges first. They
-        // hold fully qualified keys, so they are walked with the namespace
-        // suspended.
-        if ($namespace !== null) {
-            $this->activeNamespace = null;
+            // Under a namespace, follow this tenant's namespaced edges first. They
+            // hold fully qualified keys, so they are walked with the namespace
+            // suspended.
+            if ($namespace !== null) {
+                $this->activeNamespace = null;
 
-            try {
-                $success = $this->invalidateWithVisited("{$namespace}:{$key}", []);
-            } finally {
-                $this->activeNamespace = $namespace;
+                try {
+                    $success = $this->invalidateWithVisited("{$namespace}:{$key}", []);
+                } finally {
+                    $this->activeNamespace = $namespace;
+                }
             }
-        }
 
-        // Then the edges stored without a namespace, exactly as every earlier
-        // release did. They are the only edges written before 1.16.0, so
-        // dependencies declared before the upgrade keep invalidating.
-        return $this->invalidateWithVisited($key, []) && $success;
+            // Then the edges stored without a namespace, exactly as every earlier
+            // release did. They are the only edges written before 1.16.0, so
+            // dependencies declared before the upgrade keep invalidating.
+            return $this->invalidateWithVisited($key, []) && $success;
+        });
     }
 
     /**
@@ -3270,6 +3374,17 @@ class SmartCache implements SmartCacheContract, Repository
         $wait = \max(0, (int) $this->config->get('smart-cache.metadata_lock.wait', 1));
         $lockName = '_sc_meta_lock:' . \sha1($scope);
 
+        $ran = false;
+        $finished = false;
+        $result = null;
+        $locked = function () use ($callback, &$ran, &$finished, &$result): mixed {
+            $ran = true;
+            $result = $callback();
+            $finished = true;
+
+            return $result;
+        };
+
         try {
             $lock = $store->lock($lockName, $ttl);
 
@@ -3278,21 +3393,22 @@ class SmartCache implements SmartCacheContract, Repository
             }
 
             if ($wait > 0 && \method_exists($lock, 'block')) {
-                return $lock->block($wait, $callback);
+                return $lock->block($wait, $locked);
             }
 
-            $ran = false;
-            $result = $lock->get(function () use ($callback, &$ran): mixed {
-                $ran = true;
-                return $callback();
-            });
+            $lock->get($locked);
 
             if ($ran) {
                 return $result;
             }
         } catch (\Throwable $e) {
             // Best-effort locking: unsupported or unavailable locks should not
-            // make cache writes fail.
+            // make cache writes fail. When only releasing the lock failed, the
+            // update has already been applied; running it again would apply it
+            // twice.
+            if ($finished) {
+                return $result;
+            }
         }
 
         return $callback();
@@ -3398,7 +3514,10 @@ class SmartCache implements SmartCacheContract, Repository
     public function flushPatterns(array $patterns): int
     {
         $this->markActiveTagsUsed();
-        return $this->invalidationService()->flushPatterns($patterns);
+
+        return $this->batchManagedKeyChanges(
+            fn (): int => $this->invalidationService()->flushPatterns($patterns)
+        );
     }
 
     /**
@@ -3412,7 +3531,10 @@ class SmartCache implements SmartCacheContract, Repository
     public function invalidateModel(string $modelClass, mixed $modelId, array $relationships = []): int
     {
         $this->markActiveTagsUsed();
-        return $this->invalidationService()->invalidateModelRelations($modelClass, $modelId, $relationships);
+
+        return $this->batchManagedKeyChanges(
+            fn (): int => $this->invalidationService()->invalidateModelRelations($modelClass, $modelId, $relationships)
+        );
     }
 
     /**
@@ -3738,9 +3860,10 @@ class SmartCache implements SmartCacheContract, Repository
         $delta = \microtime(true) - $startedAt;
 
         $this->put($key, $value, $ttl);
+        $now = $this->currentTimestamp();
         $this->storeRepository()->put(
             "_sc_meta:{$namespacedKey}",
-            ['created_at' => \time(), 'stored_at' => \time(), 'delta' => \round($delta, 6)],
+            ['created_at' => $now, 'stored_at' => $now, 'delta' => \round($delta, 6)],
             $ttl
         );
 
@@ -3803,11 +3926,12 @@ class SmartCache implements SmartCacheContract, Repository
 
             $startTime = $this->costAwareManager !== null ? \microtime(true) : null;
             $value = $this->callKeepingActiveTags($callback);
+            $this->lastWrittenSize = null;
             $this->put($key, $value, $ttl instanceof \Closure ? $ttl($value) : $ttl);
 
             if ($this->costAwareManager !== null && $startTime !== null) {
                 $costMs = (\microtime(true) - $startTime) * 1000;
-                $size = $this->calculateDataSize($value);
+                $size = $this->writtenValueSize($value);
                 $this->costAwareManager->recordCost($this->applyNamespace($key), $costMs, $size);
             }
 
@@ -4155,8 +4279,8 @@ class SmartCache implements SmartCacheContract, Repository
         $force = $parameters['force'] ?? false;
 
         if ($key) {
-            $managedKeys = $this->getManagedKeys();
-            $isManaged = \in_array($key, $managedKeys, true);
+            // The index returns a numeric key such as '123' as an integer.
+            $isManaged = \in_array((string) $key, \array_map('strval', $this->getManagedKeys()), true);
             $keyExists = $this->has($key);
 
             if (!$isManaged && !$force) {
@@ -4320,7 +4444,14 @@ class SmartCache implements SmartCacheContract, Repository
             return 0;
         }
 
-        return \strlen(\serialize($data));
+        try {
+            return \strlen(\serialize($data));
+        } catch (\Throwable $e) {
+            // A value holding a Closure cannot be measured. Laravel's array
+            // store keeps such values when it does not serialize, so measuring
+            // them must not fail the write.
+            return 0;
+        }
     }
 
     public function getPerformanceMetrics(): array
@@ -4549,15 +4680,18 @@ class SmartCache implements SmartCacheContract, Repository
     public function deleteMultiple($keys): bool
     {
         $this->markActiveTagsUsed();
-        $success = true;
 
-        foreach ($keys as $key) {
-            if (!$this->forget($key)) {
-                $success = false;
+        return $this->batchManagedKeyChanges(function () use ($keys): bool {
+            $success = true;
+
+            foreach ($keys as $key) {
+                if (!$this->forget($key)) {
+                    $success = false;
+                }
             }
-        }
 
-        return $success;
+            return $success;
+        });
     }
 
     /**

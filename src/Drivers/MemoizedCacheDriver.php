@@ -70,13 +70,16 @@ class MemoizedCacheDriver implements Repository
 
     /**
      * Touch a key to mark it as recently used.
-     * O(1) — assigns a monotonically increasing counter value to the key.
+     * O(1) — assigns a monotonically increasing counter value to the key and
+     * moves it to the end, so the map stays ordered from least to most
+     * recently used and eviction never has to sort it.
      *
      * @param string $key
      * @return void
      */
     protected function touchKey(string $key): void
     {
+        unset($this->accessOrder[$key]);
         $this->accessOrder[$key] = ++$this->accessCounter;
     }
 
@@ -135,7 +138,9 @@ class MemoizedCacheDriver implements Repository
 
     /**
      * Evict least recently used items if over capacity.
-     * Sorts by counter value and removes the lowest (oldest) entries.
+     * touchKey() keeps $accessOrder ordered from least to most recently used,
+     * so the oldest entries are at the front. It used to be sorted on every
+     * eviction, which made each new key cost O(n log n) once the layer was full.
      *
      * @return void
      */
@@ -144,9 +149,6 @@ class MemoizedCacheDriver implements Repository
         if (count($this->memoized) <= $this->maxSize) {
             return;
         }
-
-        // Sort by access counter ascending — lowest values are least recently used
-        asort($this->accessOrder);
 
         while (count($this->memoized) > $this->maxSize) {
             if (empty($this->accessOrder)) {
@@ -362,11 +364,26 @@ class MemoizedCacheDriver implements Repository
         }
 
         $value = $this->repository->remember($key, $ttl, $callback);
+        $this->memoizeStored($key, $value);
+
+        return $value;
+    }
+
+    /**
+     * Remember a value that is now stored. A miss recorded earlier for the key
+     * is dropped: once LRU evicted the value, it would make get() report a
+     * miss for a key the store holds.
+     *
+     * @param string $key
+     * @param mixed $value
+     * @return void
+     */
+    private function memoizeStored(string $key, mixed $value): void
+    {
+        unset($this->memoizedMissing[$key]);
         $this->memoized[$key] = $value;
         $this->touchKey($key);
         $this->evictIfNeeded();
-
-        return $value;
     }
 
     /**
@@ -397,9 +414,7 @@ class MemoizedCacheDriver implements Repository
         }
 
         $value = $this->repository->rememberForever($key, $callback);
-        $this->memoized[$key] = $value;
-        $this->touchKey($key);
-        $this->evictIfNeeded();
+        $this->memoizeStored($key, $value);
 
         return $value;
     }

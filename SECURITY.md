@@ -2,13 +2,15 @@
 
 ## Supported Versions
 
-Only the latest SmartCache minor line receives routine security fixes. We recommend `^1.16` for existing 1.x installations.
+Only the latest SmartCache minor line receives routine security fixes. We recommend `^1.17` for existing 1.x installations.
 
 | SmartCache Version | Maintained? | Package Compatibility |
 | ------------------ | ----------- | --------------------- |
-| 1.16.x             | :white_check_mark: | PHP 8.1–8.5, Laravel 8–13 |
-| 1.9.x–1.15.x       | :warning: | Upgrade required; security backports are not guaranteed |
+| 1.17.x             | :white_check_mark: | PHP 8.1–8.5, Laravel 8–13 |
+| 1.9.x–1.16.x       | :warning: | Upgrade required; security backports are not guaranteed |
 | < 1.9.0            | :x: | Unsupported |
+
+SmartCache stores data only in the cache store you configure; it calls no external service and sends no telemetry. To harden deserialization, set Laravel's `cache.serializable_classes` and, since 1.17.0, `smart-cache.serializable_classes` (`'cache'` follows Laravel's setting), so the values SmartCache compresses, encrypts, or serializes itself are restricted too.
 
 Package compatibility does not extend the security lifetime of PHP, Laravel, or the selected cache backend. Enterprise deployments should use a [currently supported PHP release](https://www.php.net/supported-versions.php) and a Laravel version inside the [official Laravel support window](https://laravel.com/docs/releases#support-policy).
 

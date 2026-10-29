@@ -112,7 +112,11 @@ class CircuitBreaker
 
         $this->failureCount = (int) ($payload['failure_count'] ?? $this->failureCount);
         $this->successCount = (int) ($payload['success_count'] ?? $this->successCount);
-        $this->openedAt = isset($payload['opened_at']) ? (int) $payload['opened_at'] : $this->openedAt;
+        // A closed breaker shares opened_at as null; that must clear a stale
+        // local value rather than be ignored. Every payload carries the key.
+        if (\array_key_exists('opened_at', $payload)) {
+            $this->openedAt = $payload['opened_at'] !== null ? (int) $payload['opened_at'] : null;
+        }
     }
 
     /**
@@ -175,6 +179,8 @@ class CircuitBreaker
 
     public function recordSuccess(): void
     {
+        $before = [$this->state, $this->failureCount, $this->successCount, $this->openedAt];
+
         if ($this->state === self::STATE_HALF_OPEN) {
             $this->successCount++;
             if ($this->successCount >= $this->successThreshold) {
@@ -183,7 +189,12 @@ class CircuitBreaker
         } else {
             $this->failureCount = 0;
         }
-        $this->persistSharedState();
+
+        // A success on a closed breaker with no failures changes nothing; with
+        // shared state it used to cost a cache write on every call.
+        if ($before !== [$this->state, $this->failureCount, $this->successCount, $this->openedAt]) {
+            $this->persistSharedState();
+        }
     }
 
     public function recordFailure(?\Throwable $exception = null): void
@@ -242,6 +253,10 @@ class CircuitBreaker
 
     public function getStats(): array
     {
+        // Read the state first: with shared state it hydrates opened_at, which
+        // the recovery time below is computed from.
+        $state = $this->getState();
+
         $timeUntilRecovery = null;
         if ($this->openedAt !== null) {
             $elapsed = \time() - $this->openedAt;
@@ -249,7 +264,7 @@ class CircuitBreaker
         }
 
         return [
-            'state' => $this->getState(),
+            'state' => $state,
             'failure_count' => $this->failureCount,
             'success_count' => $this->successCount,
             'failure_threshold' => $this->failureThreshold,

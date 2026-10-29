@@ -127,14 +127,14 @@ class StatusCommand extends Command
     protected function findAllNonManagedKeys(SmartCache $cache): array
     {
         $store = $cache->getStore();
-        $managedKeys = $cache->getManagedKeys();
+        $managedKeys = $this->managedKeySet($cache->getManagedKeys());
         $nonManagedKeys = [];
 
         try {
             $allKeys = $this->getAllCacheKeys($store);
 
             foreach ($allKeys as $key) {
-                if (!\in_array($key, $managedKeys, true) && !$this->isSmartCacheInternalKey($key)) {
+                if (!isset($managedKeys[(string) $key]) && !$this->isSmartCacheInternalKey((string) $key)) {
                     $nonManagedKeys[] = $key;
                 }
             }
