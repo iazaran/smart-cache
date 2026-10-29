@@ -298,8 +298,8 @@ return [
     | Serializable Classes
     |--------------------------------------------------------------------------
     |
-    | Laravel's cache.serializable_classes (which new Laravel 13 applications
-    | set to false) is applied by the store, but SmartCache unserializes the
+    | Laravel's cache.serializable_classes (the Laravel 13 application skeleton
+    | sets it to false) is applied by the store, but SmartCache unserializes the
     | values it compresses, encrypts, or serializes itself, so the setting does
     | not reach them: a large object comes back intact where a small one would
     | not. Since 1.17.0 you can apply a restriction to them too (opt-in):

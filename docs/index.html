@@ -1995,7 +1995,7 @@ $data = SmartCache::get('user_123_data');
                     <p>Patterns are PCRE regular expressions such as <code>'/^user_token_/'</code>, not globs. A pattern that is not a valid regex matches nothing, so the values it was meant to protect are stored unencrypted; since v1.17.0 SmartCache logs a warning for it, at most once an hour per pattern.</p>
 
                     <h3>Deserialization hardening <span class="badge badge-success">v1.17.0</span></h3>
-                    <p>Laravel's <code>cache.serializable_classes</code> (new Laravel 13 applications set it to <code>false</code>) is applied by the store. SmartCache unserializes the values it compresses, encrypts, or serializes itself, so that setting does not reach them. Opt in to apply a restriction there too:</p>
+                    <p>Laravel's <code>cache.serializable_classes</code> (the Laravel 13 application skeleton sets it to <code>false</code>) is applied by the store. SmartCache unserializes the values it compresses, encrypts, or serializes itself, so that setting does not reach them. Opt in to apply a restriction there too:</p>
 
                     <pre><code class="language-php">// config/smart-cache.php
 'serializable_classes' => 'cache',   // follow cache.serializable_classes
@@ -2332,7 +2332,7 @@ app(\SmartCache\Contracts\SmartCache::class)->reset();</code></pre>
                     <p><strong>Cost-aware scores (v1.17.0+).</strong> After a request or before a queued job, a copy older than a minute is read again on next use, so a long-running worker no longer writes back a copy loaded hours earlier over the scores other processes recorded.</p>
 
                     <h2>Operational Footprint</h2>
-                    <p>SmartCache stores metadata beside application values in the selected cache store. Depending on enabled features, keys can include <code>_sc_managed_keys</code>, <code>_sc_dna:{key}</code>, <code>_sc_meta:{key}</code>, <code>_sc_chunk_*</code>, <code>_sc_tag_*</code>, <code>_sc_dependencies</code>, <code>_sc_cost_metadata</code>, and <code>_sc_performance_metrics</code>.</p>
+                    <p>SmartCache stores metadata beside application values in the selected cache store. Depending on enabled features, keys can include <code>_sc_managed_keys</code>, <code>_sc_dna:{key}</code>, <code>_sc_meta:{key}</code>, <code>_sc_chunk_*</code>, <code>_sc_chunk_registry</code>, <code>_sc_tag_*</code>, <code>_sc_dependencies</code>, <code>_sc_cost_metadata</code>, <code>_sc_performance_metrics</code>, <code>_sc_adaptive_freq</code> (adaptive compression), <code>_sc_circuit_breaker:{driver}</code> (shared circuit breaker), the lock keys <code>_sc_meta_lock:*</code>, <code>_sc_remember_lock:*</code>, and <code>_sc_swr_refresh:*</code>, and <code>_sc_warned:*</code> (v1.17.0, only for an invalid encryption pattern).</p>
 
                     <ul>
                         <li>Use a dedicated cache store or Laravel cache prefix when multiple applications share infrastructure.</li>
@@ -3713,7 +3713,7 @@ http://your-app.com/api/test-smart-cache</code></pre>
                     <pre><code class="language-json">{
   "message": "SmartCache feature tests completed",
   "package_info": {
-    "version": "1.16.0",
+    "version": "1.17.0",
     "features_tested": 8
   },
   "tests": {

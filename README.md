@@ -26,11 +26,11 @@ Caching gets hard once an application grows. Payloads outgrow Memcached's 1 MB a
 | Problem | Laravel cache alone | With SmartCache |
 |---|---|---|
 | Large payloads | Stored as one raw value | Compressed automatically (an API payload measured 97.6% smaller) |
-| Driver item limits | You split values yourself | Transparent, key-preserving chunking |
+| Driver item limits | You split values yourself | Transparent, key-preserving chunking of large lists |
 | Cold-key stampedes | Every request regenerates | One process regenerates, the others wait (`rememberWithLock()`) |
 | Stale-while-revalidate | `flexible()` on Laravel 11+ | `swr()`, `stale()`, `refreshAhead()`, and queued refreshes on Laravel 8+ |
 | Invalidation | Tags only on Redis, Memcached, and array stores | Tags, dependencies, patterns, and model hooks on every driver |
-| Corrupted entries | The request fails | The entry is evicted and regenerated |
+| Corrupted entries | A broken value or an exception | The entry is evicted and regenerated |
 | Redundant writes | Every `put()` hits the store | Unchanged values are skipped |
 | Visibility | Build it yourself | Metrics, health score, events, audit, and benchmark commands |
 
@@ -38,7 +38,7 @@ Caching gets hard once an application grows. Payloads outgrow Memcached's 1 MB a
 
 - **Drop-in, and adopt it gradually.** SmartCache implements Laravel's `Illuminate\Contracts\Cache\Repository` (and so PSR-16), including enum keys, the typed getters, `flexible()`, and `tags()`. Switch one import where it helps, and keep `Cache` everywhere else. `SmartCache::repository()` gives raw store access when you need it.
 - **Safe to upgrade.** It follows semantic versioning and needs no configuration. New features are opt-in, every release lists its upgrade notes, and adjacent releases read each other's entries, so rolling deploys work.
-- **Tested across the support matrix.** CI runs 700+ tests on every supported PHP and Laravel combination, PHP 8.1–8.5 with Laravel 8–13.
+- **Tested across the support matrix.** CI runs 700+ tests on PHP 8.1–8.5 with Laravel 8–13, on every combination Laravel itself supports.
 - **Correct under concurrency.** Readers never get a mix of two chunked versions. Shared indexes are updated under short atomic locks where the store supports them. Regeneration can be single-flight.
 - **Ready for long-running processes.** On Octane, Swoole, FrankenPHP, RoadRunner, and queue workers, per-request state is reset automatically.
 - **Secure by default.** Data stays in your own cache store: no external service and no telemetry. Optional encryption protects selected keys at rest, `serializable_classes` extends Laravel's deserialization hardening to optimized values, and the web dashboard is off by default.
@@ -66,7 +66,7 @@ smart_cache(['products' => $products], 3600);   // helper
 $products = smart_cache('products');
 ```
 
-Values over 50 KB are compressed, and arrays or collections over 100 KB are split into chunks. Smaller values are stored as they are.
+Values over 50 KB are compressed. Arrays and collections with more than 1,000 items (`chunk_size`) and over 100 KB are split into chunks instead. Smaller values are stored as they are.
 
 ## Features
 
@@ -152,11 +152,11 @@ On Laravel 12.9+, set `memo.native = true` to share one memo layer per store wit
 ### Encryption at rest
 
 ```php
-// config/smart-cache.php
+// config/smart-cache.php → strategies
 'encryption' => [
     'enabled' => true,
     'keys' => ['user_token_abc123'],
-    'patterns' => ['/^user_token_/', '/^payment_/'],
+    'patterns' => ['/^user_token_/', '/^payment_/'],   // PCRE regexes, not globs
 ],
 ```
 
@@ -220,7 +220,7 @@ SmartCache::clearManaged(); // remove the entries SmartCache tracks
 SmartCache::flush();        // flush the entire underlying store
 ```
 
-For backward compatibility, `clear()` behaves like `clearManaged()` in SmartCache 1.x, while PSR-16 `clear()` normally empties the whole pool. Choose `clearManaged()` or `flush()` explicitly when you migrate. This is the one intentional difference from Laravel's cache.
+For backward compatibility, `clear()` behaves like `clearManaged()` in SmartCache 1.x, while PSR-16 `clear()` normally empties the whole pool. Choose `clearManaged()` or `flush()` explicitly when you migrate. This is the main intentional difference from Laravel's cache.
 
 ### Tags
 
@@ -229,6 +229,9 @@ Tags work on every store because SmartCache keeps its own tag index. Tags set wi
 ### Operational footprint
 
 SmartCache stores small metadata entries (`_sc_*`) in the same store: the managed-key index, tag and dependency indexes, deduplication records, metrics, and chunks. If applications share infrastructure, use a dedicated store or cache prefix. For very large key spaces, cap the index with `managed_keys.max_tracked`.
+
+- On the database cache driver, `rememberWithLock()` and SmartCache's metadata locks need the `cache_locks` table (`php artisan cache:table`). Without it they run without the lock, and `rememberWithLock()` logs a warning on every miss.
+- `smart-cache:clear --force` deletes every key in the store that SmartCache does not manage (SmartCache's own `_sc_*` keys excepted), much like `cache:clear`. Check what shares the store before running it.
 
 ### When SmartCache is not a fit
 
