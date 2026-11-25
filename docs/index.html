@@ -934,7 +934,7 @@
                     </div>
 
                     <div class="alert alert-success">
-                        <strong>New in 1.17.1: PHP 8.6 and fixes, nothing to change.</strong> SmartCache is tested on PHP 8.6 with Laravel 13. <code>pull()</code> and a stale <code>asyncSwr()</code> return lazily loaded values you can read, and such values can be cached again. Chunks are no longer left behind when the store throws, and smart chunk sizing keeps chunks under the driver limit. <code>smart-cache:clear 0</code> clears only key <code>0</code>. Rate-limit counters and the shared circuit breaker no longer get stuck. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
+                        <strong>New in 1.17.1: PHP 8.6 and fixes, nothing to change.</strong> SmartCache is tested on PHP 8.6 with Laravel 13. <code>pull()</code> and a stale <code>asyncSwr()</code> return lazily loaded values you can read, and such values can be cached again. Chunks are no longer left behind when the store throws, and smart chunk sizing estimates chunk sizes from samples across the whole array. <code>smart-cache:clear 0</code> clears only key <code>0</code>. New rate-limit counters always expire, and the shared circuit breaker is no longer closed by calls that started before it opened. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
                     </div>
 
                     <div class="alert alert-success">
@@ -1429,7 +1429,7 @@ config(['smart-cache.strategies.chunking.smart_sizing' => true]);
 
 SmartCache::put('large_array', $data, 3600);
 // Optimal chunk size calculated automatically</code></pre>
-                    <p>Chunks are sized to stay within 80% of the driver's item limit. Before 1.17.1 the estimate left out each item's key and sampled only the first items, so lists of small or growing values (IDs, timestamps) produced chunks over the limit, which the store rejected.</p>
+                    <p>Chunks are sized to stay within 80% of the driver's item limit, estimated from 100 items spread over the array; a few items much larger than the rest can still exceed it. Before 1.17.1 the estimate left out each item's key and sampled only the first items, so lists of small or growing values (IDs, timestamps) produced chunks over the limit, which the store rejected.</p>
 
                     <h2>Configuration Options</h2>
                     <pre><code class="language-php">// config/smart-cache.php
@@ -1841,7 +1841,7 @@ return response()->json($largeDataset);</code></pre>
 
                     <p>Turning <code>lazy_loading</code> off applies to entries written while it was on (v1.17.0+): they are read eagerly from then on. A missing chunk throws a <code>RuntimeException</code> while the collection is read, so read it soon after <code>get()</code>, or call <code>materialize()</code>.</p>
 
-                    <p>Since v1.17.1, <code>pull()</code> and the stale path of <code>asyncSwr()</code> load the value before its chunks are deleted, and return it as an eager read does. Caching a lazily loaded value again, as in <code>SmartCache::put('copy', SmartCache::get('rows'))</code>, stores its items. <code>filter()</code>, <code>map()</code>, <code>each()</code>, and <code>json_encode()</code> can be called inside a <code>foreach</code> over the same collection, and <code>$collection['5']</code> reads item 5, as an array does.</p>
+                    <p>Since v1.17.1, <code>pull()</code> and the stale path of <code>asyncSwr()</code> load the value before its chunks are deleted, and return it as an eager read does (a value that has already lost a chunk is returned as read). Caching a lazily loaded value again, as in <code>SmartCache::put('copy', SmartCache::get('rows'))</code>, stores its items. <code>filter()</code>, <code>map()</code>, <code>each()</code>, and <code>json_encode()</code> can be called inside a <code>foreach</code> over the same collection, and <code>$collection['5']</code> reads item 5, as an array does.</p>
 
                     <h2>🧠 Smart Serialization</h2>
                     <p>Auto-select best serialization method for optimal performance:</p>
@@ -3579,7 +3579,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 747 tests, 2,694 assertions
+# 749 tests, 2,698 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

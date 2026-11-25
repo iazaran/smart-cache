@@ -196,6 +196,40 @@ class V1171FixesTest extends TestCase
         $this->assertSame(\range(5001, 5300), $stale);
     }
 
+    private function dropSecondChunkOf(string $key): void
+    {
+        $this->rawStore()->forget($this->rawStore()->get($key)['chunk_keys'][1]);
+    }
+
+    /** Guard. */
+    public function test_guard_pull_still_deletes_an_entry_that_lost_a_chunk(): void
+    {
+        $cache = $this->lazySmartCache();
+        $cache->put('rows', \range(1, 1000), 600);
+        $this->dropSecondChunkOf('rows');
+
+        // The value cannot be loaded; it is returned as read, as in 1.17.0.
+        $this->assertInstanceOf(LazyChunkedCollection::class, $cache->pull('rows'));
+        $this->assertFalse($cache->has('rows'));
+    }
+
+    /** Guard. */
+    public function test_guard_async_swr_still_refreshes_a_stale_entry_that_lost_a_chunk(): void
+    {
+        $this->app['config']->set('queue.default', 'sync');
+        $cache = $this->lazySmartCache();
+        Carbon::setTestNow(Carbon::now());
+        $cache->asyncSwr('rows', V1171Rows::class, 60, 600);
+        $this->dropSecondChunkOf('rows');
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(120));
+
+        // The stale value cannot be loaded; it is returned as read, and the
+        // refresh is still queued, which replaces the broken entry.
+        $this->assertInstanceOf(LazyChunkedCollection::class, $cache->asyncSwr('rows', V1171Rows::class, 60, 600));
+        $this->assertSame(\range(5001, 5300), $cache->asyncSwr('rows', V1171Rows::class, 60, 600)->materialize());
+    }
+
     /** Guard. */
     public function test_guard_get_still_returns_a_lazily_loaded_value(): void
     {

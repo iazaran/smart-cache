@@ -171,6 +171,25 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
+     * loadLazyValue() for a value a read is about to return. When one of its
+     * chunks is already gone (evicted, or expired before the entry), the
+     * value is returned as it was read, as before 1.17.1, so the call still
+     * completes: pull() still deletes the entry and asyncSwr() still queues
+     * the refresh that replaces it.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private static function loadLazyValueIfReadable(mixed $value): mixed
+    {
+        try {
+            return static::loadLazyValue($value);
+        } catch (\Throwable $e) {
+            return $value;
+        }
+    }
+
+    /**
      * @var Repository
      */
     protected Repository $cache;
@@ -1411,7 +1430,7 @@ class SmartCache implements SmartCacheContract, Repository
     {
         // forget() deletes the chunks a lazily loaded value reads when it is
         // iterated, so load it first. It used to come back unreadable.
-        $value = static::loadLazyValue($this->get($key, $default));
+        $value = static::loadLazyValueIfReadable($this->get($key, $default));
         $this->forget($key);
         return $value;
     }
@@ -2858,7 +2877,7 @@ class SmartCache implements SmartCacheContract, Repository
                     // The refresh replaces the entry and deletes the chunks a
                     // lazily loaded value reads when it is iterated, at once on
                     // the sync queue. Load it first, as flexible() does.
-                    $value = static::loadLazyValue($value);
+                    $value = static::loadLazyValueIfReadable($value);
 
                     // Restart the freshness window first so the requests that arrive
                     // before the job finishes keep serving stale instead of each

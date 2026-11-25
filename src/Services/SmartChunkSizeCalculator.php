@@ -108,27 +108,27 @@ class SmartChunkSizeCalculator
         $totalItems = count($data);
         $samplesToTake = \max(1, min($sampleSize, $totalItems));
 
-        // The samples are spread over the whole array. The first items alone
-        // under-estimate data that grows along the array, such as IDs or
-        // timestamps, and the chunks came out larger than the driver limit.
-        $step = \max(1, \intdiv($totalItems, $samplesToTake));
-
+        // The samples are spread evenly over the whole array, at positions
+        // floor(i * total / samples). The first items alone under-estimate
+        // data that grows along the array, such as IDs or timestamps, and the
+        // chunks came out larger than the driver limit.
         $totalSize = 0;
         $count = 0;
 
         // A list is read at the sampled positions directly.
         if (\array_is_list($data)) {
-            for ($index = 0; $index < $totalItems && $count < $samplesToTake; $index += $step) {
+            for ($count = 0; $count < $samplesToTake; $count++) {
+                $index = \intdiv($count * $totalItems, $samplesToTake);
                 $totalSize += strlen(serialize($index)) + strlen(serialize($data[$index]));
-                $count++;
             }
 
-            return (int) ceil($totalSize / \max(1, $count));
+            return (int) ceil($totalSize / $samplesToTake);
         }
 
         $position = 0;
+        $next = 0;
         foreach ($data as $key => $item) {
-            if ($position++ % $step !== 0) {
+            if ($position++ !== $next) {
                 continue;
             }
 
@@ -140,6 +140,8 @@ class SmartChunkSizeCalculator
             if ($count >= $samplesToTake) {
                 break;
             }
+
+            $next = \intdiv($count * $totalItems, $samplesToTake);
         }
 
         return (int) ceil($totalSize / \max(1, $count));
