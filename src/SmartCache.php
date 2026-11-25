@@ -153,6 +153,24 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
+     * The items of a lazily loaded value, so they can be stored or returned
+     * after the entry they came from is gone; any other value unchanged.
+     *
+     * A LazyChunkedCollection reads its chunks from the entry it was read
+     * from, when it is iterated. It holds that entry's repository, so a store
+     * that serializes values could not store it ("Serialization of 'Closure'
+     * is not allowed"), and once that entry is replaced or deleted, its chunks
+     * are deleted too.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    protected static function loadLazyValue(mixed $value): mixed
+    {
+        return $value instanceof LazyChunkedCollection ? $value->materialize() : $value;
+    }
+
+    /**
      * @var Repository
      */
     protected Repository $cache;
@@ -720,6 +738,9 @@ class SmartCache implements SmartCacheContract, Repository
             return $this->forgetNamespacedKey($key);
         }
 
+        // A value read lazily from another entry is stored as its items.
+        $value = static::loadLazyValue($value);
+
         // Wrap null so the underlying store can distinguish it from a cache miss
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
@@ -854,7 +875,21 @@ class SmartCache implements SmartCacheContract, Repository
             $replacedChunks = static::chunkKeysOf($this->storeRepository()->get($key));
         }
 
-        $result = $write();
+        try {
+            $result = $write();
+        } catch (\Throwable $e) {
+            // The store may have stored the entry before the error reached us
+            // (a dropped connection), so its new chunks cannot simply be
+            // deleted. Chunks stored without expiry are registered instead:
+            // cleanupOrphanChunks() deletes them unless the entry points at
+            // them. They used to stay in the store forever. Chunks with a TTL
+            // expire on their own.
+            if ($forever) {
+                $this->updateChunkRegistry($key, $newChunks, []);
+            }
+
+            throw $e;
+        }
 
         if (!$result) {
             $this->forgetChunkKeys($newChunks);
@@ -1079,6 +1114,7 @@ class SmartCache implements SmartCacheContract, Repository
         $key = $this->applyNamespace(static::normalizeKey($key));
         // Taken before optimizing, as in put()
         $tags = $this->takeActiveTags($key);
+        $value = static::loadLazyValue($value);
         $storable = static::wrapNullValue($value);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, null);
 
@@ -1373,7 +1409,9 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function pull($key, $default = null): mixed
     {
-        $value = $this->get($key, $default);
+        // forget() deletes the chunks a lazily loaded value reads when it is
+        // iterated, so load it first. It used to come back unreadable.
+        $value = static::loadLazyValue($this->get($key, $default));
         $this->forget($key);
         return $value;
     }
@@ -1397,6 +1435,9 @@ class SmartCache implements SmartCacheContract, Repository
         if ($seconds !== null && $seconds <= 0) {
             return false;
         }
+
+        // A value read lazily from another entry is stored as its items.
+        $value = static::loadLazyValue($value);
 
         // Chunking writes its chunks before the atomic add() runs. They use new
         // keys on every write, so they can no longer overwrite the live entry's
@@ -2608,7 +2649,8 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function generateAndCache(string $key, array $durations, \Closure $callback): mixed
     {
-        $value = $callback();
+        // A value read lazily from another entry is stored as its items.
+        $value = static::loadLazyValue($callback());
         [$freshTtl, $staleTtl] = static::flexibleDurations($durations);
         $totalTtl = $staleTtl;
 
@@ -2813,6 +2855,11 @@ class SmartCache implements SmartCacheContract, Repository
                 $now = $this->currentTimestamp();
                 $age = $now - $metadata['created_at'];
                 if ($age > $ttl) {
+                    // The refresh replaces the entry and deletes the chunks a
+                    // lazily loaded value reads when it is iterated, at once on
+                    // the sync queue. Load it first, as flexible() does.
+                    $value = static::loadLazyValue($value);
+
                     // Restart the freshness window first so the requests that arrive
                     // before the job finishes keep serving stale instead of each
                     // queueing another refresh job.
@@ -4278,7 +4325,8 @@ class SmartCache implements SmartCacheContract, Repository
         $key = $parameters['key'] ?? null;
         $force = $parameters['force'] ?? false;
 
-        if ($key) {
+        // A key named "0" (or 0) is a key: it used to clear every managed key.
+        if ($key || $key === '0' || $key === 0) {
             // The index returns a numeric key such as '123' as an integer.
             $isManaged = \in_array((string) $key, \array_map('strval', $this->getManagedKeys()), true);
             $keyExists = $this->has($key);

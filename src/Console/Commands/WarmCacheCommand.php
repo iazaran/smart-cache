@@ -43,7 +43,8 @@ class WarmCacheCommand extends Command
 
             $warmers = \array_filter(
                 $warmers,
-                fn($key) => \in_array($key, $selectedWarmers, true),
+                // Options are strings; a list of warmers has integer keys.
+                fn($key) => \in_array((string) $key, $selectedWarmers, true),
                 ARRAY_FILTER_USE_KEY
             );
         }

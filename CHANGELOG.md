@@ -5,6 +5,43 @@ All notable changes to the `iazaran/smart-cache` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2026-11-26
+
+A patch release: PHP 8.6 support and fixes from an audit of 1.17.0. Nothing in it requires a code or configuration change. The `SmartCache` contract, the config, and the stored formats are unchanged, so 1.17.0 and 1.17.1 servers read each other's entries during a rolling deploy.
+
+### Compatibility
+- **PHP 8.6.** The suite runs on PHP 8.6 with Laravel 13, with no deprecations from SmartCache, and CI now includes that combination. Laravel 12 and earlier are not tested on 8.6: Laravel 12's session handlers lack the `create_sid()`/`validateId()` methods PHP 8.6 deprecates leaving out, and Laravel reports that as an error.
+- Tested with Laravel 13.44.1. Laravel 13.43 and 13.44 pipeline Redis `many()` on tagged caches, `putMany()`, `deleteMultiple()`, and forever writes. SmartCache does not depend on those paths and reads and writes the same as before.
+
+### Fixed
+- **Lazily loaded values** (`strategies.chunking.lazy_loading`)
+  - `pull()` returns the value instead of a collection that could not be read: `forget()` deleted the chunks it read on demand. `memo()->pull()` did the same.
+  - `asyncSwr()` loads a stale lazily loaded value before it queues the refresh. On the sync queue, or with a fast worker, the refresh deleted its chunks before the caller read them. `flexible()` already did this.
+  - A value read lazily can be cached again: `put('copy', SmartCache::get('rows'))` threw "Serialization of 'Closure' is not allowed" on Redis, file, database, and Memcached stores, and on an array store without serialization the copy still read the original entry's chunks. `put()`, `forever()`, `add()`, and `flexible()` now store its items.
+  - `each()`, `filter()`, `map()`, and `json_encode()` called inside a `foreach` over the same collection no longer end that loop after its first item.
+  - `$collection['5']` reads item 5, as an array does. It returned `null`.
+- **Chunks left in the store when it throws.** A store that throws on a chunk write, instead of returning `false` (DynamoDB on an item over 400 KB, the database store over `max_allowed_packet`), left the chunks already written behind, without expiry for a value stored forever and never registered for cleanup. They are now deleted, and the value falls back to compression as when a chunk is rejected. When the main entry's write throws, the store may still have stored it (a dropped connection), so the new chunks of a value stored without expiry are registered instead, and `cleanupOrphanChunks()` deletes them unless the entry points at them.
+- **Smart chunk sizing** (`strategies.chunking.smart_sizing`, opt-in) keeps chunks under the driver limit. It left out the size of each item's key and sampled only the first 100 items, so 300,000 integers made 1.2 MB chunks for DynamoDB's 400 KB limit, which the store rejected. Samples are now spread over the whole array and include the key. Only new writes change; existing entries record their chunk size and read as before.
+- **`smart-cache:clear 0`** clears key `0`. The key was read as "no key", so it cleared every managed key, and with `--force` every other key in the store too. `executeCommand('clear', ['key' => '0'])` had the same defect.
+- **Rate limiter.** When a counter expired between `add()` and `increment()`, the store created it again without expiry (Redis `INCRBY`, the file and array stores), so the key stayed limited forever once it reached the limit. This affects `throttle()` and the early refresh of `rememberWithStampedeProtection()`. The window is set again in that case, as Laravel's own rate limiter does, and a window of zero or less counts as one second.
+- **Shared circuit breaker** (`circuit_breaker.shared`, opt-in). A success or failure was recorded against the state the process read before its call started, so a call already running when another process opened the breaker wrote "closed" over it, and during an outage the breaker kept closing again. Both are now recorded against the state as stored. A success on a closed breaker with no failures still makes no cache read or write.
+- **A corrupted JSON payload** of the opt-in serialization strategy was returned as a cached `null`. It now fails to restore, so self-healing evicts it, as it does for a corrupted compressed payload.
+- **Console commands**
+  - `smart-cache:audit` no longer reports the orphan-chunk registry (`_sc_chunk_registry`) as an orphan chunk, with health "warning", whenever a value was chunked with `forever()`.
+  - `smart-cache:status --force` says when it cannot list the store's keys (only Redis and array stores can be listed). It reported "No non-managed cache keys found".
+  - `smart-cache:warm --warmer=0` selects the first warmer of a list (`'warmers' => [UserWarmer::class]`). It warmed nothing.
+- The error for a Closure passed to `refreshAsync()` or `asyncSwr()` names a static method for the `[Class::class, 'method']` form: an instance method is not callable, so the parameter type rejects it.
+
+### Changed
+- `pull()` and the stale path of `asyncSwr()` return a lazily loaded value as an array or collection, as an eager read does. `get()` and the other reads still return a `LazyChunkedCollection`.
+- With smart sizing on, new chunked writes use smaller chunks where the old estimate was too large.
+- `LazyChunkedCollection::each()`, `filter()`, and `map()` no longer move the collection's iterator.
+
+### Maintenance
+- CI uses `actions/checkout@v6`; v4 runs on Node.js 20, which GitHub Actions has deprecated.
+- Development dependencies updated (Laravel 13.44.1, PHPUnit 13.4, Testbench 11.3). They do not affect installs of the package.
+- Two serialization tests no longer depend on `zend.exception_ignore_args`. They cached an `Exception`, whose trace holds Closures when that setting is off (`php.ini-development`, the official Docker images).
+
 ## [1.17.0] - 2026-10-29
 
 A maintenance release of fixes and performance improvements found in a full audit of 1.16. Nothing in it requires a code change: the `SmartCache` contract is unchanged, no default changes, and 1.16 and 1.17 read each other's entries. One opt-in config key is added (`serializable_classes`, default `null`). A few fixes change what an edge case returns; they are listed under **Changed**.
@@ -464,6 +501,7 @@ This release answers three community requests (tag-driven flushing of chunked da
 ### Added
 - Initial package scaffolding and base logic commit.
 
+[1.17.1]: https://github.com/iazaran/smart-cache/compare/1.17.0...1.17.1
 [1.17.0]: https://github.com/iazaran/smart-cache/compare/1.16.0...1.17.0
 [1.16.0]: https://github.com/iazaran/smart-cache/compare/1.15.0...1.16.0
 [1.15.0]: https://github.com/iazaran/smart-cache/compare/1.14.0...1.15.0

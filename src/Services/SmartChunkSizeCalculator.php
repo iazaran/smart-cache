@@ -106,19 +106,43 @@ class SmartChunkSizeCalculator
         }
 
         $totalItems = count($data);
-        $samplesToTake = min($sampleSize, $totalItems);
+        $samplesToTake = \max(1, min($sampleSize, $totalItems));
+
+        // The samples are spread over the whole array. The first items alone
+        // under-estimate data that grows along the array, such as IDs or
+        // timestamps, and the chunks came out larger than the driver limit.
+        $step = \max(1, \intdiv($totalItems, $samplesToTake));
 
         $totalSize = 0;
         $count = 0;
-        foreach ($data as $item) {
-            $totalSize += strlen(serialize($item));
+
+        // A list is read at the sampled positions directly.
+        if (\array_is_list($data)) {
+            for ($index = 0; $index < $totalItems && $count < $samplesToTake; $index += $step) {
+                $totalSize += strlen(serialize($index)) + strlen(serialize($data[$index]));
+                $count++;
+            }
+
+            return (int) ceil($totalSize / \max(1, $count));
+        }
+
+        $position = 0;
+        foreach ($data as $key => $item) {
+            if ($position++ % $step !== 0) {
+                continue;
+            }
+
+            // A chunk stores every item with its key. For small items the key
+            // is as large as the item, and chunks sized without it came out
+            // twice the driver limit (DynamoDB's 400 KB, Memcached's 1 MB).
+            $totalSize += strlen(serialize($key)) + strlen(serialize($item));
             $count++;
             if ($count >= $samplesToTake) {
                 break;
             }
         }
 
-        return (int) ceil($totalSize / $samplesToTake);
+        return (int) ceil($totalSize / \max(1, $count));
     }
 
     /**

@@ -18,6 +18,12 @@ class StatusCommand extends Command
     protected $signature = 'smart-cache:status {--force : Include Laravel cache analysis and orphaned SmartCache keys}';
     protected $description = 'Display information about SmartCache usage and configuration.';
 
+    /**
+     * Whether findAllNonManagedKeys() could not list the store's keys: only
+     * Redis and array stores can be enumerated.
+     */
+    private bool $keyScanFailed = false;
+
     public function handle(SmartCache $cache, ConfigRepository $config): int
     {
         $keys = $cache->getManagedKeys();
@@ -58,9 +64,14 @@ class StatusCommand extends Command
         $this->line('Laravel Cache Analysis (--force):');
         $this->line('-----------------------------------');
 
+        $this->keyScanFailed = false;
         $nonManagedKeys = $this->findAllNonManagedKeys($cache);
 
-        if (!empty($nonManagedKeys)) {
+        if ($this->keyScanFailed) {
+            // It used to report "No non-managed cache keys found" here.
+            $this->newLine();
+            $this->warn('Could not scan for non-managed keys with this cache driver.');
+        } elseif (!empty($nonManagedKeys)) {
             $nonManagedCount = \count($nonManagedKeys);
             $this->newLine();
             $this->warn("Found {$nonManagedCount} non-managed Laravel cache keys:");
@@ -141,6 +152,8 @@ class StatusCommand extends Command
 
             return $nonManagedKeys;
         } catch (\Exception) {
+            $this->keyScanFailed = true;
+
             return [];
         }
     }

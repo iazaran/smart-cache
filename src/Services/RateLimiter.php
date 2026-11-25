@@ -37,9 +37,22 @@ class RateLimiter
         // Use atomic increment when supported by the store
         $store = $this->cache->getStore();
         if (\method_exists($store, 'increment')) {
+            // A window of zero or less would store the counter without expiry.
+            $window = \max(1, $window);
+
             // Initialize the key if it doesn't exist
-            $this->cache->add($rateLimitKey, 0, $window);
+            $added = $this->cache->add($rateLimitKey, 0, $window);
             $current = (int) $store->increment($rateLimitKey);
+
+            // When the counter expired between add() and increment(), the
+            // store created it again without expiry (Redis INCRBY, the file
+            // and array stores), so the key stayed limited forever once it
+            // reached the limit. Laravel's own rate limiter sets the window
+            // again in this case.
+            if (!$added && $current === 1) {
+                $this->cache->put($rateLimitKey, 1, $window);
+            }
+
             return $current <= $maxAttempts;
         }
 

@@ -304,8 +304,9 @@ class StatusCommandTest extends TestCase
             ->once()
             ->andReturn($this->getDefaultSmartCacheConfig());
 
-        // Mock getStore() to return a cache store
-        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        // An empty array store. A Mockery mock threw on all(), so the key
+        // scan failed, which the command used to report as "no keys found".
+        $mockStore = new \Illuminate\Cache\ArrayStore();
 
         $this->mockSmartCache->shouldReceive('getStore')
             ->once()
@@ -353,8 +354,9 @@ class StatusCommandTest extends TestCase
             ->once()
             ->andReturn($this->getDefaultSmartCacheConfig());
 
-        // Mock getStore() to return a cache store
-        $mockStore = Mockery::mock(\Illuminate\Cache\ArrayStore::class);
+        // An empty array store. A Mockery mock threw on all(), so the key
+        // scan failed, which the command used to report as "no keys found".
+        $mockStore = new \Illuminate\Cache\ArrayStore();
 
         $this->mockSmartCache->shouldReceive('getStore')
             ->once()

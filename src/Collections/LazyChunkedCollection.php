@@ -178,7 +178,25 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
      */
     public function offsetExists(mixed $offset): bool
     {
+        $offset = $this->normalizeOffset($offset);
+
         return is_int($offset) && $offset >= 0 && $offset < $this->totalItems;
+    }
+
+    /**
+     * An integer string such as '5' as the integer 5, as a PHP array reads
+     * it. $collection['5'] used to read as null.
+     *
+     * @param mixed $offset
+     * @return mixed
+     */
+    private function normalizeOffset(mixed $offset): mixed
+    {
+        if (\is_string($offset) && (string) (int) $offset === $offset) {
+            return (int) $offset;
+        }
+
+        return $offset;
     }
 
     /**
@@ -189,6 +207,8 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
      */
     public function offsetGet(mixed $offset): mixed
     {
+        $offset = $this->normalizeOffset($offset);
+
         if (!$this->offsetExists($offset)) {
             return null;
         }
@@ -316,7 +336,13 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
      */
     public function jsonSerialize(): array
     {
-        return \iterator_to_array($this);
+        $result = [];
+
+        for ($i = 0; $i < $this->totalItems; $i++) {
+            $result[$i] = $this->offsetGet($i);
+        }
+
+        return $result;
     }
 
     /**
@@ -374,13 +400,18 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
     /**
      * Apply a callback to each item without loading all chunks at once.
      *
+     * each(), filter(), map(), and jsonSerialize() read items by position
+     * rather than with foreach ($this), which rewound the collection: called
+     * inside a foreach over the same collection, they ended that loop after
+     * its first item.
+     *
      * @param callable $callback
      * @return void
      */
     public function each(callable $callback): void
     {
-        foreach ($this as $index => $item) {
-            $callback($item, $index);
+        for ($i = 0; $i < $this->totalItems; $i++) {
+            $callback($this->offsetGet($i), $i);
         }
     }
 
@@ -393,13 +424,15 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
     public function filter(callable $callback): array
     {
         $result = [];
-        
-        foreach ($this as $index => $item) {
-            if ($callback($item, $index)) {
+
+        for ($i = 0; $i < $this->totalItems; $i++) {
+            $item = $this->offsetGet($i);
+
+            if ($callback($item, $i)) {
                 $result[] = $item;
             }
         }
-        
+
         return $result;
     }
 
@@ -412,11 +445,11 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
     public function map(callable $callback): array
     {
         $result = [];
-        
-        foreach ($this as $index => $item) {
-            $result[] = $callback($item, $index);
+
+        for ($i = 0; $i < $this->totalItems; $i++) {
+            $result[] = $callback($this->offsetGet($i), $i);
         }
-        
+
         return $result;
     }
 

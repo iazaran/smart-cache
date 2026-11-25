@@ -98,7 +98,7 @@ class BackgroundCacheRefreshJob implements ShouldQueue
             throw new \InvalidArgumentException(
                 'BackgroundCacheRefreshJob does not accept Closures because they cannot be serialized for the queue. '
                 . 'Pass a serializable callback instead: a "Class@method" string, an invokable class name, '
-                . 'or a [Class::class, "method"] array. For inline closures, use SmartCache::swr() (synchronous in-process refresh).'
+                . 'or a [Class::class, "staticMethod"] array. For inline closures, use SmartCache::swr() (synchronous in-process refresh).'
             );
         }
 

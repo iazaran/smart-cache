@@ -179,6 +179,15 @@ class CircuitBreaker
 
     public function recordSuccess(): void
     {
+        // With shared state, this process read the state before its call
+        // started. A success that would change it is applied to the state as
+        // stored now: applied to the copy read earlier, it closed a breaker
+        // another process had opened meanwhile. A closed breaker with no
+        // failures is left as it is, without a read.
+        if ($this->state !== self::STATE_CLOSED || $this->failureCount > 0) {
+            $this->hydrateSharedState();
+        }
+
         $before = [$this->state, $this->failureCount, $this->successCount, $this->openedAt];
 
         if ($this->state === self::STATE_HALF_OPEN) {
@@ -199,6 +208,11 @@ class CircuitBreaker
 
     public function recordFailure(?\Throwable $exception = null): void
     {
+        // As in recordSuccess(): count the failure against the state as stored
+        // now. A failure counted against the copy read before the call wrote
+        // "closed" over a breaker another process had opened, so during an
+        // outage the shared breaker kept closing again.
+        $this->hydrateSharedState();
         $this->failureCount++;
 
         $this->failureHistory[] = [
