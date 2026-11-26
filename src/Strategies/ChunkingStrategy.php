@@ -187,18 +187,25 @@ class ChunkingStrategy implements OptimizationStrategy
         foreach ($chunks as $index => $chunk) {
             $chunkKey = "_sc_chunk_{$prefix}_{$version}_{$index}";
 
-            if ($cache && !$this->putChunk($cache, $chunkKey, $chunk, $ttl)) {
+            try {
+                $stored = !$cache || $this->putChunk($cache, $chunkKey, $chunk, $ttl);
+            } catch (\Throwable $e) {
+                // A store that throws instead (DynamoDB on an item over 400 KB,
+                // the database store on max_allowed_packet) used to leave the
+                // chunks already written behind, without expiry for a value
+                // stored forever. No entry points at them yet, so they are
+                // deleted, with the one that failed, which may have been written.
+                $this->forgetWrittenChunks($cache, [...$chunkKeys, $chunkKey]);
+
+                throw $e;
+            }
+
+            if (!$stored) {
                 // A store that rejects a chunk (Memcached refuses items over its
                 // size limit) would leave an entry that can never be read. Drop
                 // what was written and let SmartCache fall back to the next
                 // strategy or the plain value.
-                foreach ($chunkKeys as $writtenKey) {
-                    try {
-                        $cache->forget($writtenKey);
-                    } catch (\Throwable $e) {
-                        // Best-effort cleanup; the chunk expires with its TTL.
-                    }
-                }
+                $this->forgetWrittenChunks($cache, $chunkKeys);
 
                 throw new \RuntimeException("Cache store rejected chunk [{$chunkKey}]");
             }
@@ -236,6 +243,25 @@ class ChunkingStrategy implements OptimizationStrategy
     protected function putChunk(mixed $cache, string $chunkKey, array $chunk, mixed $ttl): bool
     {
         return $cache->put($chunkKey, $chunk, $ttl) !== false;
+    }
+
+    /**
+     * Delete the chunks of a write that failed, best-effort: a chunk that
+     * cannot be deleted expires with its TTL.
+     *
+     * @param mixed $cache
+     * @param array<int, string> $chunkKeys
+     * @return void
+     */
+    private function forgetWrittenChunks(mixed $cache, array $chunkKeys): void
+    {
+        foreach ($chunkKeys as $chunkKey) {
+            try {
+                $cache->forget($chunkKey);
+            } catch (\Throwable $e) {
+                // Best-effort cleanup.
+            }
+        }
     }
 
     /**

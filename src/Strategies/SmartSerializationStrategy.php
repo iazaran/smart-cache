@@ -234,7 +234,9 @@ class SmartSerializationStrategy implements OptimizationStrategy
     protected function unserialize(string $data, string $method): mixed
     {
         return match ($method) {
-            'json' => json_decode($data, true),
+            // Invalid JSON throws, so self-healing evicts a corrupted entry; it
+            // used to be returned as a cached null.
+            'json' => json_decode($data, true, 512, JSON_THROW_ON_ERROR),
             'igbinary' => igbinary_unserialize(base64_decode($data)),
             'php' => $this->unserializePayload(base64_decode($data)),
             default => $this->unserializePayload(base64_decode($data)),

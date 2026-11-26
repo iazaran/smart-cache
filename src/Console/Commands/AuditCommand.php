@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use SmartCache\Console\Concerns\EnumeratesCacheKeys;
 use SmartCache\Contracts\SmartCache;
+use SmartCache\Services\OrphanChunkCleanupService;
 
 /**
  * Audit SmartCache-managed entries without mutating the cache.
@@ -278,7 +279,11 @@ class AuditCommand extends Command
         $orphans = [];
 
         foreach ($allKeys as $key) {
-            if (\str_starts_with($key, '_sc_chunk_') && !isset($referenced[$key])) {
+            // The orphan-chunk registry shares the chunk prefix but is not a chunk.
+            if (\str_starts_with($key, '_sc_chunk_')
+                && $key !== OrphanChunkCleanupService::REGISTRY_KEY
+                && !isset($referenced[$key])
+            ) {
                 $orphans[] = $key;
             }
         }

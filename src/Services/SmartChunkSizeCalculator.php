@@ -53,8 +53,15 @@ class SmartChunkSizeCalculator
         // Calculate chunk size based on driver limit
         // Use 80% of max size to leave safety margin
         $safeMaxSize = (int) ($maxValueSize * 0.8);
-        $optimalChunkSize = $avgItemSize > 0
-            ? (int) floor($safeMaxSize / $avgItemSize)
+
+        // Sized by the larger of two averages: the samples spread over the
+        // array, and the leading items, which earlier releases measured alone
+        // (without keys). The size per item is never estimated smaller than
+        // those releases did where the larger items come first, and a single
+        // outsized item is averaged in rather than setting every chunk's size.
+        $itemSize = \max($avgItemSize, $this->calculateLeadingItemSize($data));
+        $optimalChunkSize = $itemSize > 0
+            ? (int) floor($safeMaxSize / $itemSize)
             : $defaultChunkSize;
 
         // At least one item per chunk. A floor of 100 items overrode the driver
@@ -101,24 +108,82 @@ class SmartChunkSizeCalculator
      */
     protected function calculateAverageItemSize(array $data, int $sampleSize = 100): int
     {
-        if (empty($data)) {
-            return 0;
-        }
+        $sizes = $this->sampleItemSizes($data, $sampleSize);
 
-        $totalItems = count($data);
-        $samplesToTake = min($sampleSize, $totalItems);
+        return $sizes === [] ? 0 : (int) ceil(\array_sum($sizes) / \count($sizes));
+    }
 
+    /**
+     * The average size of the first $sampleSize items, each with its key.
+     *
+     * @param array $data
+     * @param int $sampleSize
+     * @return int
+     */
+    protected function calculateLeadingItemSize(array $data, int $sampleSize = 100): int
+    {
         $totalSize = 0;
         $count = 0;
-        foreach ($data as $item) {
-            $totalSize += strlen(serialize($item));
-            $count++;
-            if ($count >= $samplesToTake) {
+
+        foreach ($data as $key => $item) {
+            $totalSize += strlen(serialize($key)) + strlen(serialize($item));
+            if (++$count >= $sampleSize) {
                 break;
             }
         }
 
-        return (int) ceil($totalSize / $samplesToTake);
+        return $count === 0 ? 0 : (int) ceil($totalSize / $count);
+    }
+
+    /**
+     * Serialized sizes of up to $sampleSize items, each with its key.
+     *
+     * The samples are spread evenly over the whole array, at positions
+     * floor(i * total / samples). The first items alone under-estimate data
+     * that grows along the array, such as IDs or timestamps, and the chunks
+     * came out larger than the driver limit. A chunk stores every item with
+     * its key; for small items the key is as large as the item.
+     *
+     * @param array $data
+     * @param int $sampleSize
+     * @return array<int, int>
+     */
+    private function sampleItemSizes(array $data, int $sampleSize): array
+    {
+        if (empty($data)) {
+            return [];
+        }
+
+        $totalItems = count($data);
+        $samplesToTake = \max(1, min($sampleSize, $totalItems));
+        $sizes = [];
+
+        // A list is read at the sampled positions directly.
+        if (\array_is_list($data)) {
+            for ($sample = 0; $sample < $samplesToTake; $sample++) {
+                $index = \intdiv($sample * $totalItems, $samplesToTake);
+                $sizes[] = strlen(serialize($index)) + strlen(serialize($data[$index]));
+            }
+
+            return $sizes;
+        }
+
+        $position = 0;
+        $next = 0;
+        foreach ($data as $key => $item) {
+            if ($position++ !== $next) {
+                continue;
+            }
+
+            $sizes[] = strlen(serialize($key)) + strlen(serialize($item));
+            if (\count($sizes) >= $samplesToTake) {
+                break;
+            }
+
+            $next = \intdiv(\count($sizes) * $totalItems, $samplesToTake);
+        }
+
+        return $sizes;
     }
 
     /**

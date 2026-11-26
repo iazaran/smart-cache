@@ -5,6 +5,19 @@ namespace SmartCache\Tests\Unit\Strategies;
 use SmartCache\Tests\TestCase;
 use SmartCache\Strategies\SmartSerializationStrategy;
 
+/**
+ * A named class that is not stdClass. The tests used an Exception before, but
+ * an Exception's trace holds the arguments of every call on the stack, and
+ * PHPUnit passes Closures, so it cannot be serialized when
+ * zend.exception_ignore_args is off (php.ini-development, the Docker images).
+ */
+class SerializationTestValue
+{
+    public function __construct(public string $label)
+    {
+    }
+}
+
 class SmartSerializationStrategyTest extends TestCase
 {
     public function test_should_apply_returns_true()
@@ -255,7 +268,7 @@ class SmartSerializationStrategyTest extends TestCase
 
         // Create an instance of a named class (which json_encode handles as stdClass,
         // but our strategy explicitly prevents so it falls back to preserving the real class)
-        $customObject = new \Exception('test');
+        $customObject = new SerializationTestValue('test');
 
         $optimized = $strategy->optimize($customObject);
 
@@ -265,7 +278,8 @@ class SmartSerializationStrategyTest extends TestCase
         $this->assertTrue(in_array($optimized['method'], ['php', 'igbinary']));
 
         $restored = $strategy->restore($optimized);
-        $this->assertEquals('test', $restored->getMessage());
+        $this->assertInstanceOf(SerializationTestValue::class, $restored);
+        $this->assertEquals('test', $restored->label);
     }
 
     public function test_stdclass_falls_back_to_php_when_json_would_change_type()
@@ -288,14 +302,14 @@ class SmartSerializationStrategyTest extends TestCase
     {
         $strategy = new SmartSerializationStrategy('auto', true);
 
-        $payload = ['items' => [new \Exception('nested')]];
+        $payload = ['items' => [new SerializationTestValue('nested')]];
         $optimized = $strategy->optimize($payload);
 
         $this->assertNotEquals('json', $optimized['method']);
 
         $restored = $strategy->restore($optimized);
-        $this->assertInstanceOf(\Exception::class, $restored['items'][0]);
-        $this->assertEquals('nested', $restored['items'][0]->getMessage());
+        $this->assertInstanceOf(SerializationTestValue::class, $restored['items'][0]);
+        $this->assertEquals('nested', $restored['items'][0]->label);
     }
 
     public function test_forced_json_falls_back_when_it_would_corrupt_value()

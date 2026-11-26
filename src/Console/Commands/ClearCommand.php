@@ -20,7 +20,9 @@ class ClearCommand extends Command
     {
         $specificKey = $this->argument('key');
 
-        if ($specificKey) {
+        // A key named "0" is a key, not "no key": it used to clear every
+        // managed key, and with --force the rest of the store too.
+        if ($specificKey !== null && $specificKey !== '') {
             return $this->clearSpecificKey($cache, $specificKey);
         }
 

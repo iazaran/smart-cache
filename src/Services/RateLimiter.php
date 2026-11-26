@@ -37,9 +37,28 @@ class RateLimiter
         // Use atomic increment when supported by the store
         $store = $this->cache->getStore();
         if (\method_exists($store, 'increment')) {
+            // A window of zero or less would store the counter without expiry.
+            $window = \max(1, $window);
+
             // Initialize the key if it doesn't exist
-            $this->cache->add($rateLimitKey, 0, $window);
+            $added = $this->cache->add($rateLimitKey, 0, $window);
             $current = (int) $store->increment($rateLimitKey);
+
+            // When the counter expired between add() and increment(), the
+            // store created it again without expiry (Redis INCRBY, the file
+            // and array stores), so the key stayed limited forever once it
+            // reached the limit. Set the window again, as Laravel's own rate
+            // limiter does. touch() (Laravel 13) only sets the expiry, so a
+            // hit another process counted meanwhile is kept; older versions
+            // write the count again, as Laravel's limiter does there.
+            if (!$added && $current === 1) {
+                if (\method_exists($this->cache, 'touch')) {
+                    $this->cache->touch($rateLimitKey, $window);
+                } else {
+                    $this->cache->put($rateLimitKey, 1, $window);
+                }
+            }
+
             return $current <= $maxAttempts;
         }
 

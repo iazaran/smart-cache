@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Laravel SmartCache optimizes large cache payloads with automatic compression, driver-safe chunking, self-healing recovery, write deduplication, invalidation, and diagnostics. PHP 8.1–8.5 and Laravel 8–13.">
+    <meta name="description" content="Laravel SmartCache optimizes large cache payloads with automatic compression, driver-safe chunking, self-healing recovery, write deduplication, invalidation, and diagnostics. PHP 8.1–8.6 and Laravel 8–13.">
     <meta name="keywords" content="Laravel, caching, PHP, performance, large data cache, Laravel large data, SWR, compression, enterprise, cost-aware, Redis, optimization, cache stampede, PSR-16, write deduplication, self-healing cache, conditional caching, Memcached, file cache, chunking">
     <meta name="author" content="Ismael Azaran">
     <meta name="robots" content="index, follow">
@@ -11,7 +11,7 @@
 
     <!-- Open Graph -->
     <meta property="og:title" content="Laravel SmartCache — Intelligent Caching for PHP Applications">
-    <meta property="og:description" content="Operationally safe optimization for large Laravel cache payloads: compression, key-preserving chunking, recovery, invalidation, and diagnostics. PHP 8.1–8.5 · Laravel 8–13.">
+    <meta property="og:description" content="Operationally safe optimization for large Laravel cache payloads: compression, key-preserving chunking, recovery, invalidation, and diagnostics. PHP 8.1–8.6 · Laravel 8–13.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://iazaran.github.io/smart-cache/">
     <meta property="og:site_name" content="Laravel SmartCache">
@@ -20,7 +20,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Laravel SmartCache — Intelligent Caching for PHP">
-    <meta name="twitter:description" content="Automatic compression, driver-safe chunking, self-healing recovery, and invalidation for large Laravel cache payloads. PHP 8.1–8.5 · Laravel 8–13.">
+    <meta name="twitter:description" content="Automatic compression, driver-safe chunking, self-healing recovery, and invalidation for large Laravel cache payloads. PHP 8.1–8.6 · Laravel 8–13.">
 
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
@@ -888,7 +888,7 @@
             </a>
 
             <div class="header-meta">
-                <span class="compatibility-pill">PHP 8.1–8.5 · Laravel 8–13</span>
+                <span class="compatibility-pill">PHP 8.1–8.6 · Laravel 8–13</span>
                 <nav class="nav-links" aria-label="Project links">
                     <a href="https://github.com/iazaran/smart-cache" target="_blank" rel="noopener">GitHub ↗</a>
                     <a href="https://packagist.org/packages/iazaran/smart-cache" target="_blank" rel="noopener">Packagist ↗</a>
@@ -931,6 +931,10 @@
 
                     <div class="alert alert-info">
                         <strong>Optimization for large Laravel cache payloads.</strong> SmartCache wraps Laravel's familiar cache API with automatic compression, driver-safe chunking, invalidation, recovery, and diagnostics. It implements <code>Illuminate\Contracts\Cache\Repository</code>; review the explicit <code>clearManaged()</code> and <code>flush()</code> scopes when migrating.
+                    </div>
+
+                    <div class="alert alert-success">
+                        <strong>New in 1.17.1: PHP 8.6 and fixes, nothing to change.</strong> SmartCache is tested on PHP 8.6 with Laravel 13. <code>pull()</code> and a stale <code>asyncSwr()</code> on the sync queue return lazily loaded values you can read, and such values can be cached again. Chunks are no longer left behind when the store throws, and smart chunk sizing estimates chunk sizes from samples across the whole array. <code>smart-cache:clear 0</code> clears only key <code>0</code>. New rate-limit counters always expire, and the shared circuit breaker is no longer closed by calls that started before it opened. See the <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a>.
                     </div>
 
                     <div class="alert alert-success">
@@ -1075,7 +1079,7 @@ $users = SmartCache::get('users');</code></pre>
                     
                     <h2>Requirements</h2>
                     <ul>
-                        <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> PHP 8.1–8.5</li>
+                        <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> PHP 8.1–8.6</li>
                         <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> Laravel 8.0 - 13.x (fully tested on Laravel 8, 9, 10, 11, 12, and 13)</li>
                         <li><span style="display:inline-block; width:15px; text-align:center;">✓</span> Any Laravel-supported cache driver (Redis, File, Database, Array, Memcached)</li>
                         <li><span style="display:inline-block; width:15px; text-align:center; color:#27ae60;">💡</span> <strong>Recommended:</strong> PHP extension <code>ext-zlib</code> for gzip compression. JSON is always enabled in PHP 8+.</li>
@@ -1419,12 +1423,13 @@ SmartCache::put('data', $value, 3600);
 config(['smart-cache.strategies.chunking.smart_sizing' => true]);
 
 // Automatically calculates optimal chunk size based on:
-// - Cache driver limits (Redis: 512MB, Memcached: 1MB)
-// - Data structure complexity
+// - Cache driver limits (Redis: 512MB, Memcached: 1MB, DynamoDB: 400KB)
+// - Item and key sizes, sampled across the array and at its start (v1.17.1+)
 // - Serialization overhead
 
 SmartCache::put('large_array', $data, 3600);
 // Optimal chunk size calculated automatically</code></pre>
+                    <p>Chunks are sized to stay within 80% of the driver's item limit, from the larger of two averages: 100 items sampled across the array, and the first 100 items. It is an estimate: where large items are spread unevenly, a chunk can still exceed the limit. Before 1.17.1 the estimate left out each item's key and sampled only the first items, so lists of small or growing values (IDs, timestamps) produced chunks over the limit, which the store rejected.</p>
 
                     <h2>Configuration Options</h2>
                     <pre><code class="language-php">// config/smart-cache.php
@@ -1835,6 +1840,10 @@ $collection = $largeDataset->materialize();
 return response()->json($largeDataset);</code></pre>
 
                     <p>Turning <code>lazy_loading</code> off applies to entries written while it was on (v1.17.0+): they are read eagerly from then on. A missing chunk throws a <code>RuntimeException</code> while the collection is read, so read it soon after <code>get()</code>, or call <code>materialize()</code>.</p>
+
+                    <p>Since v1.17.1, <code>pull()</code>, and the stale path of <code>asyncSwr()</code> on the sync queue, load the value into memory before its chunks are deleted and return it as a <code>LazyChunkedCollection</code> that no longer reads the store (a value that has already lost a chunk is returned as read). On a real queue, <code>asyncSwr()</code> still returns a value that reads its chunks on demand; read it before a worker can refresh the entry, or call <code>materialize()</code>. Caching a lazily loaded value again, as in <code>SmartCache::put('copy', SmartCache::get('rows'))</code>, stores its items. <code>filter()</code>, <code>map()</code>, <code>each()</code>, and <code>json_encode()</code> can be called inside a <code>foreach</code> over the same collection, and <code>$collection['5']</code> reads item 5, as an array does.</p>
+
+                    <p><code>each()</code> visits every item and ignores what the callback returns. Unlike <code>Illuminate\Support\Collection::each()</code>, returning <code>false</code> does not stop it; use <code>foreach</code> with <code>break</code> to stop early.</p>
 
                     <h2>🧠 Smart Serialization</h2>
                     <p>Auto-select best serialization method for optimal performance:</p>
@@ -3572,7 +3581,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 725 tests, 2,611 assertions
+# 757 tests, 2,747 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>
@@ -3713,7 +3722,7 @@ http://your-app.com/api/test-smart-cache</code></pre>
                     <pre><code class="language-json">{
   "message": "SmartCache feature tests completed",
   "package_info": {
-    "version": "1.17.0",
+    "version": "1.17.1",
     "features_tested": 8
   },
   "tests": {
@@ -3831,6 +3840,9 @@ $value = SmartCache::get('key');</code></pre>
                         <strong>Laravel 13 API (v1.16.0+).</strong> Enum keys, the typed getters (<code>string()</code>, <code>integer()</code>, <code>float()</code>, <code>boolean()</code>, <code>array()</code>), <code>missing()</code>, <code>rememberWithWarmth()</code>, Closure TTLs in <code>remember()</code>, <code>DateInterval</code> durations in <code>flexible()</code>, and <code>tags(...)-&gt;flush()</code> work through SmartCache, read optimized entries, and honor the namespace.
                     </div>
 
+                    <h2>Upgrading to 1.17.1</h2>
+                    <p>A patch release: no code or configuration changes are needed, the stored formats are unchanged, and 1.17.0 and 1.17.1 servers read each other's entries. With lazy loading on, <code>pull()</code>, and the stale path of <code>asyncSwr()</code> on the sync queue, load every chunk into memory before the chunks are deleted, and still return a <code>LazyChunkedCollection</code>. With smart chunk sizing on, new writes may use smaller chunks. <code>smart-cache:warm</code> now warns when warmers fail; its exit code is unchanged.</p>
+
                     <h2>Upgrading to 1.17.0</h2>
                     <p>No code or configuration changes are needed, and 1.16 and 1.17 servers read each other's entries during a rolling deploy. One ordering note: a refresh queued from <code>SmartCache::store('name')-&gt;refreshAsync()</code> or <code>-&gt;asyncSwr()</code> now writes to that store, but a 1.16 queue worker running such a job still writes to the default store. Upgrade queue workers together with, or before, the servers that queue those refreshes. The <a href="https://github.com/iazaran/smart-cache/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG</a> lists every change and its upgrade notes.</p>
 
@@ -3846,6 +3858,22 @@ Cache::put('old_key', $value, 3600);
 // Use SmartCache for optimized caching
 SmartCache::put('optimized_key', $value, 3600);
 SmartCache::swr('api_data', $callback, 300, 900);</code></pre>
+
+                    <div class="alert alert-info">
+                        <strong>Dependency injection.</strong> Type-hint the contract, <code>SmartCache\Contracts\SmartCache</code>: it resolves the configured instance the facade uses. The concrete <code>SmartCache\SmartCache</code> class is not bound in the container, so autowiring it builds a separate instance without your configured strategies; it does not compress, chunk, or restore optimized entries. 1.x keeps this unchanged, so code that relies on it keeps working.
+                    </div>
+
+                    <pre><code class="language-php">use SmartCache\Contracts\SmartCache;
+
+class ReportService
+{
+    public function __construct(private SmartCache $cache) {}
+
+    public function report(): array
+    {
+        return $this->cache->remember('report', 3600, fn () => Report::build());
+    }
+}</code></pre>
 
                     <h2>Testing Migration</h2>
                     <p>Test your migration with these commands:</p>

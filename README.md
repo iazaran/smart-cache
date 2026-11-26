@@ -15,7 +15,7 @@
 + use SmartCache\Facades\SmartCache;
 ```
 
-**PHP 8.1–8.5 · Laravel 8–13 · Redis, Memcached, DynamoDB, Database, File, Array**
+**PHP 8.1–8.6 · Laravel 8–13 · Redis, Memcached, DynamoDB, Database, File, Array**
 
 ---
 
@@ -38,7 +38,7 @@ Caching gets hard once an application grows. Payloads outgrow Memcached's 1 MB a
 
 - **Drop-in, and adopt it gradually.** SmartCache implements Laravel's `Illuminate\Contracts\Cache\Repository` (and so PSR-16), including enum keys, the typed getters, `flexible()`, and `tags()`. Switch one import where it helps, and keep `Cache` everywhere else. `SmartCache::repository()` gives raw store access when you need it.
 - **Safe to upgrade.** It follows semantic versioning and needs no configuration. New features are opt-in, every release lists its upgrade notes, and adjacent releases read each other's entries, so rolling deploys work.
-- **Tested across the support matrix.** CI runs 700+ tests on PHP 8.1–8.5 with Laravel 8–13, on every combination Laravel itself supports.
+- **Tested across the support matrix.** CI runs 700+ tests on PHP 8.1–8.6 with Laravel 8–13, on every combination Laravel itself supports.
 - **Correct under concurrency.** Readers never get a mix of two chunked versions. Shared indexes are updated under short atomic locks where the store supports them. Regeneration can be single-flight.
 - **Ready for long-running processes.** On Octane, Swoole, FrankenPHP, RoadRunner, and queue workers, per-request state is reset automatically.
 - **Secure by default.** Data stays in your own cache store: no external service and no telemetry. Optional encryption protects selected keys at rest, `serializable_classes` extends Laravel's deserialization hardening to optimized values, and the web dashboard is off by default.
@@ -65,6 +65,8 @@ $report = SmartCache::remember('report', 3600, fn () => Report::build());
 smart_cache(['products' => $products], 3600);   // helper
 $products = smart_cache('products');
 ```
+
+To inject it, type-hint the contract `SmartCache\Contracts\SmartCache`, which resolves the configured instance the facade uses. The concrete `SmartCache\SmartCache` class is not bound in the container, so autowiring it builds an instance without your configured strategies.
 
 Values over 50 KB are compressed. Arrays and collections with more than 1,000 items (`chunk_size`) and over 100 KB are split into chunks instead. Smaller values are stored as they are.
 

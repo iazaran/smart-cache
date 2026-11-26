@@ -29,7 +29,7 @@ vendor/bin/phpunit
 Current suite size:
 
 ```bash
-# 725 tests, 2,611 assertions
+# 757 tests, 2,747 assertions
 ```
 
 ### Run Specific Test Suites
@@ -85,6 +85,7 @@ php8.2 vendor/bin/phpunit
 php8.3 vendor/bin/phpunit
 php8.4 vendor/bin/phpunit
 php8.5 vendor/bin/phpunit
+php8.6 vendor/bin/phpunit
 ```
 
 ## Key Testing Features

@@ -6,7 +6,7 @@ Only the latest SmartCache minor line receives routine security fixes. We recomm
 
 | SmartCache Version | Maintained? | Package Compatibility |
 | ------------------ | ----------- | --------------------- |
-| 1.17.x             | :white_check_mark: | PHP 8.1–8.5, Laravel 8–13 |
+| 1.17.x             | :white_check_mark: | PHP 8.1–8.6, Laravel 8–13 |
 | 1.9.x–1.16.x       | :warning: | Upgrade required; security backports are not guaranteed |
 | < 1.9.0            | :x: | Unsupported |
 

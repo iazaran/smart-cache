@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        php: [8.1, 8.2, 8.3, 8.4, 8.5]
+        php: [8.1, 8.2, 8.3, 8.4, 8.5, 8.6]
         laravel: [8.*, 9.*, 10.*, 11.*, 12.*, 13.*]
         stability: [prefer-stable]
         include:
@@ -55,12 +55,25 @@ jobs:
             php: 8.5
           - laravel: 11.*
             php: 8.5
+          # Laravel 13 is the framework line compatible with PHP 8.6: Laravel 12's
+          # session handlers lack the create_sid()/validateId() methods that
+          # PHP 8.6 deprecates leaving out, and Laravel turns that into an error.
+          - laravel: 8.*
+            php: 8.6
+          - laravel: 9.*
+            php: 8.6
+          - laravel: 10.*
+            php: 8.6
+          - laravel: 11.*
+            php: 8.6
+          - laravel: 12.*
+            php: 8.6
 
     name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.stability }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
