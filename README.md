@@ -66,6 +66,8 @@ smart_cache(['products' => $products], 3600);   // helper
 $products = smart_cache('products');
 ```
 
+To inject it, type-hint the contract `SmartCache\Contracts\SmartCache`, which resolves the configured instance the facade uses. The concrete `SmartCache\SmartCache` class is not bound in the container, so autowiring it builds an instance without your configured strategies.
+
 Values over 50 KB are compressed. Arrays and collections with more than 1,000 items (`chunk_size`) and over 100 KB are split into chunks instead. Smaller values are stored as they are.
 
 ## Features

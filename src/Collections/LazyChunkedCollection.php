@@ -327,6 +327,36 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
     }
 
     /**
+     * A copy that holds every chunk in memory, so it stays readable after the
+     * entry it was read from is deleted or replaced, which deletes the chunks.
+     *
+     * Loads every chunk, as materialize() does, but keeps the collection's
+     * type and methods for callers that use them.
+     *
+     * @internal SmartCache uses it where it deletes the chunks itself.
+     *
+     * @return static
+     * @throws \RuntimeException When a chunk is missing or not an array
+     */
+    public function detached(): static
+    {
+        $repository = new \Illuminate\Cache\Repository(new \Illuminate\Cache\ArrayStore());
+
+        foreach ($this->chunkKeys as $chunkKey) {
+            $repository->forever($chunkKey, $this->fetchChunk((string) $chunkKey));
+        }
+
+        $copy = clone $this;
+        $copy->cache = $repository;
+        $copy->position = 0;
+        $copy->currentChunk = null;
+        $copy->currentChunkIndex = -1;
+        $copy->loadedChunks = [];
+
+        return $copy;
+    }
+
+    /**
      * The items in iteration order, for json_encode() and JSON responses.
      *
      * Keys are positions, as when iterating; before 1.17.0 json_encode()
@@ -399,6 +429,11 @@ class LazyChunkedCollection implements \Iterator, \Countable, \ArrayAccess, \Jso
 
     /**
      * Apply a callback to each item without loading all chunks at once.
+     *
+     * Every item is visited, whatever the callback returns. Unlike
+     * Illuminate\Support\Collection::each(), returning false does not stop
+     * it; 1.x keeps it that way, so a callback that returns false by chance
+     * never skips items. Use foreach with break to stop early.
      *
      * each(), filter(), map(), and jsonSerialize() read items by position
      * rather than with foreach ($this), which rewound the collection: called

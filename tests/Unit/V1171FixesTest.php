@@ -5,8 +5,11 @@ namespace SmartCache\Tests\Unit;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use SmartCache\Collections\LazyChunkedCollection;
 use SmartCache\Contracts\SmartCache as SmartCacheContract;
+use SmartCache\Events\KeyWritten;
 use SmartCache\Jobs\BackgroundCacheRefreshJob;
 use SmartCache\Services\CircuitBreaker;
 use SmartCache\Services\OrphanChunkCleanupService;
@@ -85,6 +88,14 @@ class V1171Rows
     public function __invoke(): array
     {
         return \range(5001, 5300);
+    }
+}
+
+class V1171FailingWarmer
+{
+    public function warm(): array
+    {
+        throw new \RuntimeException('database is down');
     }
 }
 
@@ -168,12 +179,26 @@ class V1171FixesTest extends TestCase
         $value = $cache->pull('rows');
 
         // 1.17.0 returned a LazyChunkedCollection whose chunks forget() had
-        // just deleted: reading it threw "Missing cache chunk".
-        $this->assertSame(\range(1, 1000), $value);
+        // just deleted: reading it threw "Missing cache chunk". It is still a
+        // LazyChunkedCollection, holding its chunks in memory.
+        $this->assertInstanceOf(LazyChunkedCollection::class, $value);
+        $this->assertSame(\range(1, 1000), \iterator_to_array($value));
+        $this->assertSame([999, 1000], $value->slice(-2));
         $this->assertFalse($cache->has('rows'));
 
         $cache->put('rows', \range(1, 1000), 600);
-        $this->assertSame(\range(1, 1000), $cache->memo()->pull('rows'));
+        $this->assertSame(\range(1, 1000), \iterator_to_array($cache->memo()->pull('rows')));
+    }
+
+    /** Guard. */
+    public function test_guard_pull_returns_a_default_as_given(): void
+    {
+        $cache = $this->lazySmartCache();
+        $cache->put('rows', \range(1, 1000), 600);
+        $default = $cache->get('rows');
+
+        $this->assertSame($default, $cache->pull('missing', $default));
+        $this->assertSame('computed', $cache->pull('missing', fn () => 'computed'));
     }
 
     public function test_async_swr_returns_a_readable_stale_lazily_loaded_value(): void
@@ -193,7 +218,33 @@ class V1171FixesTest extends TestCase
         Carbon::setTestNow(Carbon::now()->addSeconds(120));
         $stale = $cache->asyncSwr('rows', V1171Rows::class, 60, 600);
 
-        $this->assertSame(\range(5001, 5300), $stale);
+        // 1.17.0 returned it reading the chunks the job had just deleted.
+        $this->assertInstanceOf(LazyChunkedCollection::class, $stale);
+        $this->assertSame(\range(5001, 5300), \iterator_to_array($stale));
+    }
+
+    /** Guard. */
+    public function test_guard_async_swr_on_a_real_queue_still_reads_chunks_on_demand(): void
+    {
+        // A worker runs the refresh later, so the stale value is not loaded
+        // into memory: lazy loading keeps its memory use.
+        $this->app['config']->set('queue.default', 'database');
+        $cache = $this->lazySmartCache();
+        Queue::fake();
+        Carbon::setTestNow(Carbon::now());
+        $cache->put('rows', \range(1, 300), 600);
+        $this->rawStore()->put('_sc_meta:rows', ['created_at' => Carbon::now()->getTimestamp()], 600);
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(120));
+        $stale = $cache->asyncSwr('rows', V1171Rows::class, 60, 600);
+
+        Queue::assertPushed(BackgroundCacheRefreshJob::class);
+        $this->assertInstanceOf(LazyChunkedCollection::class, $stale);
+
+        // It still reads from the store: its chunks are not held in memory.
+        $this->dropSecondChunkOf('rows');
+        $this->expectException(\RuntimeException::class);
+        \iterator_to_array($stale);
     }
 
     private function dropSecondChunkOf(string $key): void
@@ -263,6 +314,56 @@ class V1171FixesTest extends TestCase
             $copy = $cache->get($key);
             $this->assertSame(\range(1, 1000), \iterator_to_array($copy), $key);
         }
+    }
+
+    public function test_flexible_stores_the_items_of_a_lazily_loaded_value(): void
+    {
+        $cache = $this->lazySmartCache();
+        $cache->put('rows', \range(1, 1000), 600);
+
+        $value = $cache->flexible('copy', [60, 600], fn () => $cache->get('rows'));
+
+        // The callback's value is returned as it is.
+        $this->assertInstanceOf(LazyChunkedCollection::class, $value);
+
+        $cache->forget('rows');
+        $this->assertSame(\range(1, 1000), \iterator_to_array($cache->get('copy')));
+    }
+
+    /** Guard. */
+    public function test_guard_key_written_still_receives_the_callers_value(): void
+    {
+        $this->app['config']->set('smart-cache.events.enabled', true);
+        $cache = $this->lazySmartCache();
+        $cache->put('rows', \range(1, 1000), 600);
+        $lazy = $cache->get('rows');
+
+        $received = [];
+        Event::listen(KeyWritten::class, function (KeyWritten $event) use (&$received): void {
+            $received[$event->key] = $event->value;
+        });
+
+        $cache->put('copy', $lazy, 600);
+        $cache->forever('forever_copy', $lazy);
+        $cache->add('added_copy', $lazy, 600);
+
+        foreach (['copy', 'forever_copy', 'added_copy'] as $key) {
+            $this->assertSame($lazy, $received[$key] ?? null, $key);
+        }
+    }
+
+    /** Guard. */
+    public function test_guard_add_still_returns_false_for_an_existing_key_without_reading_the_value(): void
+    {
+        $cache = $this->lazySmartCache();
+        $cache->put('rows', \range(1, 1000), 600);
+        $lazy = $cache->get('rows');
+        $this->dropSecondChunkOf('rows');
+        $cache->put('existing', 'kept', 600);
+
+        // The value cannot be loaded, but the key exists: false, as in 1.17.0.
+        $this->assertFalse($cache->add('existing', $lazy, 600));
+        $this->assertSame('kept', $cache->get('existing'));
     }
 
     public function test_a_cached_copy_of_a_lazily_loaded_value_outlives_its_source(): void
@@ -380,6 +481,20 @@ class V1171FixesTest extends TestCase
         $this->assertSame(\range(1, 10), \json_decode(\json_encode($lazy), true));
     }
 
+    /** Guard. */
+    public function test_guard_each_still_visits_every_item_whatever_the_callback_returns(): void
+    {
+        $visited = [];
+        $this->lazyCollection()->each(function ($item) use (&$visited): bool {
+            $visited[] = $item;
+
+            return false;
+        });
+
+        // Unlike Collection::each(), false does not stop it.
+        $this->assertSame(\range(1, 10), $visited);
+    }
+
     public function test_lazy_collections_read_integer_string_offsets(): void
     {
         $lazy = $this->lazyCollection();
@@ -407,6 +522,11 @@ class V1171FixesTest extends TestCase
         $datasets = [
             'ints' => \range(1, 300000),
             'rows' => \array_map(static fn (int $id): array => ['id' => $id], \range(1, 100000)),
+            // Larger items first: sized by the average, their chunks overflowed.
+            'front-loaded' => \array_merge(
+                \array_fill(0, 300, \str_repeat('a', 5120)),
+                \array_fill(0, 3000, \str_repeat('b', 1024))
+            ),
         ];
 
         foreach ($limits as $driver => $limit) {
@@ -519,6 +639,25 @@ class V1171FixesTest extends TestCase
 
         // 1.17.0 compared the integer key with the string option: nothing ran.
         $this->artisan('smart-cache:warm', ['--warmer' => ['0']])->assertExitCode(0);
+        $this->assertTrue(V1171Warmer::$warmed);
+
+        // Guard: an integer option, as Artisan::call() may pass, still works.
+        V1171Warmer::$warmed = false;
+        $this->artisan('smart-cache:warm', ['--warmer' => [0]])->assertExitCode(0);
+        $this->assertTrue(V1171Warmer::$warmed);
+    }
+
+    public function test_warm_reports_failed_warmers_and_still_exits_with_success(): void
+    {
+        $this->app['config']->set('smart-cache.warmers', [
+            'broken' => V1171FailingWarmer::class,
+            'ok' => V1171Warmer::class,
+        ]);
+
+        // The exit code stays 0, so a deploy script that runs it keeps going.
+        $this->artisan('smart-cache:warm')
+            ->expectsOutput('1 of 2 cache warmers failed. See the errors above.')
+            ->assertExitCode(0);
 
         $this->assertTrue(V1171Warmer::$warmed);
     }

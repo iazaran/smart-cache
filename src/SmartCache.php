@@ -171,7 +171,9 @@ class SmartCache implements SmartCacheContract, Repository
     }
 
     /**
-     * loadLazyValue() for a value a read is about to return. When one of its
+     * A lazily loaded value a read is about to return, as a copy that holds
+     * its chunks in memory, for a read that then deletes those chunks itself.
+     * It keeps the LazyChunkedCollection type and methods. When one of its
      * chunks is already gone (evicted, or expired before the entry), the
      * value is returned as it was read, as before 1.17.1, so the call still
      * completes: pull() still deletes the entry and asyncSwr() still queues
@@ -180,10 +182,14 @@ class SmartCache implements SmartCacheContract, Repository
      * @param mixed $value
      * @return mixed
      */
-    private static function loadLazyValueIfReadable(mixed $value): mixed
+    private static function detachLazyValueIfReadable(mixed $value): mixed
     {
+        if (!$value instanceof LazyChunkedCollection) {
+            return $value;
+        }
+
         try {
-            return static::loadLazyValue($value);
+            return $value->detached();
         } catch (\Throwable $e) {
             return $value;
         }
@@ -757,11 +763,12 @@ class SmartCache implements SmartCacheContract, Repository
             return $this->forgetNamespacedKey($key);
         }
 
-        // A value read lazily from another entry is stored as its items.
-        $value = static::loadLazyValue($value);
+        // A value read lazily from another entry is stored as its items. The
+        // caller's value is still the one KeyWritten listeners receive.
+        $stored = static::loadLazyValue($value);
 
         // Wrap null so the underlying store can distinguish it from a cache miss
-        $storable = static::wrapNullValue($value);
+        $storable = static::wrapNullValue($stored);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
 
         // Track metadata before writing the value. A tag/managed-key entry
@@ -809,7 +816,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         $result = $this->storeOptimized(
             $key,
-            $value,
+            $stored,
             $optimizedValue,
             $ttl === null,
             fn (): bool => (bool) $this->cache->put($key, $optimizedValue, $ttl)
@@ -830,12 +837,12 @@ class SmartCache implements SmartCacheContract, Repository
 
         $originalSize = null;
         if ($this->enablePerformanceMonitoring) {
-            $originalSize = $this->calculateDataSize($value);
+            $originalSize = $this->calculateDataSize($stored);
             $this->recordPerformanceMetric('cache_write', $key, $startTime, [
                 'original_size' => $originalSize,
                 // A value no strategy changed has the same size; measuring it
                 // again would serialize it a second time.
-                'optimized_size' => $optimizedValue === $value ? $originalSize : $this->calculateDataSize($optimizedValue),
+                'optimized_size' => $optimizedValue === $stored ? $originalSize : $this->calculateDataSize($optimizedValue),
                 'ttl' => $ttl
             ]);
         }
@@ -1133,8 +1140,9 @@ class SmartCache implements SmartCacheContract, Repository
         $key = $this->applyNamespace(static::normalizeKey($key));
         // Taken before optimizing, as in put()
         $tags = $this->takeActiveTags($key);
-        $value = static::loadLazyValue($value);
-        $storable = static::wrapNullValue($value);
+        // A value read lazily from another entry is stored as its items.
+        $stored = static::loadLazyValue($value);
+        $storable = static::wrapNullValue($stored);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, null);
 
         // Track all keys for pattern matching and invalidation
@@ -1151,7 +1159,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         $result = $this->storeOptimized(
             $key,
-            $value,
+            $stored,
             $optimizedValue,
             true,
             fn (): bool => (bool) $this->cache->forever($key, $optimizedValue)
@@ -1428,9 +1436,16 @@ class SmartCache implements SmartCacheContract, Repository
      */
     public function pull($key, $default = null): mixed
     {
+        $sentinel = static::sentinel();
+        $value = $this->get($key, $sentinel);
+
         // forget() deletes the chunks a lazily loaded value reads when it is
-        // iterated, so load it first. It used to come back unreadable.
-        $value = static::loadLazyValueIfReadable($this->get($key, $default));
+        // iterated, so a cached one is detached first; it used to come back
+        // unreadable. A default is returned as given.
+        $value = $value === $sentinel
+            ? $this->resolveDefault($default)
+            : static::detachLazyValueIfReadable($value);
+
         $this->forget($key);
         return $value;
     }
@@ -1455,9 +1470,6 @@ class SmartCache implements SmartCacheContract, Repository
             return false;
         }
 
-        // A value read lazily from another entry is stored as its items.
-        $value = static::loadLazyValue($value);
-
         // Chunking writes its chunks before the atomic add() runs. They use new
         // keys on every write, so they can no longer overwrite the live entry's
         // chunks, but checking first saves writing them for nothing. Only arrays
@@ -1474,12 +1486,14 @@ class SmartCache implements SmartCacheContract, Repository
         $repository = $this->storeRepository !== null ? $this->storeRepository : $this->cache;
 
         // Use the underlying cache's atomic add() if available
-        $storable = static::wrapNullValue($value);
         if (\method_exists($repository, 'add')) {
-            $optimizedValue = $this->maybeOptimizeValue($storable, $namespacedKey, $ttl);
+            // A value read lazily from another entry is stored as its items,
+            // once the check above found no entry to keep.
+            $stored = static::loadLazyValue($value);
+            $optimizedValue = $this->maybeOptimizeValue(static::wrapNullValue($stored), $namespacedKey, $ttl);
             $result = $this->storeOptimized(
                 $namespacedKey,
-                $value,
+                $stored,
                 $optimizedValue,
                 $ttl === null,
                 fn (): bool => (bool) $repository->add($namespacedKey, $optimizedValue, $ttl)
@@ -2668,13 +2682,16 @@ class SmartCache implements SmartCacheContract, Repository
      */
     protected function generateAndCache(string $key, array $durations, \Closure $callback): mixed
     {
-        // A value read lazily from another entry is stored as its items.
-        $value = static::loadLazyValue($callback());
+        $value = $callback();
         [$freshTtl, $staleTtl] = static::flexibleDurations($durations);
         $totalTtl = $staleTtl;
 
+        // A value read lazily from another entry is stored as its items; the
+        // callback's value is still the one returned.
+        $loaded = static::loadLazyValue($value);
+
         // Wrap null so the store can distinguish it from a cache miss
-        $storable = static::wrapNullValue($value);
+        $storable = static::wrapNullValue($loaded);
         // Optimize the value
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $totalTtl);
 
@@ -2687,7 +2704,7 @@ class SmartCache implements SmartCacheContract, Repository
         $this->invalidateDnaRecord($key);
         $stored = $this->storeOptimized(
             $key,
-            $value,
+            $loaded,
             $optimizedValue,
             false,
             fn (): bool => (bool) $this->cache->put($key, $optimizedValue, $totalTtl)
@@ -2874,10 +2891,14 @@ class SmartCache implements SmartCacheContract, Repository
                 $now = $this->currentTimestamp();
                 $age = $now - $metadata['created_at'];
                 if ($age > $ttl) {
-                    // The refresh replaces the entry and deletes the chunks a
-                    // lazily loaded value reads when it is iterated, at once on
-                    // the sync queue. Load it first, as flexible() does.
-                    $value = static::loadLazyValueIfReadable($value);
+                    // On the sync queue the refresh replaces the entry, and
+                    // deletes the chunks a lazily loaded value reads when it is
+                    // iterated, before this returns, so that value is detached
+                    // first. On a real queue it is returned as before, without
+                    // loading every chunk.
+                    if ($this->queuedJobsRunInline()) {
+                        $value = static::detachLazyValueIfReadable($value);
+                    }
 
                     // Restart the freshness window first so the requests that arrive
                     // before the job finishes keep serving stale instead of each
@@ -2909,6 +2930,20 @@ class SmartCache implements SmartCacheContract, Repository
         $this->storeRepository()->put("_sc_meta:{$namespacedKey}", ['created_at' => $now, 'stored_at' => $now], $staleTtl);
 
         return $freshValue;
+    }
+
+    /**
+     * Whether a job dispatched now runs before dispatch() returns: the default
+     * queue connection uses the sync driver.
+     *
+     * @return bool
+     */
+    private function queuedJobsRunInline(): bool
+    {
+        $connection = $this->config->get('queue.default');
+
+        return $connection === 'sync'
+            || (\is_string($connection) && $this->config->get("queue.connections.{$connection}.driver") === 'sync');
     }
 
     /**

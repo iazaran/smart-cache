@@ -47,10 +47,16 @@ class RateLimiter
             // When the counter expired between add() and increment(), the
             // store created it again without expiry (Redis INCRBY, the file
             // and array stores), so the key stayed limited forever once it
-            // reached the limit. Laravel's own rate limiter sets the window
-            // again in this case.
+            // reached the limit. Set the window again, as Laravel's own rate
+            // limiter does. touch() (Laravel 13) only sets the expiry, so a
+            // hit another process counted meanwhile is kept; older versions
+            // write the count again, as Laravel's limiter does there.
             if (!$added && $current === 1) {
-                $this->cache->put($rateLimitKey, 1, $window);
+                if (\method_exists($this->cache, 'touch')) {
+                    $this->cache->touch($rateLimitKey, $window);
+                } else {
+                    $this->cache->put($rateLimitKey, 1, $window);
+                }
             }
 
             return $current <= $maxAttempts;

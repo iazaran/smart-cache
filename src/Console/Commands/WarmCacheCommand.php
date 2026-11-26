@@ -36,6 +36,10 @@ class WarmCacheCommand extends Command
 
         $selectedWarmers = $this->option('warmer');
         if (!empty($selectedWarmers)) {
+            // Compared as strings: a list of warmers has integer keys, and
+            // Artisan::call() may pass the names as integers.
+            $selectedWarmers = \array_map('strval', (array) $selectedWarmers);
+
             // A misspelled name used to warm nothing without a word.
             foreach (\array_diff($selectedWarmers, \array_map('strval', \array_keys($warmers))) as $unknown) {
                 $this->warn("Unknown warmer [{$unknown}]. Run with --list to see the configured warmers.");
@@ -43,7 +47,6 @@ class WarmCacheCommand extends Command
 
             $warmers = \array_filter(
                 $warmers,
-                // Options are strings; a list of warmers has integer keys.
                 fn($key) => \in_array((string) $key, $selectedWarmers, true),
                 ARRAY_FILTER_USE_KEY
             );
@@ -54,6 +57,7 @@ class WarmCacheCommand extends Command
 
         $totalKeys = 0;
         $totalTime = 0.0;
+        $failed = 0;
 
         foreach ($warmers as $name => $warmerClass) {
             $this->line("Running warmer: <comment>{$name}</comment>");
@@ -64,6 +68,7 @@ class WarmCacheCommand extends Command
 
                 if (!\method_exists($warmer, 'warm')) {
                     $this->error("  Warmer {$warmerClass} must have a warm() method");
+                    $failed++;
                     continue;
                 }
 
@@ -77,6 +82,7 @@ class WarmCacheCommand extends Command
                 $this->info("  ✓ Warmed {$keysWarmed} keys in {$elapsed}ms");
             } catch (\Throwable $e) {
                 $this->error('  ✗ Failed: ' . $e->getMessage());
+                $failed++;
             }
         }
 
@@ -84,6 +90,13 @@ class WarmCacheCommand extends Command
         $this->info('Cache warming complete!');
         $this->line("  Total keys warmed: <comment>{$totalKeys}</comment>");
         $this->line("  Total time: <comment>{$totalTime}ms</comment>");
+
+        // The exit code stays 0, so a failing warmer does not stop a deploy
+        // script that runs this command, but the failures are counted.
+        if ($failed > 0) {
+            $this->newLine();
+            $this->warn("{$failed} of " . \count($warmers) . ' cache warmers failed. See the errors above.');
+        }
 
         return self::SUCCESS;
     }
