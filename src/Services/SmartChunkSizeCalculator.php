@@ -54,10 +54,12 @@ class SmartChunkSizeCalculator
         // Use 80% of max size to leave safety margin
         $safeMaxSize = (int) ($maxValueSize * 0.8);
 
-        // Sized by the largest sampled item rather than the average: where
-        // the larger items come first, average-sized chunks of them came out
-        // over the driver limit.
-        $itemSize = \max($avgItemSize, $this->calculateLargestItemSize($data));
+        // Sized by the larger of two averages: the samples spread over the
+        // array, and the leading items, which earlier releases measured alone
+        // (without keys). The size per item is never estimated smaller than
+        // those releases did where the larger items come first, and a single
+        // outsized item is averaged in rather than setting every chunk's size.
+        $itemSize = \max($avgItemSize, $this->calculateLeadingItemSize($data));
         $optimalChunkSize = $itemSize > 0
             ? (int) floor($safeMaxSize / $itemSize)
             : $defaultChunkSize;
@@ -112,17 +114,25 @@ class SmartChunkSizeCalculator
     }
 
     /**
-     * The size of the largest sampled item, with its key.
+     * The average size of the first $sampleSize items, each with its key.
      *
      * @param array $data
      * @param int $sampleSize
      * @return int
      */
-    protected function calculateLargestItemSize(array $data, int $sampleSize = 100): int
+    protected function calculateLeadingItemSize(array $data, int $sampleSize = 100): int
     {
-        $sizes = $this->sampleItemSizes($data, $sampleSize);
+        $totalSize = 0;
+        $count = 0;
 
-        return $sizes === [] ? 0 : \max($sizes);
+        foreach ($data as $key => $item) {
+            $totalSize += strlen(serialize($key)) + strlen(serialize($item));
+            if (++$count >= $sampleSize) {
+                break;
+            }
+        }
+
+        return $count === 0 ? 0 : (int) ceil($totalSize / $count);
     }
 
     /**

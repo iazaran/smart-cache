@@ -366,6 +366,27 @@ class V1171FixesTest extends TestCase
         $this->assertSame('kept', $cache->get('existing'));
     }
 
+    /** Guard. */
+    public function test_guard_put_with_deduplication_measures_and_replaces_the_value(): void
+    {
+        // Deduplication is on by default (the test config turns it off).
+        $this->app['config']->set('smart-cache.deduplication.enabled', true);
+        $store = new V1171FailingStore();
+        $cache = $this->chunkingCacheOn(new Repository($store));
+
+        // Replacing a chunked entry stored without expiry deletes its chunks.
+        $cache->forever('k', $this->rows(1000));
+        $this->assertNotSame([], $store->chunkKeys());
+        $cache->put('k', [1, 2, 3]);
+        $this->assertSame([], $store->chunkKeys());
+        $this->assertSame([1, 2, 3], $cache->get('k'));
+
+        // The write metric measures the value written.
+        $cache->put('m', \str_repeat('a', 2000), 600);
+        $writes = $cache->getPerformanceMetrics()['metrics']['cache_write']['recent'];
+        $this->assertSame(2000, \end($writes)['metadata']['original_size']);
+    }
+
     public function test_a_cached_copy_of_a_lazily_loaded_value_outlives_its_source(): void
     {
         // Laravel's array store without serialization kept the collection
@@ -522,20 +543,29 @@ class V1171FixesTest extends TestCase
         $datasets = [
             'ints' => \range(1, 300000),
             'rows' => \array_map(static fn (int $id): array => ['id' => $id], \range(1, 100000)),
-            // Larger items first: sized by the average, their chunks overflowed.
+            // Larger items first: sampled across the array alone, their
+            // chunks overflowed.
             'front-loaded' => \array_merge(
                 \array_fill(0, 300, \str_repeat('a', 5120)),
                 \array_fill(0, 3000, \str_repeat('b', 1024))
             ),
         ];
+        // One outsized row among small ones: it must not set every chunk's
+        // size (sized by the largest sample, this made 100,000 chunks).
+        $outlier = \array_map(static fn (int $id): array => ['id' => $id, 'name' => "row {$id}"], \range(1, 50000));
+        $outlier[25000] = ['id' => 25000, 'blob' => \str_repeat('z', 200 * 1024)];
+        $datasets['outlier'] = $outlier;
 
         foreach ($limits as $driver => $limit) {
             foreach ($datasets as $name => $data) {
                 $size = $calculator->calculateOptimalSize($data, $driver);
+                $chunks = \array_chunk($data, $size, true);
                 $largest = \max(\array_map(
                     static fn (array $chunk): int => \strlen(\serialize($chunk)),
-                    \array_chunk($data, $size, true)
+                    $chunks
                 ));
+
+                $this->assertLessThanOrEqual(1000, \count($chunks), "{$name} on {$driver}: chunk count");
 
                 // 1.17.0 left keys out and sampled only the first items: the
                 // integer chunks came out at 1.2 MB for DynamoDB's 400 KB.

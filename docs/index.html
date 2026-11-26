@@ -1424,12 +1424,12 @@ config(['smart-cache.strategies.chunking.smart_sizing' => true]);
 
 // Automatically calculates optimal chunk size based on:
 // - Cache driver limits (Redis: 512MB, Memcached: 1MB, DynamoDB: 400KB)
-// - Item and key sizes, sampled across the whole array (v1.17.1+)
+// - Item and key sizes, sampled across the array and at its start (v1.17.1+)
 // - Serialization overhead
 
 SmartCache::put('large_array', $data, 3600);
 // Optimal chunk size calculated automatically</code></pre>
-                    <p>Chunks are sized to stay within 80% of the driver's item limit, by the largest of 100 items sampled across the array; an unsampled item much larger than the rest can still exceed it. Before 1.17.1 the estimate left out each item's key and sampled only the first items, so lists of small or growing values (IDs, timestamps) produced chunks over the limit, which the store rejected.</p>
+                    <p>Chunks are sized to stay within 80% of the driver's item limit, from the larger of two averages: 100 items sampled across the array, and the first 100 items. It is an estimate: where large items are spread unevenly, a chunk can still exceed the limit. Before 1.17.1 the estimate left out each item's key and sampled only the first items, so lists of small or growing values (IDs, timestamps) produced chunks over the limit, which the store rejected.</p>
 
                     <h2>Configuration Options</h2>
                     <pre><code class="language-php">// config/smart-cache.php
@@ -1841,7 +1841,7 @@ return response()->json($largeDataset);</code></pre>
 
                     <p>Turning <code>lazy_loading</code> off applies to entries written while it was on (v1.17.0+): they are read eagerly from then on. A missing chunk throws a <code>RuntimeException</code> while the collection is read, so read it soon after <code>get()</code>, or call <code>materialize()</code>.</p>
 
-                    <p>Since v1.17.1, <code>pull()</code>, and the stale path of <code>asyncSwr()</code> on the sync queue, load the value into memory before its chunks are deleted and return it as a <code>LazyChunkedCollection</code> that no longer reads the store (a value that has already lost a chunk is returned as read). On a real queue, <code>asyncSwr()</code> still returns a value that reads its chunks on demand. Caching a lazily loaded value again, as in <code>SmartCache::put('copy', SmartCache::get('rows'))</code>, stores its items. <code>filter()</code>, <code>map()</code>, <code>each()</code>, and <code>json_encode()</code> can be called inside a <code>foreach</code> over the same collection, and <code>$collection['5']</code> reads item 5, as an array does.</p>
+                    <p>Since v1.17.1, <code>pull()</code>, and the stale path of <code>asyncSwr()</code> on the sync queue, load the value into memory before its chunks are deleted and return it as a <code>LazyChunkedCollection</code> that no longer reads the store (a value that has already lost a chunk is returned as read). On a real queue, <code>asyncSwr()</code> still returns a value that reads its chunks on demand; read it before a worker can refresh the entry, or call <code>materialize()</code>. Caching a lazily loaded value again, as in <code>SmartCache::put('copy', SmartCache::get('rows'))</code>, stores its items. <code>filter()</code>, <code>map()</code>, <code>each()</code>, and <code>json_encode()</code> can be called inside a <code>foreach</code> over the same collection, and <code>$collection['5']</code> reads item 5, as an array does.</p>
 
                     <p><code>each()</code> visits every item and ignores what the callback returns. Unlike <code>Illuminate\Support\Collection::each()</code>, returning <code>false</code> does not stop it; use <code>foreach</code> with <code>break</code> to stop early.</p>
 
@@ -3581,7 +3581,7 @@ $schedule->command('smart-cache:cleanup-chunks')->daily();</code></pre>
                     <p>SmartCache ships with automated coverage for the Laravel-compatible API surface, optimization strategies, SWR patterns, invalidation, memoization, dashboard command execution, and large-data recovery behavior.</p>
 
                     <pre><code class="language-bash">composer test
-# 756 tests, 2,723 assertions
+# 757 tests, 2,747 assertions
 
 vendor/bin/phpunit tests/Unit/Strategies/ChunkingStrategyTest.php --testdox
 vendor/bin/phpunit tests/Unit/SmartCacheTest.php --filter "missing_chunk|self_healing" --testdox</code></pre>

@@ -765,10 +765,10 @@ class SmartCache implements SmartCacheContract, Repository
 
         // A value read lazily from another entry is stored as its items. The
         // caller's value is still the one KeyWritten listeners receive.
-        $stored = static::loadLazyValue($value);
+        $storedValue = static::loadLazyValue($value);
 
         // Wrap null so the underlying store can distinguish it from a cache miss
-        $storable = static::wrapNullValue($stored);
+        $storable = static::wrapNullValue($storedValue);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, $ttl);
 
         // Track metadata before writing the value. A tag/managed-key entry
@@ -799,11 +799,11 @@ class SmartCache implements SmartCacheContract, Repository
                 $newHash = null;
             }
             $requestedExpiry = $this->resolveDedupExpiry($ttl);
-            $stored = $newHash !== null ? $this->storeRepository()->get("_sc_dna:{$key}") : null;
+            $dnaRecord = $newHash !== null ? $this->storeRepository()->get("_sc_dna:{$key}") : null;
 
             if ($newHash !== null
                 && static::chunkKeysOf($optimizedValue) === []
-                && $this->canSkipDuplicateWrite($stored, $newHash, $requestedExpiry)
+                && $this->canSkipDuplicateWrite($dnaRecord, $newHash, $requestedExpiry)
                 && $this->storeRepository()->has($key)
             ) {
                 // Content unchanged — record a deduplicated write metric and return early
@@ -816,7 +816,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         $result = $this->storeOptimized(
             $key,
-            $stored,
+            $storedValue,
             $optimizedValue,
             $ttl === null,
             fn (): bool => (bool) $this->cache->put($key, $optimizedValue, $ttl)
@@ -837,12 +837,12 @@ class SmartCache implements SmartCacheContract, Repository
 
         $originalSize = null;
         if ($this->enablePerformanceMonitoring) {
-            $originalSize = $this->calculateDataSize($stored);
+            $originalSize = $this->calculateDataSize($storedValue);
             $this->recordPerformanceMetric('cache_write', $key, $startTime, [
                 'original_size' => $originalSize,
                 // A value no strategy changed has the same size; measuring it
                 // again would serialize it a second time.
-                'optimized_size' => $optimizedValue === $stored ? $originalSize : $this->calculateDataSize($optimizedValue),
+                'optimized_size' => $optimizedValue === $storedValue ? $originalSize : $this->calculateDataSize($optimizedValue),
                 'ttl' => $ttl
             ]);
         }
@@ -1141,8 +1141,8 @@ class SmartCache implements SmartCacheContract, Repository
         // Taken before optimizing, as in put()
         $tags = $this->takeActiveTags($key);
         // A value read lazily from another entry is stored as its items.
-        $stored = static::loadLazyValue($value);
-        $storable = static::wrapNullValue($stored);
+        $storedValue = static::loadLazyValue($value);
+        $storable = static::wrapNullValue($storedValue);
         $optimizedValue = $this->maybeOptimizeValue($storable, $key, null);
 
         // Track all keys for pattern matching and invalidation
@@ -1159,7 +1159,7 @@ class SmartCache implements SmartCacheContract, Repository
 
         $result = $this->storeOptimized(
             $key,
-            $stored,
+            $storedValue,
             $optimizedValue,
             true,
             fn (): bool => (bool) $this->cache->forever($key, $optimizedValue)
@@ -1489,11 +1489,11 @@ class SmartCache implements SmartCacheContract, Repository
         if (\method_exists($repository, 'add')) {
             // A value read lazily from another entry is stored as its items,
             // once the check above found no entry to keep.
-            $stored = static::loadLazyValue($value);
-            $optimizedValue = $this->maybeOptimizeValue(static::wrapNullValue($stored), $namespacedKey, $ttl);
+            $storedValue = static::loadLazyValue($value);
+            $optimizedValue = $this->maybeOptimizeValue(static::wrapNullValue($storedValue), $namespacedKey, $ttl);
             $result = $this->storeOptimized(
                 $namespacedKey,
-                $stored,
+                $storedValue,
                 $optimizedValue,
                 $ttl === null,
                 fn (): bool => (bool) $repository->add($namespacedKey, $optimizedValue, $ttl)
